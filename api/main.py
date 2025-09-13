@@ -4,10 +4,12 @@ from dotenv import load_dotenv
 from bot import init_mysql_pool, ensure_schema
 from models.agents import rotate_api_token
 from api.auth import require_admin
+from api.admin import router as admin_router
 
 app = FastAPI()
 
 router = APIRouter()
+router.include_router(admin_router)
 
 
 @router.get("/health")
