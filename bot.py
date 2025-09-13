@@ -46,6 +46,7 @@ from telegram.ext import (
 )
 
 from scripts import usage_sync
+from models.agents import generate_api_token
 
 # ---------- logging ----------
 logging.basicConfig(
@@ -274,6 +275,7 @@ def ensure_schema():
                 user_limit BIGINT NOT NULL DEFAULT 0,
                 max_user_bytes BIGINT NOT NULL DEFAULT 0,
                 total_used_bytes BIGINT NOT NULL DEFAULT 0,
+                api_token CHAR(64) UNIQUE,
                 disabled_pushed TINYINT(1) NOT NULL DEFAULT 0,
                 disabled_pushed_at DATETIME NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -291,6 +293,10 @@ def ensure_schema():
         try:
             cur.execute("ALTER TABLE agents ADD COLUMN total_used_bytes BIGINT NOT NULL DEFAULT 0")
             added_total = True
+        except MySQLError:
+            pass
+        try:
+            cur.execute("ALTER TABLE agents ADD COLUMN api_token CHAR(64) UNIQUE")
         except MySQLError:
             pass
         if added_total:
@@ -1009,12 +1015,14 @@ def upsert_agent(tg_id: int, name: str):
         row = cur.fetchone()
         if row:
             cur.execute("UPDATE agents SET name=%s, active=1 WHERE telegram_user_id=%s", (name, tg_id))
-        else:
-            cur.execute(
-                "INSERT INTO agents(telegram_user_id,name,plan_limit_bytes,expire_at,active,user_limit,max_user_bytes) "
-                "VALUES(%s,%s,0,NULL,1,0,0)",
-                (tg_id, name)
-            )
+            return None
+        token, token_hash = generate_api_token()
+        cur.execute(
+            "INSERT INTO agents(telegram_user_id,name,plan_limit_bytes,expire_at,active,user_limit,max_user_bytes,api_token) "
+            "VALUES(%s,%s,0,NULL,1,0,0,%s)",
+            (tg_id, name, token_hash),
+        )
+        return token
 
 def get_agent(tg_id: int):
     with with_mysql_cursor() as cur:
@@ -2381,9 +2389,12 @@ async def got_agent_tgid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("❌ عدد معتبر بفرست:")
         return ASK_AGENT_TGID
-    upsert_agent(aid, context.user_data.get("new_agent_name") or "agent")
+    tok = upsert_agent(aid, context.user_data.get("new_agent_name") or "agent")
     context.user_data.pop("new_agent_name", None)
-    await update.message.reply_text("✅ نماینده اضافه شد.")
+    if tok:
+        await update.message.reply_text(f"✅ نماینده اضافه شد.\nToken: {tok}")
+    else:
+        await update.message.reply_text("✅ نماینده اضافه شد.")
     class Fake:
         async def edit_message_text(self, *a, **k):
             await update.message.reply_text(*a, **k)
