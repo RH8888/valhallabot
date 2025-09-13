@@ -47,7 +47,8 @@ POST /api/v1/agents/me/token
 
 Agents can also view or rotate their token directly from the Telegram bot via
 the **API Token** menu. Administrators may view or rotate any agent's token
-through the bot's agent management panel.
+through the bot's agent management panel. Super administrators can view or
+rotate the global admin token from the Admin Panel in the bot.
 
 Administrators can view or rotate a token for any agent:
 
