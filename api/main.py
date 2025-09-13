@@ -6,12 +6,14 @@ from models.agents import rotate_api_token
 from api.auth import require_admin
 from api.admin import router as admin_router
 from api.users import router as users_router
+from api.sub import router as sub_router
 
 app = FastAPI()
 
 router = APIRouter()
 router.include_router(admin_router)
 router.include_router(users_router)
+router.include_router(sub_router)
 
 
 @router.get("/health")
