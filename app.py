@@ -19,22 +19,10 @@ import requests
 SESSION = requests.Session()
 from cachetools import TTLCache, cached
 from threading import RLock
-import json
-from flask import (
-    Flask,
-    Response,
-    abort,
-    request,
-    render_template_string,
-    send_from_directory,
-    jsonify,
-)
+from flask import Flask, Response, abort, request, render_template_string
 from types import SimpleNamespace
-from datetime import datetime, timedelta
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import wraps
-from werkzeug.security import check_password_hash, generate_password_hash
-import jwt
 from dotenv import load_dotenv
 from mysql.connector import pooling
 from apis import sanaei
@@ -47,7 +35,6 @@ log = logging.getLogger("flask_agg")
 
 POOL = None
 ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
-JWT_SECRET = os.getenv("JWT_SECRET", "change-me")
 
 with open(
     os.path.join(os.path.dirname(__file__), "templates", "index.html"),
@@ -79,19 +66,6 @@ def init_pool():
 load_dotenv()
 init_pool()
 
-def init_portal_users_table():
-    with CurCtx() as cur:
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS portal_users (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                username VARCHAR(255) UNIQUE NOT NULL,
-                password_hash VARCHAR(255) NOT NULL,
-                preferences JSON
-            ) CHARACTER SET utf8mb4
-            """
-        )
-
 FETCH_CACHE_TTL = int(os.getenv("FETCH_CACHE_TTL", "300"))
 _fetch_user_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
 _fetch_user_lock = RLock()
@@ -117,8 +91,6 @@ class CurCtx:
             self.cur.close()
             self.conn.close()
 
-init_portal_users_table()
-
 def admin_ids():
     ids = (os.getenv("ADMIN_IDS") or "").strip()
     if not ids:
@@ -132,24 +104,6 @@ def expand_owner_ids(owner_id: int) -> list[int]:
 def canonical_owner_id(owner_id: int) -> int:
     ids = expand_owner_ids(owner_id)
     return ids[0]
-
-
-def get_portal_user(username: str):
-    with CurCtx() as cur:
-        cur.execute(
-            "SELECT username, password_hash, preferences FROM portal_users WHERE username=%s LIMIT 1",
-            (username,),
-        )
-        return cur.fetchone()
-
-
-def create_portal_user(username: str, password: str, preferences=None):
-    pref_json = preferences if preferences is None else json.dumps(preferences)
-    with CurCtx() as cur:
-        cur.execute(
-            "INSERT INTO portal_users (username, password_hash, preferences) VALUES (%s, %s, %s)",
-            (username, generate_password_hash(password), pref_json),
-        )
 
 
 def get_setting(owner_id: int, key: str):
@@ -533,24 +487,7 @@ def mark_agent_disabled(owner_id: int):
         )
 
 # ---------- app ----------
-app = Flask(__name__, static_folder=None)
-
-
-def token_required(f):
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer "):
-            return jsonify({"error": "unauthorized"}), 401
-        token = auth.split(" ", 1)[1]
-        try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-        except jwt.InvalidTokenError:
-            return jsonify({"error": "invalid token"}), 401
-        request.portal_username = payload.get("sub")
-        return f(*args, **kwargs)
-
-    return wrapper
+app = Flask(__name__)
 
 
 def bytesformat(num):
@@ -626,74 +563,6 @@ def build_user(local_username, app_key, lu, remote=None):
     }
     user["is_active"] = user["enabled"] and not user["expired"] and not user["data_limit_reached"]
     return user
-
-
-@app.post("/api/login")
-def api_login():
-    data = request.get_json(silent=True) or {}
-    username = data.get("username")
-    password = data.get("password")
-    if not username or not password:
-        return jsonify({"error": "missing credentials"}), 400
-    user = get_portal_user(username)
-    if not user or not check_password_hash(user["password_hash"], password):
-        return jsonify({"error": "invalid credentials"}), 401
-    token = jwt.encode(
-        {"sub": username, "exp": datetime.utcnow() + timedelta(hours=1)},
-        JWT_SECRET,
-        algorithm="HS256",
-    )
-    return jsonify({"token": token})
-
-
-@app.get("/api/me")
-@token_required
-def api_me():
-    user = get_portal_user(request.portal_username)
-    if not user:
-        return jsonify({"error": "not found"}), 404
-    return jsonify({"username": user["username"], "preferences": user.get("preferences")})
-
-
-@app.get("/api/usage/<username>")
-@token_required
-def api_usage(username):
-    with CurCtx() as cur:
-        cur.execute(
-            "SELECT plan_limit_bytes, used_bytes FROM local_users WHERE username=%s LIMIT 1",
-            (username,),
-        )
-        row = cur.fetchone()
-    if not row:
-        return jsonify({"error": "not found"}), 404
-    return jsonify(row)
-
-
-@app.post("/api/upgrade")
-@token_required
-def api_upgrade():
-    data = request.get_json(silent=True) or {}
-    # For demo purposes we simply acknowledge the request
-    return jsonify({"status": "upgrade requested", "details": data})
-
-
-@app.post("/api/reset")
-@token_required
-def api_reset():
-    data = request.get_json(silent=True) or {}
-    return jsonify({"status": "reset requested", "details": data})
-
-
-@app.route("/static/<path:path>")
-def send_static(path):
-    return send_from_directory("frontend", path)
-
-
-@app.route("/login")
-@app.route("/dashboard")
-@app.route("/subscriptions")
-def serve_frontend():
-    return send_from_directory("frontend", "index.html")
 
 @app.route("/sub/<local_username>/<app_key>/links", methods=["GET"])
 def unified_links(local_username, app_key):
