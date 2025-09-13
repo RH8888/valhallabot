@@ -142,7 +142,7 @@ def canonical_owner_id(owner_id: int) -> int:
 
     # settings
     ASK_LIMIT_MSG,
-    ASK_EMERGENCY_CFG,
+    ASK_SERVICE_EMERGENCY_CFG,
 ) = range(33)
 
 # ---------- MySQL ----------
@@ -369,7 +369,6 @@ def get_setting(owner_id: int, key: str):
         row = cur.fetchone()
         return row["value"] if row else None
 
-
 def set_setting(owner_id: int, key: str, value: str):
     oid = canonical_owner_id(owner_id)
     with with_mysql_cursor() as cur:
@@ -575,7 +574,6 @@ def get_preset(owner_id: int, preset_id: int):
             tuple(params),
         )
         return cur.fetchone()
-
 
 def update_preset(owner_id: int, preset_id: int, limit_bytes: int, duration_days: int):
     with with_mysql_cursor(dict_=False) as cur:
@@ -803,7 +801,6 @@ def renew_user(owner_id: int, username: str, add_days: int):
             if not ok:
                 log.warning("remote renew failed on %s: %s", r["panel_url"], err)
 
-
 def list_user_links(owner_id: int, local_username: str):
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
@@ -817,7 +814,6 @@ def list_user_links(owner_id: int, local_username: str):
             tuple(ids) + (local_username,),
         )
         return cur.fetchall()
-
 
 def delete_local_user(owner_id: int, username: str):
     ids = expand_owner_ids(owner_id)
@@ -848,7 +844,6 @@ def delete_local_user(owner_id: int, username: str):
                 "UPDATE agents SET total_used_bytes = GREATEST(total_used_bytes - %s, 0) WHERE telegram_user_id=%s",
                 (used, owner_real),
             )
-
 
 def delete_user(owner_id: int, username: str):
     rows = list_user_links(owner_id, username)
@@ -1238,7 +1233,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🧰 Manage Services", callback_data="manage_services")],
             [InlineKeyboardButton("👑 Manage Agents", callback_data="manage_agents")],
             [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
-            [InlineKeyboardButton("🚨 Emergency Config", callback_data="emerg_cfg")],
             [InlineKeyboardButton("⬅️ Back", callback_data="back_home")],
         ]
         await q.edit_message_text("پنل ادمین:", reply_markup=InlineKeyboardMarkup(kb))
@@ -1251,16 +1245,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur = get_setting(uid, "limit_message") or "—"
         await q.edit_message_text(f"پیام فعلی:\n{cur}\n\nپیام جدید را بفرست:")
         return ASK_LIMIT_MSG
-
-    if data == "emerg_cfg":
-        if not is_admin(uid):
-            await q.edit_message_text("دسترسی ندارید.")
-            return ConversationHandler.END
-        cur = get_setting(uid, "emergency_config") or "—"
-        await q.edit_message_text(
-            f"کانفیگ فعلی:\n{cur}\n\nکانفیگ جدید را بفرست (یا off برای پاک کردن):"
-        )
-        return ASK_EMERGENCY_CFG
 
     # --- admin/agent shared
     if data == "manage_presets":
@@ -1365,6 +1349,16 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
         sid = context.user_data.get("service_id")
         return await show_service_panel_select(q, context, sid)
+
+    if data == "service_emerg_cfg":
+        if not is_admin(uid):
+            return ConversationHandler.END
+        sid = context.user_data.get("service_id")
+        cur = get_setting(uid, f"emergency_config_service_{sid}") or "—"
+        await q.edit_message_text(
+            f"کانفیگ فعلی:\n{cur}\n\nکانفیگ جدید را بفرست (یا off برای پاک کردن):"
+        )
+        return ASK_SERVICE_EMERGENCY_CFG
 
     if data == "service_rename":
         if not is_admin(uid):
@@ -1975,6 +1969,7 @@ async def show_service_card(q, context: ContextTypes.DEFAULT_TYPE, service_id: i
     lines.append("\nچه کاری انجام بدهم؟")
     kb = [
         [InlineKeyboardButton("🧷 Assign Panels", callback_data="service_assign_panels")],
+        [InlineKeyboardButton("🚨 Emergency Config", callback_data="service_emerg_cfg")],
         [InlineKeyboardButton("✏️ Rename Service", callback_data="service_rename")],
         [InlineKeyboardButton("🗑️ Remove Service", callback_data="service_delete")],
         [InlineKeyboardButton("⬅️ Back", callback_data="manage_services")],
@@ -2136,19 +2131,21 @@ async def got_limit_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ پیام ذخیره شد.")
     return ConversationHandler.END
 
-async def got_emerg_cfg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def got_service_emerg_cfg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
+    sid = context.user_data.get("service_id")
     msg = (update.message.text or "").strip()
+    key = f"emergency_config_service_{sid}"
     if msg.lower() in {"off", "none", "clear"}:
-        set_setting(update.effective_user.id, "emergency_config", "")
-        await update.message.reply_text("✅ کانفیگ پاک شد.")
+        set_setting(update.effective_user.id, key, "")
+        await update.message.reply_text("✅ کانفیگ سرویس پاک شد.")
         return ConversationHandler.END
     if not msg:
         await update.message.reply_text("❌ کانفیگ خالیه. دوباره بفرست:")
-        return ASK_EMERGENCY_CFG
-    set_setting(update.effective_user.id, "emergency_config", msg)
-    await update.message.reply_text("✅ کانفیگ ذخیره شد.")
+        return ASK_SERVICE_EMERGENCY_CFG
+    set_setting(update.effective_user.id, key, msg)
+    await update.message.reply_text("✅ کانفیگ سرویس ذخیره شد.")
     return ConversationHandler.END
 
 # ---------- add/edit panels (admin only) ----------
@@ -2949,7 +2946,7 @@ def build_app():
 
             # settings
             ASK_LIMIT_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_limit_msg)],
-            ASK_EMERGENCY_CFG: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_emerg_cfg)],
+            ASK_SERVICE_EMERGENCY_CFG: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_service_emerg_cfg)],
 
             # preset mgmt
             ASK_PRESET_GB:   [MessageHandler(filters.TEXT & ~filters.COMMAND, got_preset_gb)],
