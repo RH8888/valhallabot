@@ -25,7 +25,11 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from mysql.connector import pooling
-from asgiref.wsgi import AsgiToWsgi
+try:
+    # asgiref < 3.8
+    from asgiref.wsgi import AsgiToWsgi
+except ImportError:  # pragma: no cover - compatibility for newer asgiref
+    from asgiref.wsgi import ASGItoWSGI as AsgiToWsgi
 from werkzeug.middleware.dispatcher import DispatcherMiddleware
 from apis import sanaei
 from api.main import app as api_app
