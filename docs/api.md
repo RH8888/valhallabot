@@ -46,6 +46,10 @@ Agents may also rotate their own token:
 POST /api/v1/agents/me/token
 ```
 
+Agents can also view or rotate their token directly from the Telegram bot via
+the **API Token** menu. Administrators may view or rotate any agent's token
+through the bot's agent management panel.
+
 Administrators can rotate a token for any agent:
 
 ```
