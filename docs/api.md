@@ -19,9 +19,15 @@ Authorization: Bearer <token>
 
 ### Admin tokens
 
-Set the `ADMIN_API_TOKEN` environment variable before starting the application
-and use its value as the bearer token. Admin tokens allow access to privileged
-endpoints.
+Admin API tokens are stored in the database. A super-admin can view the
+current token and generate a new one via the following endpoints:
+
+```
+GET /api/v1/admin/token
+POST /api/v1/admin/token
+```
+
+Use the returned `token` value as the bearer token for privileged requests.
 
 ### Agent tokens
 
