@@ -92,8 +92,6 @@ def init_portal_users_table():
             """
         )
 
-init_portal_users_table()
-
 FETCH_CACHE_TTL = int(os.getenv("FETCH_CACHE_TTL", "300"))
 _fetch_user_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
 _fetch_user_lock = RLock()
@@ -118,6 +116,8 @@ class CurCtx:
         finally:
             self.cur.close()
             self.conn.close()
+
+init_portal_users_table()
 
 def admin_ids():
     ids = (os.getenv("ADMIN_IDS") or "").strip()
