@@ -20,7 +20,25 @@ def rotate_api_token(agent_id: int) -> str:
     from bot import with_mysql_cursor
 
     with with_mysql_cursor() as cur:
-        cur.execute("UPDATE agents SET api_token=%s WHERE id=%s", (token_hash, agent_id))
+        cur.execute(
+            "UPDATE agents SET api_token=%s, api_token_raw=%s WHERE id=%s",
+            (token_hash, token, agent_id),
+        )
         if cur.rowcount == 0:
             raise ValueError("agent not found")
     return token
+
+
+def get_api_token(agent_id: int) -> str:
+    """Retrieve the raw API token for an agent.
+
+    Raises ValueError if the agent does not exist or no token is stored.
+    """
+    from bot import with_mysql_cursor
+
+    with with_mysql_cursor() as cur:
+        cur.execute("SELECT api_token_raw FROM agents WHERE id=%s", (agent_id,))
+        row = cur.fetchone()
+        if not row or row["api_token_raw"] is None:
+            raise ValueError("agent not found")
+    return row["api_token_raw"]

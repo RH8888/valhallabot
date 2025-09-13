@@ -25,15 +25,29 @@ endpoints.
 
 ### Agent tokens
 
-Agent API tokens are stored hashed in the database. To issue or rotate an agent
-token, an admin must call:
+Agent API tokens are stored hashed in the database while a copy of the raw
+token is kept so agents can retrieve it later.
+
+Agents may view their current token:
+
+```
+GET /api/v1/agents/me/token
+```
+
+Agents may also rotate their own token:
+
+```
+POST /api/v1/agents/me/token
+```
+
+Administrators can rotate a token for any agent:
 
 ```
 POST /api/v1/agents/{agent_id}/token
 ```
 
-The response includes the new `api_token`. It is only shown once and should be
-stored securely by the caller.
+The response for any rotation includes the new `api_token`. It is only shown
+once and should be stored securely by the caller.
 
 ## Role-based access
 
@@ -58,6 +72,22 @@ curl -X POST \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   "http://localhost:${FLASK_PORT}/api/v1/agents/123/token"
 ```
+
+### Get current agent token
+
+```sh
+curl -H "Authorization: Bearer $AGENT_TOKEN" \
+  "http://localhost:${FLASK_PORT}/api/v1/agents/me/token"
+```
+
+### Rotate my agent token
+
+```sh
+curl -X POST \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  "http://localhost:${FLASK_PORT}/api/v1/agents/me/token"
+```
+
 
 ### List users
 

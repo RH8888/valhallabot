@@ -3,9 +3,9 @@ from starlette.middleware.wsgi import WSGIMiddleware
 from dotenv import load_dotenv
 
 from app import app as flask_app
-from bot import init_mysql_pool, ensure_schema
-from models.agents import rotate_api_token
-from api.auth import require_admin
+from bot import init_mysql_pool, ensure_schema, with_mysql_cursor
+from models.agents import rotate_api_token, get_api_token
+from api.auth import require_admin, require_agent, Identity
 from api.admin import router as admin_router
 from api.users import router as users_router
 from api.sub import router as sub_router
@@ -31,6 +31,31 @@ async def rotate_agent_token_endpoint(agent_id: int, _: None = Depends(require_a
         token = rotate_api_token(agent_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Agent not found")
+    return {"api_token": token}
+
+
+@router.get("/agents/me/token")
+async def get_my_token(identity: Identity = Depends(require_agent)):
+    with with_mysql_cursor() as cur:
+        cur.execute("SELECT id FROM agents WHERE telegram_user_id=%s", (identity.agent_id,))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    try:
+        token = get_api_token(row["id"])
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Token not found")
+    return {"api_token": token}
+
+
+@router.post("/agents/me/token")
+async def rotate_my_token(identity: Identity = Depends(require_agent)):
+    with with_mysql_cursor() as cur:
+        cur.execute("SELECT id FROM agents WHERE telegram_user_id=%s", (identity.agent_id,))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    token = rotate_api_token(row["id"])
     return {"api_token": token}
 
 

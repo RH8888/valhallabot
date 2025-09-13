@@ -276,6 +276,7 @@ def ensure_schema():
                 max_user_bytes BIGINT NOT NULL DEFAULT 0,
                 total_used_bytes BIGINT NOT NULL DEFAULT 0,
                 api_token CHAR(64) UNIQUE,
+                api_token_raw TEXT,
                 disabled_pushed TINYINT(1) NOT NULL DEFAULT 0,
                 disabled_pushed_at DATETIME NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -297,6 +298,10 @@ def ensure_schema():
             pass
         try:
             cur.execute("ALTER TABLE agents ADD COLUMN api_token CHAR(64) UNIQUE")
+        except MySQLError:
+            pass
+        try:
+            cur.execute("ALTER TABLE agents ADD COLUMN api_token_raw TEXT")
         except MySQLError:
             pass
         if added_total:
@@ -1018,9 +1023,9 @@ def upsert_agent(tg_id: int, name: str):
             return None
         token, token_hash = generate_api_token()
         cur.execute(
-            "INSERT INTO agents(telegram_user_id,name,plan_limit_bytes,expire_at,active,user_limit,max_user_bytes,api_token) "
-            "VALUES(%s,%s,0,NULL,1,0,0,%s)",
-            (tg_id, name, token_hash),
+            "INSERT INTO agents(telegram_user_id,name,plan_limit_bytes,expire_at,active,user_limit,max_user_bytes,api_token,api_token_raw) "
+            "VALUES(%s,%s,0,NULL,1,0,0,%s,%s)",
+            (tg_id, name, token_hash, token),
         )
         return token
 
