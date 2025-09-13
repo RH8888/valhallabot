@@ -1,22 +1,13 @@
-import os
-
-from fastapi import FastAPI, APIRouter, HTTPException, Header, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Depends
 from dotenv import load_dotenv
 
 from bot import init_mysql_pool, ensure_schema
 from models.agents import rotate_api_token
+from api.auth import require_admin
 
 app = FastAPI()
 
 router = APIRouter()
-
-
-ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN", "")
-
-
-async def require_admin(x_admin_token: str = Header(...)):
-    if not ADMIN_API_TOKEN or x_admin_token != ADMIN_API_TOKEN:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 @router.get("/health")
