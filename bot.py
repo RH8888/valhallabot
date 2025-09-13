@@ -149,8 +149,12 @@ def canonical_owner_id(owner_id: int) -> int:
 # ---------- MySQL ----------
 MYSQL_POOL = None
 
+
 def init_mysql_pool():
+    """Initialise the global MySQL connection pool if it hasn't been already."""
     global MYSQL_POOL
+    # Ensure environment variables from a .env file are loaded if present
+    load_dotenv()
     MYSQL_POOL = pooling.MySQLConnectionPool(
         pool_name="bot_pool",
         pool_size=5,
@@ -163,12 +167,23 @@ def init_mysql_pool():
         use_pure=True,
     )
 
+
 def with_mysql_cursor(dict_=True):
+    """Context manager that yields a MySQL cursor.
+
+    Lazily initialises the connection pool on first use so callers do not need
+    to ensure :func:`init_mysql_pool` was called beforehand.
+    """
+
     class _Ctx:
         def __enter__(self):
+            global MYSQL_POOL
+            if MYSQL_POOL is None:
+                init_mysql_pool()
             self.conn = MYSQL_POOL.get_connection()
-            self.cur  = self.conn.cursor(dictionary=dict_)
+            self.cur = self.conn.cursor(dictionary=dict_)
             return self.cur
+
         def __exit__(self, exc, e, tb):
             if exc is None:
                 self.conn.commit()
@@ -176,6 +191,7 @@ def with_mysql_cursor(dict_=True):
                 self.conn.rollback()
             self.cur.close()
             self.conn.close()
+
     return _Ctx()
 
 def ensure_schema():
