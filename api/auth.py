@@ -1,13 +1,9 @@
-import os
 import hashlib
 from dataclasses import dataclass
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
 from bot import with_mysql_cursor
-
-
-ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN", "")
 
 
 @dataclass
@@ -27,9 +23,12 @@ async def get_identity(request: Request, authorization: str | None = Header(None
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
     token = authorization.split()[1]
-
-    if ADMIN_API_TOKEN and token == ADMIN_API_TOKEN:
-        identity = Identity(role="admin")
+    with with_mysql_cursor() as cur:
+        cur.execute("SELECT is_super FROM admins WHERE api_token=%s", (token,))
+        admin_row = cur.fetchone()
+    if admin_row:
+        role = "super_admin" if admin_row["is_super"] else "admin"
+        identity = Identity(role=role)
         request.state.identity = identity
         return identity
 
@@ -47,7 +46,14 @@ async def get_identity(request: Request, authorization: str | None = Header(None
 
 async def require_admin(identity: Identity = Depends(get_identity)) -> Identity:
     """Ensure the requester is an admin."""
-    if identity.role != "admin":
+    if identity.role not in ("admin", "super_admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    return identity
+
+
+async def require_super_admin(identity: Identity = Depends(require_admin)) -> Identity:
+    """Ensure the requester is a super-admin."""
+    if identity.role != "super_admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     return identity
 

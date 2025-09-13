@@ -181,6 +181,14 @@ def with_mysql_cursor(dict_=True):
 def ensure_schema():
     with with_mysql_cursor() as cur:
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS admins(
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                api_token VARCHAR(128) NOT NULL UNIQUE,
+                is_super TINYINT(1) NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS panels(
                 id BIGINT PRIMARY KEY AUTO_INCREMENT,
                 telegram_user_id BIGINT NOT NULL,
