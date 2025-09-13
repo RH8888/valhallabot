@@ -1,6 +1,8 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends
+from starlette.middleware.wsgi import WSGIMiddleware
 from dotenv import load_dotenv
 
+from app import app as flask_app
 from bot import init_mysql_pool, ensure_schema
 from models.agents import rotate_api_token
 from api.auth import require_admin
@@ -8,7 +10,8 @@ from api.admin import router as admin_router
 from api.users import router as users_router
 from api.sub import router as sub_router
 
-app = FastAPI()
+# FastAPI application that will also host the existing Flask app
+api_app = FastAPI()
 
 router = APIRouter()
 router.include_router(admin_router)
@@ -31,14 +34,20 @@ async def rotate_agent_token_endpoint(agent_id: int, _: None = Depends(require_a
     return {"api_token": token}
 
 
-@app.on_event("startup")
+@api_app.on_event("startup")
 async def startup_event():
     """Initialize resources on application startup."""
     load_dotenv()
     init_mysql_pool()
     ensure_schema()
 
+# Preserve existing FastAPI routes under /api/v1
+api_app.include_router(router, prefix="/api/v1")
 
-app.include_router(router, prefix="/api/v1")
+# Mount the Flask app at the root path
+api_app.mount("/", WSGIMiddleware(flask_app))
+
+# Expose the combined ASGI application
+app = api_app
 
 __all__ = ("app",)
