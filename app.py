@@ -25,7 +25,10 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from mysql.connector import pooling
+from asgiref.wsgi import AsgiToWsgi
+from werkzeug.middleware.dispatcher import DispatcherMiddleware
 from apis import sanaei
+from api.main import app as api_app
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | flask_agg | %(message)s",
@@ -504,6 +507,11 @@ def bytesformat(num):
 
 
 app.jinja_env.filters["bytesformat"] = bytesformat
+
+# Mount the FastAPI application under /api
+app.wsgi_app = DispatcherMiddleware(
+    app.wsgi_app, {"/api": AsgiToWsgi(api_app)}
+)
 
 
 def build_user(local_username, app_key, lu, remote=None):
