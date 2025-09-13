@@ -1,8 +1,6 @@
 import hashlib
 import secrets
 
-from bot import with_mysql_cursor
-
 
 def generate_api_token() -> tuple[str, str]:
     """Generate a random API token and its hash."""
@@ -18,6 +16,9 @@ def rotate_api_token(agent_id: int) -> str:
     Raises ValueError if the agent does not exist.
     """
     token, token_hash = generate_api_token()
+    # Import here to avoid circular import with bot.py
+    from bot import with_mysql_cursor
+
     with with_mysql_cursor() as cur:
         cur.execute("UPDATE agents SET api_token=%s WHERE id=%s", (token_hash, agent_id))
         if cur.rowcount == 0:
