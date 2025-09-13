@@ -46,7 +46,7 @@ from telegram.ext import (
 )
 
 from scripts import usage_sync
-from models.agents import generate_api_token
+from models.agents import generate_api_token, get_api_token, rotate_api_token
 
 # ---------- logging ----------
 logging.basicConfig(
@@ -1137,6 +1137,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🔍 Search User", callback_data="search_user")],
             [InlineKeyboardButton("👥 List Users", callback_data="list_users:0")],
             [InlineKeyboardButton("🧩 Presets", callback_data="manage_presets")],
+            [InlineKeyboardButton("🔑 API Token", callback_data="agent_token")],
         ]
 
     text = header + "Choose an option:"
@@ -1320,6 +1321,25 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "preset_custom":
         await q.edit_message_text("حجم در GB (0=نامحدود):")
         return ASK_LIMIT_GB
+
+    if data == "agent_token":
+        ag = get_agent(uid)
+        if not ag:
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        kb = [
+            [InlineKeyboardButton("Show token", callback_data="agent_show_token")],
+            [InlineKeyboardButton("Rotate token", callback_data="agent_rotate_token")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="back_home")],
+        ]
+        await q.edit_message_text("API token:", reply_markup=InlineKeyboardMarkup(kb))
+        return ConversationHandler.END
+
+    if data == "agent_show_token":
+        return await agent_show_token(update, context)
+
+    if data == "agent_rotate_token":
+        return await agent_rotate_token(update, context)
 
     if data == "add_panel":
         if not is_admin(uid):
@@ -1631,6 +1651,14 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb.append([InlineKeyboardButton("⬅️ Back", callback_data="agent_sel_back")])
         await q.edit_message_text("یک سرویس را انتخاب کن:", reply_markup=InlineKeyboardMarkup(kb))
         return ConversationHandler.END
+
+    if data == "admin_show_agent_token":
+        if not is_admin(uid): return ConversationHandler.END
+        return await admin_show_agent_token(update, context)
+
+    if data == "admin_rotate_agent_token":
+        if not is_admin(uid): return ConversationHandler.END
+        return await admin_rotate_agent_token(update, context)
 
     if data.startswith("agent_service:"):
         if not is_admin(uid): return ConversationHandler.END
@@ -2077,10 +2105,76 @@ async def show_agent_card(q, context: ContextTypes.DEFAULT_TYPE, agent_tg_id: in
         [InlineKeyboardButton("🧩 Assign Panels", callback_data="agent_assign_panels")],
         [InlineKeyboardButton("🧰 Assign Service", callback_data="agent_assign_service")],
         [InlineKeyboardButton("🔘 Toggle Active", callback_data="agent_toggle_active")],
+        [InlineKeyboardButton("Show token", callback_data="admin_show_agent_token")],
+        [InlineKeyboardButton("Rotate token", callback_data="admin_rotate_agent_token")],
         [InlineKeyboardButton("⬅️ Back", callback_data="manage_agents")],
     ]
     await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
     return ConversationHandler.END
+
+async def agent_show_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = update.effective_user.id
+    ag = get_agent(uid)
+    if not ag:
+        await q.edit_message_text("دسترسی ندارید.")
+        return ConversationHandler.END
+    try:
+        tok = get_api_token(ag["id"])
+    except Exception:
+        await q.edit_message_text("Token not found.")
+        return ConversationHandler.END
+    await context.bot.send_message(uid, f"Your API token:\n<code>{tok}</code>", parse_mode="HTML")
+    log.info("Agent %s viewed API token", uid)
+    return ConversationHandler.END
+
+async def agent_rotate_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = update.effective_user.id
+    ag = get_agent(uid)
+    if not ag:
+        await q.edit_message_text("دسترسی ندارید.")
+        return ConversationHandler.END
+    tok = rotate_api_token(ag["id"])
+    await context.bot.send_message(uid, f"New API token:\n<code>{tok}</code>", parse_mode="HTML")
+    log.info("Agent %s rotated API token", uid)
+    return ConversationHandler.END
+
+async def admin_show_agent_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await q.edit_message_text("دسترسی ندارید.")
+        return ConversationHandler.END
+    atg = context.user_data.get("agent_tg_id")
+    a = get_agent(atg)
+    if not a:
+        await q.edit_message_text("نماینده پیدا نشد.")
+        return ConversationHandler.END
+    try:
+        tok = get_api_token(a["id"])
+    except Exception:
+        await q.edit_message_text("Token not found.")
+        return ConversationHandler.END
+    await context.bot.send_message(uid, f"Token for {a['name']}:\n<code>{tok}</code>", parse_mode="HTML")
+    log.info("Admin %s viewed token for agent %s", uid, atg)
+    return await show_agent_card(q, context, atg, notice="📨 Token sent via PM.")
+
+async def admin_rotate_agent_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await q.edit_message_text("دسترسی ندارید.")
+        return ConversationHandler.END
+    atg = context.user_data.get("agent_tg_id")
+    a = get_agent(atg)
+    if not a:
+        await q.edit_message_text("نماینده پیدا نشد.")
+        return ConversationHandler.END
+    tok = rotate_api_token(a["id"])
+    await context.bot.send_message(uid, f"New token for {a['name']}:\n<code>{tok}</code>", parse_mode="HTML")
+    log.info("Admin %s rotated token for agent %s", uid, atg)
+    return await show_agent_card(q, context, atg, notice="✅ Token rotated.")
 
 async def show_assign_panels(q, context: ContextTypes.DEFAULT_TYPE, agent_tg_id: int):
     panels = list_my_panels_admin(q.from_user.id)
