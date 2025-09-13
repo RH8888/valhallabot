@@ -4,7 +4,7 @@ The service exposes a [FastAPI](https://fastapi.tiangolo.com/) application. Once
 running, interactive documentation is available via the automatically generated
 Swagger UI:
 
-- **Swagger UI**: `http://localhost:5000/docs`
+- **Swagger UI**: `http://localhost:${FLASK_PORT}/docs`
 
 All REST endpoints are served under the `/api/v1` prefix.
 
@@ -48,7 +48,7 @@ Endpoints annotate the required role in the generated Swagger UI.
 ### Health check
 
 ```sh
-curl http://localhost:5000/api/v1/health
+curl "http://localhost:${FLASK_PORT}/api/v1/health"
 ```
 
 ### Rotate an agent token (admin only)
@@ -56,14 +56,14 @@ curl http://localhost:5000/api/v1/health
 ```sh
 curl -X POST \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://localhost:5000/api/v1/agents/123/token
+  "http://localhost:${FLASK_PORT}/api/v1/agents/123/token"
 ```
 
 ### List users
 
 ```sh
 curl -H "Authorization: Bearer $AGENT_TOKEN" \
-  http://localhost:5000/api/v1/users
+  "http://localhost:${FLASK_PORT}/api/v1/users"
 ```
 
 ### Create a user
@@ -73,7 +73,7 @@ curl -X POST \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"username":"alice","limit_bytes":1073741824,"duration_days":30}' \
-  http://localhost:5000/api/v1/users
+  "http://localhost:${FLASK_PORT}/api/v1/users"
 ```
 
 ### Edit a user
@@ -83,6 +83,6 @@ curl -X PATCH \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"renew_days":30}' \
-  http://localhost:5000/api/v1/users/alice
+  "http://localhost:${FLASK_PORT}/api/v1/users/alice"
 ```
 

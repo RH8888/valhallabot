@@ -32,7 +32,7 @@
 
 ```sh
 docker build -t valhalla .
-docker run --rm -p 5000:5000 valhalla
+docker run --rm -p ${FLASK_PORT:-5000}:${FLASK_PORT:-5000} valhalla
 docker compose up -d
 ```
 
@@ -40,7 +40,7 @@ docker compose up -d
 
 ```sh
 podman build -t valhalla .
-podman run --rm -p 5000:5000 valhalla
+podman run --rm -p ${FLASK_PORT:-5000}:${FLASK_PORT:-5000} valhalla
 podman compose up -d
 ```
 
@@ -57,29 +57,6 @@ podman compose up -d
   matching ownership.
 - SELinux denials: append `:Z` to volume mounts or disable labels with
   `--security-opt label=disable`.
-
-## High-Concurrency Deployment
-
-To handle a large number of concurrent connections, the application can run
-Gunicorn with gevent workers. Set the `ASYNC_WORKERS` environment variable to
-enable this mode:
-
-```sh
-ASYNC_WORKERS=100  # number of gevent workers
-```
-
-When `ASYNC_WORKERS` is defined, `start.sh` adds `--worker-class gevent` and uses
-its value for the worker count. Ensure the `gevent` package is available in the
-runtime environment.
-
-In Docker Compose, expose the variable to the app service:
-
-```yaml
-environment:
-  ASYNC_WORKERS: ${ASYNC_WORKERS}
-```
-
-This allows the service to scale with higher concurrency when needed.
 
 ## Subscription Fetch Caching
 

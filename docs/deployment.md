@@ -1,6 +1,6 @@
 # Deployment
 
-This project uses [Gunicorn](https://gunicorn.org/) as its WSGI server.
+This project uses [Uvicorn](https://www.uvicorn.org/) as its ASGI server.
 
 ## Container Deployment
 
@@ -8,7 +8,7 @@ This project uses [Gunicorn](https://gunicorn.org/) as its WSGI server.
 
 ```sh
 docker build -t valhalla .
-docker run --rm -p 5000:5000 valhalla
+docker run --rm -p ${FLASK_PORT:-5000}:${FLASK_PORT:-5000} valhalla
 docker compose up -d
 ```
 
@@ -16,7 +16,7 @@ docker compose up -d
 
 ```sh
 podman build -t valhalla .
-podman run --rm -p 5000:5000 valhalla
+podman run --rm -p ${FLASK_PORT:-5000}:${FLASK_PORT:-5000} valhalla
 podman compose up -d
 ```
 
@@ -32,43 +32,32 @@ podman compose up -d
 - SELinux denials: add `:Z` to volume mounts or disable labels with
   `--security-opt label=disable`.
 
-## Running with Gunicorn
+## Running with Uvicorn
 
 Set up the environment variables in `.env` and start the server:
 
 ```bash
-gunicorn --workers ${WORKERS:-$((2 * $(nproc) + 1))} \
-         --timeout ${GUNICORN_TIMEOUT:-120} \
-         --bind "${FLASK_HOST:-0.0.0.0}:${FLASK_PORT:-5000}" \
-         app:app
+uvicorn api.main:app --host "${FLASK_HOST:-0.0.0.0}" --port "${FLASK_PORT:-5000}"
 ```
 
-`WORKERS` controls the number of worker processes. If unset, the startup
-script calculates a sensible default of `2 * CPU cores + 1`.
+Optionally set `WORKERS` to run multiple processes:
 
-`GUNICORN_TIMEOUT` sets the maximum time (in seconds) a worker can take to
-handle a request. The default of `120` seconds accommodates slower upstream
-panels.
-
-When using Docker, Docker Compose, Podman, or `podman compose`, the container's
-entrypoint runs the same command automatically. Adjust the worker count or
-timeout by setting the `WORKERS` or `GUNICORN_TIMEOUT` environment variables.
+```bash
+uvicorn api.main:app --host "${FLASK_HOST:-0.0.0.0}" --port "${FLASK_PORT:-5000}" --workers "${WORKERS}"
+```
 
 ### Enabling HTTPS
 
 Provide paths to your SSL certificate and key via the `SSL_CERT_PATH` and
 `SSL_KEY_PATH` environment variables. The startup script automatically passes
-them to Gunicorn:
+them to Uvicorn:
 
 ```bash
-SSL_CERT_PATH=/app/certs/cert.pem \
-SSL_KEY_PATH=/app/certs/key.pem \
-FLASK_PORT=443 \
-gunicorn --workers ${WORKERS:-$((2 * $(nproc) + 1))} \
-         --timeout ${GUNICORN_TIMEOUT:-120} \
-         --bind "${FLASK_HOST:-0.0.0.0}:${FLASK_PORT:-5000}" \
-         --certfile "$SSL_CERT_PATH" --keyfile "$SSL_KEY_PATH" \
-         app:app
+SSL_CERT_PATH=/app/certs/cert.pem \\
+SSL_KEY_PATH=/app/certs/key.pem \\
+FLASK_PORT=443 \\
+uvicorn api.main:app --host "${FLASK_HOST:-0.0.0.0}" --port "${FLASK_PORT:-5000}" \\
+  --ssl-certfile "$SSL_CERT_PATH" --ssl-keyfile "$SSL_KEY_PATH"
 ```
 
 When using Docker or Podman, mount the certificate files into the container and
@@ -83,6 +72,6 @@ defaults to `5 × CPU cores`.
 
 For deployments expecting heavy traffic, increase the pool size to allow more
 concurrent requests. A common starting point is allocating roughly 5–10
-connections per Gunicorn worker while staying within the MySQL server's
+connections per worker process while staying within the MySQL server's
 `max_connections` limit. The application logs an error when the pool is
 exhausted; configure your monitoring to alert on this condition.
