@@ -86,3 +86,7 @@ This allows the service to scale with higher concurrency when needed.
 Remote panel queries for users and subscription links are cached in-memory to
 reduce load. The cache lifetime defaults to 300 seconds and can be adjusted via
 the `FETCH_CACHE_TTL` environment variable.
+
+## API
+
+Detailed API usage and curl examples are available in [docs/api.md](docs/api.md).
