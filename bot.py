@@ -1280,6 +1280,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🧰 Manage Services", callback_data="manage_services")],
             [InlineKeyboardButton("👑 Manage Agents", callback_data="manage_agents")],
             [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
+            [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
             [InlineKeyboardButton("⬅️ Back", callback_data="back_home")],
         ]
         await q.edit_message_text("پنل ادمین:", reply_markup=InlineKeyboardMarkup(kb))
@@ -1360,6 +1361,24 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "agent_rotate_token":
         return await agent_rotate_token(update, context)
+
+    if data == "admin_token":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        kb = [
+            [InlineKeyboardButton("Show token", callback_data="admin_show_token")],
+            [InlineKeyboardButton("Rotate token", callback_data="admin_rotate_token")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
+        ]
+        await q.edit_message_text("Admin API token:", reply_markup=InlineKeyboardMarkup(kb))
+        return ConversationHandler.END
+
+    if data == "admin_show_token":
+        return await admin_show_token(update, context)
+
+    if data == "admin_rotate_token":
+        return await admin_rotate_token(update, context)
 
     if data == "add_panel":
         if not is_admin(uid):
@@ -2160,6 +2179,38 @@ async def agent_rotate_token(update: Update, context: ContextTypes.DEFAULT_TYPE)
     tok = rotate_api_token(ag["id"])
     await context.bot.send_message(uid, f"New API token:\n<code>{tok}</code>", parse_mode="HTML")
     log.info("Agent %s rotated API token", uid)
+    return ConversationHandler.END
+
+async def admin_show_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await q.edit_message_text("دسترسی ندارید.")
+        return ConversationHandler.END
+    with with_mysql_cursor() as cur:
+        cur.execute("SELECT api_token FROM admins WHERE is_super=1 LIMIT 1")
+        row = cur.fetchone()
+    if not row:
+        await context.bot.send_message(uid, "No admin token set.")
+        return ConversationHandler.END
+    tok = row["api_token"]
+    await context.bot.send_message(uid, f"Admin API token:\n<code>{tok}</code>", parse_mode="HTML")
+    log.info("Admin %s viewed admin API token", uid)
+    return ConversationHandler.END
+
+async def admin_rotate_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await q.edit_message_text("دسترسی ندارید.")
+        return ConversationHandler.END
+    tok = secrets.token_hex(32)
+    with with_mysql_cursor() as cur:
+        cur.execute("UPDATE admins SET api_token=%s WHERE is_super=1", (tok,))
+        if cur.rowcount == 0:
+            cur.execute("INSERT INTO admins (api_token, is_super) VALUES (%s, 1)", (tok,))
+    await context.bot.send_message(uid, f"New admin API token:\n<code>{tok}</code>", parse_mode="HTML")
+    log.info("Admin %s rotated admin API token", uid)
     return ConversationHandler.END
 
 async def admin_show_agent_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
