@@ -42,7 +42,30 @@ services:
       ASYNC_WORKERS: ${ASYNC_WORKERS}
       SERVICE: app
     ports:
-      - "443:${FLASK_PORT:-5000}"
+      - "${FLASK_PORT:-5000}:${FLASK_PORT:-5000}"
+    volumes:
+      - ./certs:/app/certs:ro
+
+  fastapi-docs:
+    build: .
+    image: ${IMAGE:-ghcr.io/rh8888/valhallabot:v1.0.0}
+    container_name: valhalla-fastapi-docs
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: ${MYSQL_HOST}
+      MYSQL_PORT: ${MYSQL_PORT}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      FASTAPI_HOST: ${FASTAPI_HOST}
+      FASTAPI_PORT: ${FASTAPI_PORT}
+      SERVICE: api
+    ports:
+      - "5000:5000"
     volumes:
       - ./certs:/app/certs:ro
 
