@@ -30,7 +30,7 @@ async def get_agent_token_endpoint(agent_id: int, _: None = Depends(require_admi
     try:
         token = get_api_token(agent_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail="Token not found")
+        raise HTTPException(status_code=404, detail="Agent not found")
     return {"api_token": token}
 
 
@@ -53,7 +53,7 @@ async def get_my_token(identity: Identity = Depends(require_agent)):
     try:
         token = get_api_token(row["id"])
     except ValueError:
-        raise HTTPException(status_code=404, detail="Token not found")
+        raise HTTPException(status_code=404, detail="Agent not found")
     return {"api_token": token}
 
 
