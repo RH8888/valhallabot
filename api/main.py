@@ -39,6 +39,6 @@ async def startup_event():
     ensure_schema()
 
 
-app.include_router(router, prefix="/v1")
+app.include_router(router, prefix="/api/v1")
 
 __all__ = ("app",)
