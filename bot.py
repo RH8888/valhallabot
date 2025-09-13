@@ -2126,9 +2126,11 @@ async def agent_show_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         tok = get_api_token(ag["id"])
     except Exception:
-        await q.edit_message_text("Token not found.")
-        return ConversationHandler.END
-    await context.bot.send_message(uid, f"Your API token:\n<code>{tok}</code>", parse_mode="HTML")
+        tok = rotate_api_token(ag["id"])
+        log.warning("Token missing for agent %s, generated a new one", uid)
+    await context.bot.send_message(
+        uid, f"Your API token:\n<code>{tok}</code>", parse_mode="HTML"
+    )
     log.info("Agent %s viewed API token", uid)
     return ConversationHandler.END
 
@@ -2158,9 +2160,13 @@ async def admin_show_agent_token(update: Update, context: ContextTypes.DEFAULT_T
     try:
         tok = get_api_token(a["id"])
     except Exception:
-        await q.edit_message_text("Token not found.")
-        return ConversationHandler.END
-    await context.bot.send_message(uid, f"Token for {a['name']}:\n<code>{tok}</code>", parse_mode="HTML")
+        tok = rotate_api_token(a["id"])
+        log.warning("Token missing for agent %s, generated a new one", atg)
+    await context.bot.send_message(
+        uid,
+        f"Token for {a['name']}:\n<code>{tok}</code>",
+        parse_mode="HTML",
+    )
     log.info("Admin %s viewed token for agent %s", uid, atg)
     return await show_agent_card(q, context, atg, notice="📨 Token sent via PM.")
 
