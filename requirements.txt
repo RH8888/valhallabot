@@ -6,3 +6,4 @@ mysql-connector-python==9.0.0
 python-telegram-bot>=20,<22
 gunicorn==22.0.0
 gevent==24.2.1
+PyJWT==2.8.0
