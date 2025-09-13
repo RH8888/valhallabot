@@ -25,6 +25,15 @@ async def health_check():
     return {"status": "ok"}
 
 
+@router.get("/agents/{agent_id}/token")
+async def get_agent_token_endpoint(agent_id: int, _: None = Depends(require_admin)):
+    try:
+        token = get_api_token(agent_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Token not found")
+    return {"api_token": token}
+
+
 @router.post("/agents/{agent_id}/token")
 async def rotate_agent_token_endpoint(agent_id: int, _: None = Depends(require_admin)):
     try:
