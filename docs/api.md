@@ -26,8 +26,7 @@ current token and generate a new one via the following endpoints:
 GET /api/v1/admin/token
 POST /api/v1/admin/token
 ```
-
-Use the returned `token` value as the bearer token for privileged requests.
+Use the returned `api_token` value as the bearer token for privileged requests.
 
 ### Agent tokens
 
@@ -50,9 +49,10 @@ Agents can also view or rotate their token directly from the Telegram bot via
 the **API Token** menu. Administrators may view or rotate any agent's token
 through the bot's agent management panel.
 
-Administrators can rotate a token for any agent:
+Administrators can view or rotate a token for any agent:
 
 ```
+GET /api/v1/agents/{agent_id}/token
 POST /api/v1/agents/{agent_id}/token
 ```
 

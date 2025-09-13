@@ -21,7 +21,7 @@ def get_admin_token():
         row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Token not set")
-    return {"token": row["api_token"]}
+    return {"api_token": row["api_token"]}
 
 
 @router.post("/token", summary="Rotate admin token", dependencies=[Depends(require_super_admin)])
@@ -31,7 +31,7 @@ def rotate_admin_token():
         cur.execute("UPDATE admins SET api_token=%s WHERE is_super=1", (token,))
         if cur.rowcount == 0:
             cur.execute("INSERT INTO admins (api_token, is_super) VALUES (%s, 1)", (token,))
-    return {"token": token}
+    return {"api_token": token}
 
 
 # ---------------------- Panels ----------------------
