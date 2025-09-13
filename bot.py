@@ -1023,19 +1023,23 @@ def delete_panel_and_cleanup(owner_id: int, panel_id: int):
 
 # ---------- agents ----------
 def upsert_agent(tg_id: int, name: str):
+    token = None
     with with_mysql_cursor() as cur:
         cur.execute("SELECT id FROM agents WHERE telegram_user_id=%s", (tg_id,))
         row = cur.fetchone()
         if row:
-            cur.execute("UPDATE agents SET name=%s, active=1 WHERE telegram_user_id=%s", (name, tg_id))
-            return None
-        token, token_hash = generate_api_token()
-        cur.execute(
-            "INSERT INTO agents(telegram_user_id,name,plan_limit_bytes,expire_at,active,user_limit,max_user_bytes,api_token,api_token_raw) "
-            "VALUES(%s,%s,0,NULL,1,0,0,%s,%s)",
-            (tg_id, name, token_hash, token),
-        )
-        return token
+            cur.execute(
+                "UPDATE agents SET name=%s, active=1 WHERE telegram_user_id=%s",
+                (name, tg_id),
+            )
+        else:
+            token, token_hash = generate_api_token()
+            cur.execute(
+                "INSERT INTO agents(telegram_user_id,name,plan_limit_bytes,expire_at,active,user_limit,max_user_bytes,api_token,api_token_raw) "
+                "VALUES(%s,%s,0,NULL,1,0,0,%s,%s)",
+                (tg_id, name, token_hash, token),
+            )
+    return token
 
 def get_agent(tg_id: int):
     with with_mysql_cursor() as cur:
