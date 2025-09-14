@@ -5,7 +5,7 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict
 
-from bot import with_mysql_cursor, admin_ids, expand_owner_ids, canonical_owner_id
+from bot import with_mysql_cursor, admin_ids, canonical_owner_id
 from api.auth import require_admin, require_super_admin
 
 
@@ -15,7 +15,8 @@ def _owner_id() -> int:
 
 
 def _owner_ids() -> list[int]:
-    return expand_owner_ids(_owner_id())
+    admins = admin_ids()
+    return list(admins)
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 
@@ -84,12 +85,15 @@ class PanelOut(PanelBase):
 @router.get("/panels", response_model=List[PanelOut], summary="List panels")
 def list_panels():
     ids = _owner_ids()
-    placeholders = ",".join(["%s"] * len(ids))
     with with_mysql_cursor() as cur:
-        cur.execute(
-            f"SELECT * FROM panels WHERE telegram_user_id IN ({placeholders})",
-            tuple(ids),
-        )
+        if ids:
+            placeholders = ",".join(["%s"] * len(ids))
+            cur.execute(
+                f"SELECT * FROM panels WHERE telegram_user_id IN ({placeholders})",
+                tuple(ids),
+            )
+        else:
+            cur.execute("SELECT * FROM panels")
         rows = cur.fetchall()
     return [PanelOut(**row) for row in rows]
 
@@ -124,13 +128,15 @@ def create_panel(data: PanelCreate):
 @router.get("/panels/{panel_id}", response_model=PanelOut, summary="Get a panel")
 def get_panel(panel_id: int):
     ids = _owner_ids()
-    placeholders = ",".join(["%s"] * len(ids))
-    params = (panel_id, *ids)
+    if ids:
+        placeholders = ",".join(["%s"] * len(ids))
+        sql = f"SELECT * FROM panels WHERE id=%s AND telegram_user_id IN ({placeholders})"
+        params = (panel_id, *ids)
+    else:
+        sql = "SELECT * FROM panels WHERE id=%s"
+        params = (panel_id,)
     with with_mysql_cursor() as cur:
-        cur.execute(
-            f"SELECT * FROM panels WHERE id=%s AND telegram_user_id IN ({placeholders})",
-            params,
-        )
+        cur.execute(sql, params)
         row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Panel not found")
@@ -143,14 +149,16 @@ def update_panel(panel_id: int, data: PanelUpdate):
     if not fields:
         return get_panel(panel_id)
     ids = _owner_ids()
-    placeholders = ",".join(["%s"] * len(ids))
     sets = ", ".join(f"{k}=%s" for k in fields)
-    params = list(fields.values()) + [panel_id] + ids
+    if ids:
+        placeholders = ",".join(["%s"] * len(ids))
+        sql = f"UPDATE panels SET {sets} WHERE id=%s AND telegram_user_id IN ({placeholders})"
+        params = list(fields.values()) + [panel_id] + ids
+    else:
+        sql = f"UPDATE panels SET {sets} WHERE id=%s"
+        params = list(fields.values()) + [panel_id]
     with with_mysql_cursor() as cur:
-        cur.execute(
-            f"UPDATE panels SET {sets} WHERE id=%s AND telegram_user_id IN ({placeholders})",
-            tuple(params),
-        )
+        cur.execute(sql, tuple(params))
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Panel not found")
         cur.execute("SELECT * FROM panels WHERE id=%s", (panel_id,))
@@ -161,13 +169,15 @@ def update_panel(panel_id: int, data: PanelUpdate):
 @router.delete("/panels/{panel_id}", summary="Delete a panel")
 def delete_panel(panel_id: int):
     ids = _owner_ids()
-    placeholders = ",".join(["%s"] * len(ids))
-    params = (panel_id, *ids)
+    if ids:
+        placeholders = ",".join(["%s"] * len(ids))
+        sql = f"DELETE FROM panels WHERE id=%s AND telegram_user_id IN ({placeholders})"
+        params = (panel_id, *ids)
+    else:
+        sql = "DELETE FROM panels WHERE id=%s"
+        params = (panel_id,)
     with with_mysql_cursor() as cur:
-        cur.execute(
-            f"DELETE FROM panels WHERE id=%s AND telegram_user_id IN ({placeholders})",
-            params,
-        )
+        cur.execute(sql, params)
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Panel not found")
     return {"status": "deleted"}
