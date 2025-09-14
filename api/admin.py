@@ -8,8 +8,14 @@ from pydantic import BaseModel, Field, ConfigDict
 from bot import with_mysql_cursor, admin_ids, expand_owner_ids, canonical_owner_id
 from api.auth import require_admin, require_super_admin
 
-ADMIN_IDS = admin_ids()
-OWNER_ID = canonical_owner_id(next(iter(ADMIN_IDS)) if ADMIN_IDS else 0)
+
+def _owner_id() -> int:
+    admins = admin_ids()
+    return canonical_owner_id(next(iter(admins)) if admins else 0)
+
+
+def _owner_ids() -> list[int]:
+    return expand_owner_ids(_owner_id())
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 
@@ -77,7 +83,7 @@ class PanelOut(PanelBase):
 
 @router.get("/panels", response_model=List[PanelOut], summary="List panels")
 def list_panels():
-    ids = expand_owner_ids(OWNER_ID)
+    ids = _owner_ids()
     placeholders = ",".join(["%s"] * len(ids))
     with with_mysql_cursor() as cur:
         cur.execute(
@@ -99,7 +105,7 @@ def create_panel(data: PanelCreate):
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                OWNER_ID,
+                _owner_id(),
                 data.panel_url,
                 data.name,
                 data.panel_type,
@@ -117,7 +123,7 @@ def create_panel(data: PanelCreate):
 
 @router.get("/panels/{panel_id}", response_model=PanelOut, summary="Get a panel")
 def get_panel(panel_id: int):
-    ids = expand_owner_ids(OWNER_ID)
+    ids = _owner_ids()
     placeholders = ",".join(["%s"] * len(ids))
     params = (panel_id, *ids)
     with with_mysql_cursor() as cur:
@@ -136,7 +142,7 @@ def update_panel(panel_id: int, data: PanelUpdate):
     fields = data.model_dump(exclude_unset=True)
     if not fields:
         return get_panel(panel_id)
-    ids = expand_owner_ids(OWNER_ID)
+    ids = _owner_ids()
     placeholders = ",".join(["%s"] * len(ids))
     sets = ", ".join(f"{k}=%s" for k in fields)
     params = list(fields.values()) + [panel_id] + ids
@@ -154,7 +160,7 @@ def update_panel(panel_id: int, data: PanelUpdate):
 
 @router.delete("/panels/{panel_id}", summary="Delete a panel")
 def delete_panel(panel_id: int):
-    ids = expand_owner_ids(OWNER_ID)
+    ids = _owner_ids()
     placeholders = ",".join(["%s"] * len(ids))
     params = (panel_id, *ids)
     with with_mysql_cursor() as cur:
@@ -366,7 +372,7 @@ class SettingValue(BaseModel):
 
 @router.get("/settings", response_model=List[SettingOut], summary="List settings")
 def list_settings():
-    ids = expand_owner_ids(OWNER_ID)
+    ids = _owner_ids()
     placeholders = ",".join(["%s"] * len(ids))
     with with_mysql_cursor() as cur:
         cur.execute(
@@ -379,7 +385,7 @@ def list_settings():
 
 @router.get("/settings/{key}", response_model=SettingOut, summary="Get a setting")
 def get_setting_api(key: str):
-    ids = expand_owner_ids(OWNER_ID)
+    ids = _owner_ids()
     placeholders = ",".join(["%s"] * len(ids))
     params = (key, *ids)
     with with_mysql_cursor() as cur:
@@ -398,7 +404,7 @@ def set_setting(key: str, data: SettingValue):
     with with_mysql_cursor() as cur:
         cur.execute(
             "REPLACE INTO settings (owner_id, `key`, `value`) VALUES (%s, %s, %s)",
-            (OWNER_ID, key, data.value),
+            (_owner_id(), key, data.value),
         )
     return SettingOut(key=key, value=data.value)
 
@@ -408,7 +414,7 @@ def delete_setting(key: str):
     with with_mysql_cursor() as cur:
         cur.execute(
             "DELETE FROM settings WHERE owner_id=%s AND `key`=%s",
-            (OWNER_ID, key),
+            (_owner_id(), key),
         )
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Setting not found")
