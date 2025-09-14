@@ -161,10 +161,19 @@ def list_users(
     offset: int = 0,
     limit: int = 25,
     service_id: int | None = None,
-    owner_id: int | None = None,
+    owner_id: int | None = Query(
+        None, description="Target agent ID (admin only)"
+    ),
+    ownerid: int | None = Query(
+        None, alias="ownerid", include_in_schema=False
+    ),
     identity: Identity = Depends(get_identity),
 ):
-    real_owner = identity.agent_id if identity.role == "agent" else owner_id
+    real_owner = (
+        identity.agent_id
+        if identity.role == "agent"
+        else (owner_id if owner_id is not None else ownerid)
+    )
     if real_owner is None:
         raise HTTPException(status_code=400, detail="owner_id required")
     rows, total = _list_users(real_owner, search, offset, limit, service_id)
