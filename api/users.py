@@ -60,6 +60,10 @@ class UsageOut(BaseModel):
     expire_at: datetime | None
 
 
+class UsageRequest(BaseModel):
+    owner_id: int | None = Field(None, description="Target agent ID (admin only)")
+
+
 # ---- helpers -----------------------------------------------------------------
 
 def _fetch_user(owner_id: int, username: str) -> dict | None:
@@ -253,13 +257,15 @@ async def toggle_user(
     return {"status": "disabled" if disable else "enabled"}
 
 
-@router.get("/{username}/usage", response_model=UsageOut)
+# POST is used because the endpoint requires a JSON body. GET requests with
+# required bodies are non-standard and may not be supported by some clients.
+@router.post("/{username}/usage", response_model=UsageOut)
 def get_usage(
     username: str,
-    owner_id: int | None = None,
+    data: UsageRequest,
     identity: Identity = Depends(get_identity),
 ):
-    real_owner = identity.agent_id if identity.role == "agent" else owner_id
+    real_owner = identity.agent_id if identity.role == "agent" else data.owner_id
     if real_owner is None:
         raise HTTPException(status_code=400, detail="owner_id required")
     row = _fetch_user(real_owner, username)
