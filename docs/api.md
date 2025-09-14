@@ -103,7 +103,10 @@ curl -X POST \
 ### List users
 
 ```sh
-curl -H "Authorization: Bearer $AGENT_TOKEN" \
+curl -X POST \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"owner_id":123,"offset":0,"limit":25}' \
   "http://localhost:${FLASK_PORT}/api/v1/users"
 ```
 
@@ -114,7 +117,7 @@ curl -X POST \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"username":"alice","limit_bytes":1073741824,"duration_days":30}' \
-  "http://localhost:${FLASK_PORT}/api/v1/users"
+  "http://localhost:${FLASK_PORT}/api/v1/users/create"
 ```
 
 ### Edit a user

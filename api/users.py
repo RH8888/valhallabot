@@ -134,7 +134,7 @@ def _set_user_disabled(owner_id: int, username: str, disabled: bool) -> None:
 
 # ---- endpoints ----------------------------------------------------------------
 
-@router.post("", response_model=UserOut)
+@router.post("/create", response_model=UserOut)
 async def create_user(
     data: UserCreate,
     owner_id: int | None = Query(
@@ -168,28 +168,33 @@ async def create_user(
     )
 
 
-@router.get("", response_model=UserListResponse)
+class UserListRequest(BaseModel):
+    owner_id: int | None = Field(None, description="Target agent ID (admin only)")
+    offset: int = Field(0, description="Pagination offset")
+    limit: int = Field(25, description="Maximum number of users to return")
+    search: str | None = Field(None, description="Search term")
+    service_id: int | None = Field(None, description="Filter by service ID")
+
+
+@router.post("", response_model=UserListResponse)
 def list_users(
-    search: str | None = Query(None, description="Search term"),
-    offset: int = 0,
-    limit: int = 25,
-    service_id: int | None = None,
-    owner_id: int | None = Query(
-        None, description="Target agent ID (admin only)"
-    ),
-    ownerid: int | None = Query(
-        None, alias="ownerid", include_in_schema=False
-    ),
+    data: UserListRequest,
     identity: Identity = Depends(get_identity),
 ):
     real_owner = (
         identity.agent_id
         if identity.role == "agent"
-        else (owner_id if owner_id is not None else ownerid)
+        else data.owner_id
     )
     if real_owner is None:
         raise HTTPException(status_code=400, detail="owner_id required")
-    rows, total = _list_users(real_owner, search, offset, limit, service_id)
+    rows, total = _list_users(
+        real_owner,
+        data.search,
+        data.offset,
+        data.limit,
+        data.service_id,
+    )
     users = [
         UserOut(
             username=r["username"],
