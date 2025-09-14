@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from api.auth import get_identity, Identity
@@ -41,11 +41,16 @@ class LinksOut(BaseModel):
     }
 
 
-@router.get("/{username}/links", response_model=LinksOut)
+class LinksRequest(BaseModel):
+    owner_id: int | None = Field(None, description="Target agent ID (admin only)")
+
+
+# POST is used because the endpoint requires a JSON body. GET requests
+# with required bodies are non-standard and may be dropped by proxies.
+@router.post("/{username}/links", response_model=LinksOut)
 def get_links(
     username: str,
-    owner_id: int | None = Query(
-        None, description="Target agent ID (admin only)") ,
+    data: LinksRequest,
     identity: Identity = Depends(get_identity),
 ) -> LinksOut:
     """Return active subscription links for a user.
@@ -53,7 +58,7 @@ def get_links(
     Checks agent and user quotas/expiry before returning links. Returns an
     empty list if the limits are exceeded.
     """
-    real_owner = identity.agent_id if identity.role == "agent" else owner_id
+    real_owner = identity.agent_id if identity.role == "agent" else data.owner_id
     if real_owner is None:
         raise HTTPException(status_code=400, detail="owner_id required")
 
