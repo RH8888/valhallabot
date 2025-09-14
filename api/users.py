@@ -135,14 +135,27 @@ def _set_user_disabled(owner_id: int, username: str, disabled: bool) -> None:
 # ---- endpoints ----------------------------------------------------------------
 
 @router.post("", response_model=UserOut)
-async def create_user(data: UserCreate, identity: Identity = Depends(get_identity)):
-    owner_id = identity.agent_id if identity.role == "agent" else data.owner_id
-    if owner_id is None:
+async def create_user(
+    data: UserCreate,
+    owner_id: int | None = Query(
+        None, description="Target agent ID (admin only)"
+    ),
+    ownerid: int | None = Query(
+        None, alias="ownerid", include_in_schema=False
+    ),
+    identity: Identity = Depends(get_identity),
+):
+    real_owner = (
+        identity.agent_id
+        if identity.role == "agent"
+        else (data.owner_id if data.owner_id is not None else (owner_id if owner_id is not None else ownerid))
+    )
+    if real_owner is None:
         raise HTTPException(status_code=400, detail="owner_id required")
-    upsert_local_user(owner_id, data.username, data.limit_bytes, data.duration_days)
+    upsert_local_user(real_owner, data.username, data.limit_bytes, data.duration_days)
     if data.service_id is not None:
-        await set_local_user_service(owner_id, data.username, data.service_id)
-    row = _fetch_user(owner_id, data.username)
+        await set_local_user_service(real_owner, data.username, data.service_id)
+    row = _fetch_user(real_owner, data.username)
     if not row:
         raise HTTPException(status_code=500, detail="user not found after create")
     return UserOut(
