@@ -255,12 +255,19 @@ def ensure_schema():
                 local_user_id BIGINT NOT NULL,
                 access_key VARCHAR(64) NOT NULL,
                 expires_at DATETIME NULL,
+                revoked_at DATETIME NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE KEY uq_local_user(local_user_id),
                 UNIQUE KEY uq_access_key(access_key),
                 FOREIGN KEY (local_user_id) REFERENCES local_users(id) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+        try:
+            cur.execute(
+                "ALTER TABLE local_user_keys ADD COLUMN revoked_at DATETIME NULL AFTER expires_at"
+            )
+        except MySQLError:
+            pass
         cur.execute("""
             CREATE TABLE IF NOT EXISTS local_user_panel_links(
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
