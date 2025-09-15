@@ -30,6 +30,10 @@ class UserOut(BaseModel):
     expire_at: datetime | None
     service_id: int | None = None
     disabled: bool = Field(..., description="Whether the user is disabled")
+    access_key: str | None = Field(None, description="Subscription access key")
+    key_expires_at: datetime | None = Field(
+        None, description="Expiration timestamp for the access key"
+    )
 
 
 class UserCreate(BaseModel):
@@ -71,8 +75,19 @@ def _fetch_user(owner_id: int, username: str) -> dict | None:
     placeholders = ",".join(["%s"] * len(ids))
     with with_mysql_cursor() as cur:
         cur.execute(
-            f"SELECT username,plan_limit_bytes,used_bytes,expire_at,service_id,disabled_pushed "
-            f"FROM local_users WHERE owner_id IN ({placeholders}) AND username=%s",
+            f"""
+            SELECT lu.username,
+                   lu.plan_limit_bytes,
+                   lu.used_bytes,
+                   lu.expire_at,
+                   lu.service_id,
+                   lu.disabled_pushed,
+                   luk.access_key,
+                   luk.expires_at AS key_expires_at
+            FROM local_users lu
+            LEFT JOIN local_user_keys luk ON luk.local_user_id = lu.id
+            WHERE lu.owner_id IN ({placeholders}) AND lu.username=%s
+            """,
             tuple(ids) + (username,),
         )
         return cur.fetchone()
@@ -87,24 +102,36 @@ def _list_users(
 ) -> tuple[List[dict], int]:
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
-    conds = [f"owner_id IN ({placeholders})"]
+    conds = [f"lu.owner_id IN ({placeholders})"]
     params: List[object] = list(ids)
     if search:
-        conds.append("username LIKE %s")
+        conds.append("lu.username LIKE %s")
         params.append(f"%{search}%")
     if service_id is not None:
-        conds.append("service_id=%s")
+        conds.append("lu.service_id=%s")
         params.append(service_id)
     where_clause = " AND ".join(conds)
     with with_mysql_cursor() as cur:
         cur.execute(
-            f"SELECT username,plan_limit_bytes,used_bytes,expire_at,service_id,disabled_pushed "
-            f"FROM local_users WHERE {where_clause} ORDER BY username ASC LIMIT %s OFFSET %s",
+            f"""
+            SELECT lu.username,
+                   lu.plan_limit_bytes,
+                   lu.used_bytes,
+                   lu.expire_at,
+                   lu.service_id,
+                   lu.disabled_pushed,
+                   luk.access_key,
+                   luk.expires_at AS key_expires_at
+            FROM local_users lu
+            LEFT JOIN local_user_keys luk ON luk.local_user_id = lu.id
+            WHERE {where_clause}
+            ORDER BY lu.username ASC LIMIT %s OFFSET %s
+            """,
             tuple(params) + (limit, offset),
         )
         rows = cur.fetchall()
         cur.execute(
-            f"SELECT COUNT(*) AS c FROM local_users WHERE {where_clause}",
+            f"SELECT COUNT(*) AS c FROM local_users lu WHERE {where_clause}",
             tuple(params),
         )
         total = int(cur.fetchone()["c"])
@@ -169,6 +196,8 @@ async def create_user(
         expire_at=row.get("expire_at"),
         service_id=row.get("service_id"),
         disabled=bool(row.get("disabled_pushed")),
+        access_key=row.get("access_key"),
+        key_expires_at=row.get("key_expires_at"),
     )
 
 
@@ -207,6 +236,8 @@ def list_users(
             expire_at=r.get("expire_at"),
             service_id=r.get("service_id"),
             disabled=bool(r.get("disabled_pushed")),
+            access_key=r.get("access_key"),
+            key_expires_at=r.get("key_expires_at"),
         )
         for r in rows
     ]
@@ -240,6 +271,8 @@ async def edit_user(
         expire_at=row.get("expire_at"),
         service_id=row.get("service_id"),
         disabled=bool(row.get("disabled_pushed")),
+        access_key=row.get("access_key"),
+        key_expires_at=row.get("key_expires_at"),
     )
 
 
