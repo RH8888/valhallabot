@@ -250,6 +250,18 @@ def ensure_schema():
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS local_user_keys(
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                local_user_id BIGINT NOT NULL,
+                access_key VARCHAR(64) NOT NULL,
+                expires_at DATETIME NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_local_user(local_user_id),
+                UNIQUE KEY uq_access_key(access_key),
+                FOREIGN KEY (local_user_id) REFERENCES local_users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS local_user_panel_links(
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
                 owner_id BIGINT NOT NULL,
@@ -651,8 +663,46 @@ def get_app_key(tg_id: int, u: str) -> str:
         row = cur.fetchone()
     return row["app_key"] if row else upsert_app_user(tg_id, u)
 
+def _generate_unique_local_user_key(cur) -> str:
+    """Generate a unique access key for a local user."""
+
+    while True:
+        candidate = uuid.uuid4().hex
+        cur.execute(
+            "SELECT 1 FROM local_user_keys WHERE access_key=%s LIMIT 1",
+            (candidate,),
+        )
+        if not cur.fetchone():
+            return candidate
+
+
+def _ensure_local_user_key(cur, local_user_id: int, expires_at: datetime | None) -> str:
+    """Ensure a local user has an associated access key."""
+
+    cur.execute(
+        "SELECT access_key, expires_at FROM local_user_keys WHERE local_user_id=%s LIMIT 1",
+        (local_user_id,),
+    )
+    row = cur.fetchone()
+    if row:
+        if row.get("expires_at") != expires_at:
+            cur.execute(
+                "UPDATE local_user_keys SET expires_at=%s WHERE local_user_id=%s",
+                (expires_at, local_user_id),
+            )
+        return row["access_key"]
+
+    access_key = _generate_unique_local_user_key(cur)
+    cur.execute(
+        "INSERT INTO local_user_keys(local_user_id, access_key, expires_at) VALUES (%s,%s,%s)",
+        (local_user_id, access_key, expires_at),
+    )
+    return access_key
+
+
 def upsert_local_user(owner_id: int, username: str, limit_bytes: int, duration_days: int):
     exp = datetime.utcnow() + timedelta(days=duration_days) if duration_days > 0 else None
+    canonical_owner = canonical_owner_id(owner_id)
     with with_mysql_cursor() as cur:
         cur.execute(
             """INSERT INTO local_users(owner_id,username,plan_limit_bytes,expire_at,disabled_pushed)
@@ -661,8 +711,15 @@ def upsert_local_user(owner_id: int, username: str, limit_bytes: int, duration_d
                    plan_limit_bytes=VALUES(plan_limit_bytes),
                    expire_at=VALUES(expire_at),
                    disabled_pushed=0""",
-            (canonical_owner_id(owner_id), username, int(limit_bytes), exp)
+            (canonical_owner, username, int(limit_bytes), exp)
         )
+        cur.execute(
+            "SELECT id FROM local_users WHERE owner_id=%s AND username=%s LIMIT 1",
+            (canonical_owner, username),
+        )
+        row = cur.fetchone()
+        if row:
+            _ensure_local_user_key(cur, int(row["id"]), exp)
 
 def save_link(owner_id: int, local_username: str, panel_id: int, remote_username: str):
     with with_mysql_cursor() as cur:
