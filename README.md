@@ -1,216 +1,158 @@
-# ⚔️ ValhallaBot: Your Ultimate Server Companion
+# ⚔️ ValhallaBot
 
-A powerful, modular, and easy-to-deploy bot designed to enhance your server experience with robust features and seamless integration.
+ValhallaBot is a self-hosted management stack for Marzneshin-, Marzban- and
+Sanaei-style panels. It combines a Telegram bot, a FastAPI/Flask web
+application, and background workers to give administrators and agents unified
+control over subscriptions, usage limits, and automated provisioning.
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
-![License](https://img.shields.io/badge/license-None-lightgrey)
-![Stars](https://img.shields.io/github/stars/valhallabot/valhallabot?style=social)
-![Forks](https://img.shields.io/github/forks/valhallabot/valhallabot?style=social)
-![Primary Language](https://img.shields.io/github/languages/top/valhallabot/valhallabot)
+## Key capabilities
 
-![ValhallaBot Preview Image](/preview_example.png)
+- **Telegram operations console** – Manage panels, agents, and local users
+  directly from Telegram. Admins can assign panels to agents, rotate API tokens,
+  and configure services, while agents create or update their own subscribers.
+- **Unified subscription aggregator** – Serves a single `/sub/<user>/<app_key>`
+  endpoint that merges configurations from all linked panels, enforces both
+  user- and agent-level quotas, and returns either plaintext links or a hosted
+  HTML portal depending on the request headers.
+- **REST API for automation** – FastAPI endpoints exposed under `/api/v1`
+  provide the same capabilities as the Telegram bot for integration with other
+  systems. Interactive docs are available at `/docs` once the stack is running.
+- **Usage synchronisation worker** – Continuously polls linked panels to keep
+  usage information in sync, apply disablement policies when quotas are
+  exceeded, and push changes back to the panels.
+- **Containerised deployment** – Docker/Podman images ship with Gunicorn,
+  Uvicorn, the Telegram bot, and the usage synchroniser so everything runs from
+  a single compose file backed by MySQL 8.0.
 
+## Architecture overview
 
-## ✨ Features
+The default deployment (created by `setup.sh`) runs the following containers:
 
-ValhallaBot comes packed with an array of features designed to make server management and interaction effortless:
+| Service            | Description                                                                 |
+| ------------------ | --------------------------------------------------------------------------- |
+| `valhalla-app`     | FastAPI entry point that mounts the existing Flask subscription aggregator. |
+| `valhalla-bot`     | Telegram bot for administrators and agents.                                 |
+| `valhalla-usage`   | Background worker that synchronises usage with remote panels.               |
+| `valhalla-mysql`   | MySQL 8.0 database used by all services.                                    |
 
-*   🚀 **Containerized Deployment:** Easily deploy ValhallaBot using Docker and Docker Compose, ensuring consistent environments and simplified scaling.
-*   🧩 **Modular Architecture:** Built with extensibility in mind, allowing for easy addition of new features and APIs without disrupting core functionality.
-*   ⚙️ **Scripted Setup:** Quick and automated setup process with `setup.sh` and `start.sh` scripts to get your bot running in minutes.
-*   🌐 **Integrated API Services:** Seamlessly connects with external APIs, enabling a wide range of interactive and data-driven functionalities.
-*   🔑 **Secure Environment Configuration:** Utilizes `.env` files for sensitive information, promoting best practices for security and easy configuration.
+Certificates are read from `/app/certs` when HTTPS is enabled, and persistent
+MySQL data is stored in the `valhalla-mysql-data` Docker volume.
 
+## Installation
 
-## 📦 Installation Guide
+> All commands below require root or sudo privileges.
 
-To get ValhallaBot up and running, follow these steps. Docker and Docker Compose are the recommended installation methods.
+### 1. Install Docker or Podman
 
-### Prerequisites
+Choose the container runtime that matches your environment.
 
-Ensure you have the following installed on your system:
+#### Docker
 
-*   **Git:** For cloning the repository.
-*   **Docker:** [Install Docker](https://docs.docker.com/get-docker/)
-*   **Docker Compose:** [Install Docker Compose](https://docs.docker.com/compose/install/) (usually included with Docker Desktop)
-
-### Step-by-Step Installation
-
-1.  **Clone the Repository:**
-    Start by cloning the ValhallaBot repository to your local machine:
-
-    ```bash
-    git clone https://github.com/valhallabot/valhallabot.git
-    cd valhallabot
-    ```
-
-2.  **Environment Configuration:**
-    Create your environment file by copying the example and filling in your specific details (e.g., bot tokens, API keys, database credentials).
-
-    ```bash
-    cp .env.example .env
-    ```
-    Edit the newly created `.env` file with your preferred text editor:
-    ```
-    # Example .env content
-    BOT_TOKEN=YOUR_BOT_TOKEN_HERE
-    MYSQL_HOST=db
-    MYSQL_USER=valhalla_user
-    MYSQL_PASSWORD=your_mysql_password
-    MYSQL_DATABASE=valhalla_db
-    # ... other variables
-    ```
-
-3.  **Build and Run with Docker Compose:**
-    Use Docker Compose to build the necessary images and start all services defined in `docker-compose.yml`. This will set up the bot, API services, and any required databases (like MySQL).
-
-    ```bash
-    docker-compose up --build -d
-    ```
-    *   `--build`: Rebuilds images even if they exist.
-    *   `-d`: Runs the containers in detached mode (in the background).
-
-4.  **Verify Installation:**
-    You can check the logs to ensure all services are running correctly:
-
-    ```bash
-    docker-compose logs -f
-    ```
-    Look for messages indicating successful startup of `bot.py` and `app.py`.
-
-### Manual Python Installation (Alternative)
-
-If you prefer to run the bot without Docker, you can set up the Python environment manually.
-
-1.  **Install Python Dependencies:**
-
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-2.  **Run the Bot:**
-
-    ```bash
-    python bot.py
-    ```
-    *Note: This method requires manual setup of any external services (like MySQL) and environment variables.*
-
-
-## 🚀 Usage Examples
-
-Once ValhallaBot is running, it will automatically connect to your configured platform.
-
-### Basic Bot Interaction
-
-Interact with the bot using its defined commands. For example, if it's a Discord bot:
-
-```
-/help
-/status
-/info
+```sh
+curl -fsSL https://get.docker.com | sh
 ```
 
-*Replace with actual bot commands once implemented.*
+#### Podman (Ubuntu/Debian example)
 
-### Accessing the API
-
-If the `api` service is exposed, you can interact with it via HTTP requests.
-
-```bash
-# Example API call (replace with actual endpoint)
-curl http://localhost:8000/api/v1/status
+```sh
+sudo apt-get -y install podman
+sudo apt install podman-compose
 ```
 
-### Configuration Options
+### 2. Run the setup script
 
-Most configuration is handled via the `.env` file. A full list of configurable variables will be available in the `.env.example` file.
+The script creates `/app/.env`, downloads the `docker-compose.yml`, pulls the
+published images, and starts the stack. It will prompt for your Telegram bot
+credentials, admin user IDs, database passwords, and the public base URL used to
+serve subscription links. When you choose port `443` it can also request a
+Let’s Encrypt certificate automatically.
 
-| Variable Name     | Description                                     | Default Value |
-| :---------------- | :---------------------------------------------- | :------------ |
-| `BOT_TOKEN`       | Your bot's authentication token.                | `None`        |
-| `MYSQL_HOST`      | Hostname for the MySQL database.                | `db`          |
-| `MYSQL_USER`      | Username for MySQL access.                      | `valhalla_user` |
-| `MYSQL_PASSWORD`  | Password for MySQL access.                      | `your_mysql_password` |
-| `MYSQL_DATABASE`  | Database name to connect to.                    | `valhalla_db` |
-| `API_PORT`        | Port for the API service.                       | `8000`        |
-| `DEBUG_MODE`      | Enable/disable debug logging.                   | `False`       |
+```sh
+sudo bash -c "$(curl -sL https://raw.githubusercontent.com/RH8888/Valhallabot/refs/heads/main/setup.sh)"
+```
 
-### UI Interaction (Placeholder)
+### 3. Verify the deployment
 
-If ValhallaBot includes a web-based UI or dashboard, a screenshot would appear here.
+Depending on the runtime you selected, check the containers and follow the logs:
 
-![ValhallaBot UI Screenshot (Placeholder)](/ui_screenshot_example.png)
+```sh
+cd /app
+# Docker example
+sudo docker compose ps
+sudo docker compose logs -f
 
+# Podman example
+sudo podman compose ps
+sudo podman compose logs -f
+```
 
-## 🗺️ Project Roadmap
+The API becomes available at `http://<host>:<FLASK_PORT>/api/v1/health` once
+`valhalla-app` is healthy. The Telegram bot connects automatically using the
+`BOT_TOKEN` you supplied during setup.
 
-ValhallaBot is under active development, and we have exciting plans for its future.
+### Upgrades and maintenance
 
-### Upcoming Features
+To fetch the latest images after an update, run the following from `/app` using
+the runtime you selected during setup:
 
-*   **v1.1.0 - Enhanced Modularity:**
-    *   Dynamic plugin loading for bot commands.
-    *   Improved API endpoint management.
-*   **v1.2.0 - Advanced Integrations:**
-    *   Support for additional external services (e.g., specific gaming APIs, productivity tools).
-    *   Webhooks for real-time updates.
-*   **v2.0.0 - Major Refactor & UI:**
-    *   Complete overhaul of core architecture for better performance and scalability.
-    *   Introduction of a web-based administration panel.
+```sh
+sudo docker compose pull
+sudo docker compose up -d
+```
 
-### Planned Improvements
+For Podman replace `docker compose` with `podman compose`. The `.env` file keeps
+all of your answers so rerunning the setup script is not required for upgrades.
 
-*   Comprehensive unit and integration testing.
-*   Detailed API documentation using tools like Swagger/OpenAPI.
-*   Performance optimizations for database queries and bot responses.
-*   More robust error handling and logging.
+## Configuration reference
 
+The `.env` file generated by the setup script accepts the same keys as
+[`.env.example`](./.env.example). Important entries include:
 
-## 🤝 Contribution Guidelines
+| Variable               | Purpose                                                                 |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `BOT_TOKEN`            | Telegram bot token issued by BotFather.                                 |
+| `ADMIN_IDS`            | Comma-separated Telegram user IDs with administrator access.            |
+| `PUBLIC_BASE_URL`      | Public URL used when generating subscription links for users.           |
+| `MYSQL_HOST/PORT`      | Database location (defaults to the MySQL container).                    |
+| `MYSQL_USER/PASSWORD`  | Application database credentials.                                       |
+| `MYSQL_DATABASE`       | Database name (default `valhalla`).                                     |
+| `MYSQL_ROOT_PASSWORD`  | Root password for the MySQL container.                                  |
+| `FLASK_HOST/FLASK_PORT`| Bind address and port for the FastAPI/Flask application.                |
+| `WORKERS`              | Number of Gunicorn worker processes that serve the API.                 |
+| `USAGE_SYNC_INTERVAL`  | Interval (seconds) between usage polls performed by the worker.         |
+| `FETCH_MAX_WORKERS`    | Maximum parallel requests when fetching subscriptions.                  |
 
-We welcome contributions to ValhallaBot! To ensure a smooth collaboration, please follow these guidelines:
+Additional knobs such as `SSL_CERT_PATH`, `SSL_KEY_PATH`, or `USER_LIMIT_REACHED_MESSAGE`
+can be added manually to customise behaviour.
 
-### Code Style
+## Using ValhallaBot
 
-*   **Python:** Adhere to [PEP 8](https://www.python.org/dev/peps/pep-0008/) for Python code style.
-*   **HTML/Templates:** Follow standard HTML formatting and maintain consistency with existing templates.
-*   **Shell Scripts:** Ensure scripts are clear, well-commented, and POSIX-compliant where applicable.
-*   **Dockerfile/Docker Compose:** Keep Dockerfiles optimized for size and build speed, and Docker Compose files clear and readable.
+- **Telegram bot** – Message your bot to open the inline menus. Admins can add
+  panels (Marzneshin, Marzban, Sanaei), create agents, assign services, rotate
+  API tokens, and remove panels. Agents can provision local users, change
+  quotas, renew subscriptions, and retrieve their unified subscription links.
+- **Subscription portal** – Each user receives a link of the form
+  `https://<PUBLIC_BASE_URL>/sub/<username>/<app_key>/links`. Requests with
+  `Accept: text/plain` return a plain list of configs. Requests from browsers
+  (or with `Accept: text/html`) render the responsive Persian-language portal in
+  `templates/index.html`.
+- **REST API** – Authenticate using a bearer token retrieved from the bot or
+  database. Interactive documentation is available at `/docs` and the health
+  check lives at `/api/v1/health`. Examples of common endpoints are documented
+  in [`docs/api.md`](./docs/api.md).
+- **Usage synchronisation** – The `scripts.usage_sync` worker tallies usage from
+  every linked panel and updates local quotas. When a user or agent exceeds
+  their allowance, the worker and aggregator coordinate to disable remote
+  accounts automatically.
 
-### Branch Naming Conventions
+## Additional documentation
 
-Please use descriptive branch names based on the type of change:
+- [`docs/deployment.md`](./docs/deployment.md) – Manual deployment notes,
+  including HTTPS configuration and tuning the MySQL connection pool.
+- [`docs/api.md`](./docs/api.md) – REST API authentication and example requests.
 
-*   `feature/your-feature-name` (e.g., `feature/add-moderation-commands`)
-*   `bugfix/issue-description` (e.g., `bugfix/api-auth-error`)
-*   `refactor/module-name` (e.g., `refactor/api-endpoints`)
-*   `docs/update-installation-guide`
+## Contributing
 
-### Pull Request Process
-
-1.  **Fork the repository** and clone it to your local machine.
-2.  **Create a new branch** from `main` (or `develop` if present) following the naming conventions.
-3.  **Make your changes**, ensuring they align with the project's goals and style.
-4.  **Test your changes** thoroughly.
-5.  **Commit your changes** with clear and concise commit messages.
-6.  **Push your branch** to your forked repository.
-7.  **Open a Pull Request** to the `main` branch of the original repository.
-    *   Provide a clear title and detailed description of your changes.
-    *   Reference any related issues.
-
-### Testing Requirements
-
-*   All new features should include corresponding unit tests.
-*   Bug fixes should include a test that reproduces the bug before the fix and passes after the fix.
-*   Ensure all existing tests pass before submitting a pull request.
-
-
-## 📄 License Information
-
-This project currently has **No License**.
-
-This means that by default, all rights are reserved by the creators. You may not distribute, modify, or use this software without explicit permission from the copyright holders.
-
-**Copyright Notice:**
-
-© 2023 RH8888, Rh8831, google-labs-jules[bot]. All rights reserved.
+Issues and pull requests are welcome. Please ensure linting passes, include
+clear descriptions of the change, and keep new features behind configuration
+flags when possible.
