@@ -130,3 +130,25 @@ curl -X PATCH \
   "http://localhost:${FLASK_PORT}/api/v1/users/alice"
 ```
 
+### Revoke a user's activation key
+
+```sh
+curl -X POST \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"revoke":true}' \
+  "http://localhost:${FLASK_PORT}/api/v1/users/alice/keys/revoke"
+```
+
+Pass `{ "revoke": false }` in the body to restore a previously revoked key.
+
+### Purge expired activation keys
+
+```sh
+curl -X POST \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{}' \
+  "http://localhost:${FLASK_PORT}/api/v1/users/keys/purge-expired"
+```
+

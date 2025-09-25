@@ -23,6 +23,8 @@ class ActivationResponse(BaseModel):
     subscription_url: str = Field(..., description="Subscription link for the user")
     key_expires_at: datetime | None = Field(
         None, description="When this activation key expires (UTC)")
+    key_revoked_at: datetime | None = Field(
+        None, description="When this activation key was revoked (UTC)")
 
     model_config = {
         "json_schema_extra": {
@@ -34,6 +36,7 @@ class ActivationResponse(BaseModel):
                 "disabled": False,
                 "subscription_url": "https://example.com/sub/alice/abcd1234/links",
                 "key_expires_at": "2024-12-01T00:00:00",
+                "key_revoked_at": None,
             }
         }
     }
@@ -48,6 +51,7 @@ def get_activation(access_key: str) -> ActivationResponse:
             """
             SELECT
                 luk.expires_at,
+                luk.revoked_at,
                 lu.username,
                 lu.plan_limit_bytes,
                 lu.used_bytes,
@@ -76,6 +80,13 @@ def get_activation(access_key: str) -> ActivationResponse:
             detail="Activation key expired",
         )
 
+    revoked_at = row.get("revoked_at")
+    if revoked_at:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Activation key revoked",
+        )
+
     username = row["username"]
     owner_id = int(row["owner_id"])
     app_key = get_app_key(owner_id, username)
@@ -90,6 +101,7 @@ def get_activation(access_key: str) -> ActivationResponse:
         disabled=bool(row.get("disabled_pushed")),
         subscription_url=subscription_url,
         key_expires_at=expires_at,
+        key_revoked_at=revoked_at,
     )
 
 
