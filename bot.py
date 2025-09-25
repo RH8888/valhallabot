@@ -37,7 +37,7 @@ import asyncio
 from dotenv import load_dotenv
 from mysql.connector import pooling, Error as MySQLError
 
-from apis import marzneshin, marzban, sanaei
+from apis import marzneshin, marzban, sanaei, pasarguard
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -60,6 +60,7 @@ API_MODULES = {
     "marzneshin": marzneshin,
     "marzban": marzban,
     "sanaei": sanaei,
+    "pasarguard": pasarguard,
 }
 
 def get_api(panel_type: str):
@@ -2413,15 +2414,15 @@ async def got_panel_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ اسم معتبر بفرست:")
         return ASK_PANEL_NAME
     context.user_data["panel_name"] = name
-    await update.message.reply_text("نوع پنل را مشخص کن (marzneshin/marzban/sanaei):")
+    await update.message.reply_text("نوع پنل را مشخص کن (marzneshin/marzban/sanaei/pasarguard):")
     return ASK_PANEL_TYPE
 
 async def got_panel_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
     t = (update.message.text or "").strip().lower()
-    if t not in ("marzneshin", "marzban", "sanaei"):
-        await update.message.reply_text("❌ نوع پنل نامعتبر. یکی از marzneshin/marzban/sanaei بفرست:")
+    if t not in ("marzneshin", "marzban", "sanaei", "pasarguard"):
+        await update.message.reply_text("❌ نوع پنل نامعتبر. یکی از marzneshin/marzban/sanaei/pasarguard بفرست:")
         return ASK_PANEL_TYPE
     context.user_data["panel_type"] = t
     await update.message.reply_text("🌐 URL پنل (مثال https://panel.example.com):")

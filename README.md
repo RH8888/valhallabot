@@ -1,7 +1,7 @@
 # ⚔️ ValhallaBot
 
-ValhallaBot is a self-hosted management stack for Marzneshin-, Marzban- and
-Sanaei-style panels. It combines a Telegram bot, a FastAPI/Flask web
+ValhallaBot is a self-hosted management stack for Marzneshin-, Marzban-, Sanaei-,
+and Pasarguard-style panels. It combines a Telegram bot, a FastAPI/Flask web
 application, and background workers to give administrators and agents unified
 control over subscriptions, usage limits, and automated provisioning.
 
@@ -128,7 +128,7 @@ can be added manually to customise behaviour.
 ## Using ValhallaBot
 
 - **Telegram bot** – Message your bot to open the inline menus. Admins can add
-  panels (Marzneshin, Marzban, Sanaei), create agents, assign services, rotate
+  panels (Marzneshin, Marzban, Sanaei, Pasarguard), create agents, assign services, rotate
   API tokens, and remove panels. Agents can provision local users, change
   quotas, renew subscriptions, and retrieve their unified subscription links.
 - **Subscription portal** – Each user receives a link of the form
