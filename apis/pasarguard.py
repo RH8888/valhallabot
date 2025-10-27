@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
 import base64
+import json
 import os
 from threading import RLock
 
@@ -127,14 +128,49 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
         return None, str(e)[:200]
 
 
+def _extract_links_from_string(raw: str) -> List[str]:
+    """Return subscription links encoded in *raw* string."""
+
+    if not isinstance(raw, str):
+        return []
+
+    val = raw.strip()
+    if not val:
+        return []
+
+    if val.startswith("{") or val.startswith("["):
+        try:
+            data = json.loads(val)
+        except Exception:
+            pass
+        else:
+            return _extract_links(data)
+
+    if val.lower().startswith(ALLOWED_SCHEMES):
+        return [val]
+
+    try:
+        decoded = base64.b64decode(val + "===")
+    except Exception:
+        return []
+
+    try:
+        text = decoded.decode(errors="ignore")
+    except Exception:
+        return []
+
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return [ln for ln in lines if ln.lower().startswith(ALLOWED_SCHEMES)]
+
+
 def _extract_links(candidate: object) -> List[str]:
     """Recursively extract subscription links from JSON structures."""
-    links: List[str] = []
+
     if isinstance(candidate, str):
-        val = candidate.strip()
-        if val and val.lower().startswith(ALLOWED_SCHEMES):
-            links.append(val)
-    elif isinstance(candidate, Mapping):
+        return _extract_links_from_string(candidate)
+
+    links: List[str] = []
+    if isinstance(candidate, Mapping):
         for item in candidate.values():
             links.extend(_extract_links(item))
     elif isinstance(candidate, Iterable) and not isinstance(candidate, (bytes, bytearray)):
@@ -143,44 +179,42 @@ def _extract_links(candidate: object) -> List[str]:
     return links
 
 
+def _links_from_response(resp: requests.Response) -> List[str]:
+    """Extract configuration links from an HTTP response."""
+
+    if resp.headers.get("content-type", "").startswith("application/json"):
+        try:
+            data = resp.json()
+        except Exception:
+            data = None
+        if data is not None:
+            links = _extract_links(data)
+            if links:
+                return links
+    return _extract_links_from_string(resp.text or "")
+
+
 @cached(cache=_links_cache, lock=_links_lock)
 def fetch_links_from_panel(panel_url: str, username: str, key: str) -> List[str]:
     """Return list of subscription links for a user token."""
     try:
-        url = urljoin(panel_url.rstrip("/") + "/", f"sub/{key}/v2ray")
-        r = SESSION.get(url, headers={"accept": "text/plain"}, timeout=20)
-        if r.status_code == 200:
-            txt = (r.text or "").strip()
-            if txt:
-                try:
-                    decoded = base64.b64decode(txt + "===")
-                    txt = decoded.decode(errors="ignore")
-                except Exception:
-                    pass
-                lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
-                if any(ln.lower().startswith(ALLOWED_SCHEMES) for ln in lines):
-                    return lines
-        url = urljoin(panel_url.rstrip("/") + "/", f"sub/{key}/")
-        r = SESSION.get(
-            url,
-            headers={"accept": "application/json,text/plain"},
-            timeout=20,
-        )
-        if r.headers.get("content-type", "").startswith("application/json"):
-            try:
-                data = r.json()
-            except Exception:
-                data = None
-            if data is not None:
-                links = _extract_links(data)
-                if links:
-                    return links
-        if r.status_code == 200:
-            return [
-                ln.strip()
-                for ln in (r.text or "").splitlines()
-                if ln.strip() and ln.strip().lower().startswith(ALLOWED_SCHEMES)
-            ]
+        for suffix in (
+            f"sub/{key}/links_base64",
+            f"sub/{key}/links",
+            f"sub/{key}/xray",
+            f"sub/{key}/",
+        ):
+            url = urljoin(panel_url.rstrip("/") + "/", suffix)
+            r = SESSION.get(
+                url,
+                headers={"accept": "application/json,text/plain"},
+                timeout=20,
+            )
+            if r.status_code != 200:
+                continue
+            links = _links_from_response(r)
+            if links:
+                return links
         return []
     except Exception:  # pragma: no cover - network errors
         return []
@@ -287,20 +321,9 @@ def fetch_subscription_links(sub_url: str) -> List[str]:
             headers={"accept": "text/plain,application/json"},
             timeout=20,
         )
-        if r.headers.get("content-type", "").startswith("application/json"):
-            try:
-                data = r.json()
-            except Exception:
-                data = None
-            if data is not None:
-                links = _extract_links(data)
-                if links:
-                    return links
-        return [
-            ln.strip()
-            for ln in (r.text or "").splitlines()
-            if ln.strip() and ln.strip().lower().startswith(ALLOWED_SCHEMES)
-        ]
+        if r.status_code != 200:
+            return []
+        return _links_from_response(r)
     except Exception:  # pragma: no cover - network errors
         return []
 
