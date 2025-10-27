@@ -2837,19 +2837,28 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
             tmpl = r.get("template_username")
             if not tmpl:
                 errs.append(f"{r['panel_url']}: template missing")
-                per_panel[r["id"]] = {"proxies": {}, "inbounds": {}}
+                info = {"proxies": {}, "inbounds": {}}
+                if r.get("panel_type") == "pasarguard":
+                    info["group_ids"] = []
+                per_panel[r["id"]] = info
                 continue
             obj, e = api.get_user(r["panel_url"], r["access_token"], tmpl)
             if not obj:
                 errs.append(
                     f"{r['panel_url']} (template '{tmpl}'): {e or 'not found'}"
                 )
-                per_panel[r["id"]] = {"proxies": {}, "inbounds": {}}
+                info = {"proxies": {}, "inbounds": {}}
+                if r.get("panel_type") == "pasarguard":
+                    info["group_ids"] = []
+                per_panel[r["id"]] = info
                 continue
-            per_panel[r["id"]] = {
+            info = {
                 "proxies": obj.get("proxies") or {},
                 "inbounds": obj.get("inbounds") or {},
             }
+            if r.get("panel_type") == "pasarguard":
+                info["group_ids"] = obj.get("group_ids") or []
+            per_panel[r["id"]] = info
     if errs:
         await q.edit_message_text(
             "❌ خطا در خواندن سرویس بعضی پنل‌ها:\n" +
@@ -2919,6 +2928,8 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 "proxies": clone_proxy_settings(tmpl_info.get("proxies", {})),
                 "inbounds": tmpl_info.get("inbounds", {}),
             }
+            if r.get("panel_type") == "pasarguard":
+                payload["group_ids"] = tmpl_info.get("group_ids") or []
         obj, e = api.create_user(r["panel_url"], r["access_token"], payload)
         if not obj:
             obj, g = api.get_user(r["panel_url"], r["access_token"], remote_name)
@@ -3087,6 +3098,8 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                             "proxies": clone_proxy_settings(tmpl_obj.get("proxies") or {}),
                             "inbounds": tmpl_obj.get("inbounds") or {},
                         }
+                        if p.get("panel_type") == "pasarguard":
+                            payload["group_ids"] = tmpl_obj.get("group_ids") or []
                         obj, e2 = api.create_user(
                             p["panel_url"], p["access_token"], payload
                         )
