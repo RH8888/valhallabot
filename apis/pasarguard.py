@@ -44,6 +44,34 @@ def _normalise_proxy_settings(candidate: object) -> Dict[str, Any]:
     return normalised
 
 
+def _normalise_group_ids(candidate: object) -> List[int]:
+    """Return a list of unique group IDs extracted from *candidate*."""
+
+    def _to_int(value: object) -> Optional[int]:
+        if isinstance(value, bool):  # pragma: no cover - guard against bool/int confusion
+            return None
+        try:
+            return int(str(value))
+        except (TypeError, ValueError):
+            return None
+
+    if isinstance(candidate, Iterable) and not isinstance(candidate, (str, bytes, bytearray, Mapping)):
+        seen: set[int] = set()
+        result: List[int] = []
+        for item in candidate:
+            val = _to_int(item)
+            if val is None or val in seen:
+                continue
+            seen.add(val)
+            result.append(val)
+        return result
+
+    val = _to_int(candidate)
+    if val is None:
+        return []
+    return [val]
+
+
 def _prepare_user_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
     """Translate the bot payload to Pasarguard's UserCreate/UserModify schema."""
 
@@ -58,6 +86,8 @@ def _prepare_user_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
             body["proxy_settings"] = _normalise_proxy_settings(value)
         elif key == "proxy_settings":
             body["proxy_settings"] = _normalise_proxy_settings(value)
+        elif key == "group_ids":
+            body["group_ids"] = _normalise_group_ids(value)
         elif key == "inbounds":
             # Pasarguard does not expose inbounds on the user schema; they map to
             # node-side configuration.  Ignore them for API requests.
@@ -76,6 +106,7 @@ def _normalise_user_object(obj: Dict[str, Any]) -> Dict[str, Any]:
     if proxies:
         obj.setdefault("proxies", _normalise_proxy_settings(proxies))
     obj.setdefault("inbounds", {})
+    obj["group_ids"] = _normalise_group_ids(obj.get("group_ids"))
     return obj
 
 
