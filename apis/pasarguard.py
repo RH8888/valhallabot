@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
 import base64
@@ -28,6 +28,56 @@ def get_headers(token: str) -> Dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _normalise_proxy_settings(candidate: object) -> Dict[str, Any]:
+    """Return a plain dict copy of Pasarguard proxy settings."""
+
+    if not isinstance(candidate, Mapping):
+        return {}
+
+    normalised: Dict[str, Any] = {}
+    for proto, settings in candidate.items():
+        if isinstance(settings, Mapping):
+            normalised[str(proto)] = dict(settings)
+        else:
+            normalised[str(proto)] = settings
+    return normalised
+
+
+def _prepare_user_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """Translate the bot payload to Pasarguard's UserCreate/UserModify schema."""
+
+    if not isinstance(payload, Mapping):
+        return {}
+
+    body: Dict[str, Any] = {}
+    for key, value in payload.items():
+        if value is None:
+            continue
+        if key == "proxies":
+            body["proxy_settings"] = _normalise_proxy_settings(value)
+        elif key == "proxy_settings":
+            body["proxy_settings"] = _normalise_proxy_settings(value)
+        elif key == "inbounds":
+            # Pasarguard does not expose inbounds on the user schema; they map to
+            # node-side configuration.  Ignore them for API requests.
+            continue
+        else:
+            body[key] = value
+    return body
+
+
+def _normalise_user_object(obj: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalise Pasarguard user payloads for the bot."""
+
+    status = (obj.get("status") or "").lower()
+    obj["enabled"] = status in {"active", "limited"}
+    proxies = obj.get("proxy_settings")
+    if proxies:
+        obj.setdefault("proxies", _normalise_proxy_settings(proxies))
+    obj.setdefault("inbounds", {})
+    return obj
+
+
 def fetch_user_services(
     panel_url: str, token: str, username: str
 ) -> Tuple[Optional[List[int]], Optional[str]]:
@@ -38,14 +88,18 @@ def fetch_user_services(
 def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dict], Optional[str]]:
     """Create a user on the remote panel."""
     try:
+        body = _prepare_user_payload(payload)
         r = SESSION.post(
             urljoin(panel_url.rstrip("/") + "/", "api/user"),
-            json=payload,
+            json=body,
             headers={**get_headers(token), "Content-Type": "application/json"},
             timeout=20,
         )
         if r.status_code in (200, 201):
-            return r.json(), None
+            data = r.json()
+            if isinstance(data, dict):
+                return _normalise_user_object(data), None
+            return data, None
         return None, f"{r.status_code} {r.text[:300]}"
     except Exception as e:  # pragma: no cover - network errors
         return None, str(e)[:200]
@@ -62,12 +116,12 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
         if r.status_code != 200:
             return None, f"{r.status_code} {r.text[:200]}"
         obj = r.json()
-        status = obj.get("status")
-        obj["enabled"] = status != "disabled"
-        sub_url = obj.get("subscription_url") or ""
-        token_part = sub_url.rstrip("/").split("/")[-1]
-        if token_part:
-            obj.setdefault("key", token_part)
+        if isinstance(obj, dict):
+            _normalise_user_object(obj)
+            sub_url = obj.get("subscription_url") or ""
+            token_part = sub_url.rstrip("/").split("/")[-1]
+            if token_part:
+                obj.setdefault("key", token_part)
         return obj, None
     except Exception as e:  # pragma: no cover - network errors
         return None, str(e)[:200]
@@ -211,9 +265,10 @@ def update_remote_user(
     if not payload:
         return True, None
     try:
+        body = _prepare_user_payload(payload)
         r = SESSION.put(
             urljoin(panel_url.rstrip("/") + "/", f"api/user/{username}"),
-            json=payload,
+            json=body,
             headers={**get_headers(token), "Content-Type": "application/json"},
             timeout=20,
         )
