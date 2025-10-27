@@ -25,7 +25,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from mysql.connector import pooling
-from apis import sanaei
+from apis import sanaei, pasarguard
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | flask_agg | %(message)s",
@@ -71,6 +71,8 @@ _fetch_user_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
 _fetch_user_lock = RLock()
 _fetch_links_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
 _fetch_links_lock = RLock()
+_fetch_pasarguard_user_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
+_fetch_pasarguard_user_lock = RLock()
 
 class CurCtx:
     def __init__(self, dict_=True):
@@ -242,6 +244,14 @@ def fetch_user(panel_url: str, token: str, remote_username: str):
     except:
         return None
 
+
+@cached(cache=_fetch_pasarguard_user_cache, lock=_fetch_pasarguard_user_lock)
+def fetch_pasarguard_user(panel_url: str, token: str, remote_username: str):
+    """Return Pasarguard user information and an optional error message."""
+
+    obj, err = pasarguard.get_user(panel_url, token, remote_username)
+    return obj, err
+
 @cached(cache=_fetch_links_cache, lock=_fetch_links_lock)
 def fetch_links_from_panel(panel_url: str, remote_username: str, key: str):
     """Return links and an optional error message for debugging."""
@@ -345,14 +355,47 @@ def collect_links(mapped, local_username: str, want_html: bool):
                     if want_html and rinfo is None and info:
                         rinfo = info
         else:
-            u = fetch_user(l["panel_url"], l["access_token"], l["remote_username"])
-            if want_html:
-                rinfo = u
-            if u and u.get("key"):
-                ls, err = fetch_links_from_panel(l["panel_url"], l["remote_username"], u["key"])
-                if err:
-                    errs.append(f"{l['remote_username']}@{l['panel_url']}: {err}")
-                links.extend(ls)
+            if l.get("panel_type") == "pasarguard":
+                u, err = fetch_pasarguard_user(
+                    l["panel_url"], l["access_token"], l["remote_username"]
+                )
+                if want_html:
+                    rinfo = u
+                if not u:
+                    errs.append(
+                        f"{l['remote_username']}@{l['panel_url']}: {err or 'not found'}"
+                    )
+                else:
+                    key = u.get("key")
+                    if not key:
+                        sub_url = u.get("subscription_url") or ""
+                        token_part = sub_url.rstrip("/").split("/")[-1]
+                        if token_part:
+                            key = token_part
+                    if not key:
+                        errs.append(
+                            f"{l['remote_username']}@{l['panel_url']}: no subscription key"
+                        )
+                    else:
+                        ls = pasarguard.fetch_links_from_panel(
+                            l["panel_url"], l["remote_username"], key
+                        )
+                        if not ls:
+                            errs.append(
+                                f"{l['remote_username']}@{l['panel_url']}: no configs found"
+                            )
+                        links.extend(ls)
+            else:
+                u = fetch_user(l["panel_url"], l["access_token"], l["remote_username"])
+                if want_html:
+                    rinfo = u
+                if u and u.get("key"):
+                    ls, err = fetch_links_from_panel(
+                        l["panel_url"], l["remote_username"], u["key"]
+                    )
+                    if err:
+                        errs.append(f"{l['remote_username']}@{l['panel_url']}: {err}")
+                    links.extend(ls)
         if disabled_names:
             links = [x for x in links if (extract_name(x) or "") not in disabled_names]
         if disabled_nums:
