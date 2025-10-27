@@ -84,9 +84,9 @@ def clone_proxy_settings(proxies: dict) -> dict:
         if "uuid" in s:
             s["uuid"] = str(uuid.uuid4())
         if "password" in s:
-            s["password"] = secrets.token_hex(8)
+            s["password"] = secrets.token_hex(12)
         if "pass" in s:
-            s["pass"] = secrets.token_hex(8)
+            s["pass"] = secrets.token_hex(12)
         cleaned[ptype] = s
     return cleaned
 
