@@ -221,13 +221,41 @@ def disable_remote(panel_type, panel_url, token, remote_username):
     except Exception as e:
         return None, str(e)
 
+def _normalise_remote_user(obj):
+    """Normalise user payloads from different panel variants."""
+
+    if not isinstance(obj, dict):
+        return obj
+
+    status = obj.get("status")
+    if isinstance(status, str) and "enabled" not in obj:
+        obj["enabled"] = status.lower() not in {"disabled", "inactive"}
+
+    if "key" not in obj:
+        url_fields = (
+            "subscription_url",
+            "subscriptionUrl",
+            "subscriptionLink",
+            "subscription",
+        )
+        for field in url_fields:
+            val = obj.get(field)
+            if isinstance(val, str) and val.strip():
+                token_part = val.strip().split("?")[0].rstrip("/").split("/")[-1]
+                if token_part:
+                    obj["key"] = token_part
+                    break
+
+    return obj
+
+
 @cached(cache=_fetch_user_cache, lock=_fetch_user_lock)
 def fetch_user(panel_url: str, token: str, remote_username: str):
     try:
         url = urljoin(panel_url.rstrip("/") + "/", f"api/users/{remote_username}")
         r = SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
         if r.status_code == 200:
-            return r.json()
+            return _normalise_remote_user(r.json())
         # Fallback to Marzban endpoint
         url = urljoin(panel_url.rstrip("/") + "/", f"api/user/{remote_username}")
         r = SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
@@ -236,11 +264,7 @@ def fetch_user(panel_url: str, token: str, remote_username: str):
         obj = r.json()
         status = obj.get("status")
         obj["enabled"] = status != "disabled"
-        sub_url = obj.get("subscription_url") or ""
-        token_part = sub_url.rstrip("/").split("/")[-1]
-        if token_part:
-            obj.setdefault("key", token_part)
-        return obj
+        return _normalise_remote_user(obj)
     except:
         return None
 
