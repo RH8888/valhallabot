@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import base64
 import os
@@ -26,6 +26,31 @@ _links_lock = RLock()
 def get_headers(token: str) -> Dict[str, str]:
     """Return authorization header for the given bearer token."""
     return {"Authorization": f"Bearer {token}"}
+
+
+def _build_api_url(panel_url: str, *segments: object) -> str:
+    """Return a fully-qualified Pasarguard API URL for *segments*.
+
+    The OpenAPI specification in ``docs/pasarguard.json`` defines endpoints
+    relative to the ``/api`` prefix (for example, ``DELETE /api/user/{username}``
+    for removing a user).  ``requests`` does not automatically escape path
+    segments, so usernames containing characters such as ``+`` or ``@`` would be
+    misinterpreted by the panel when interpolated directly into an f-string.
+
+    ``quote`` ensures every path segment is URL-safe before the join, matching
+    the documented endpoints exactly.
+    """
+
+    cleaned_segments = []
+    for seg in segments:
+        if seg is None:
+            continue
+        part = str(seg).strip("/")
+        if not part:
+            continue
+        cleaned_segments.append(quote(part, safe=""))
+    cleaned = "/".join(cleaned_segments)
+    return urljoin(panel_url.rstrip("/") + "/", cleaned)
 
 
 def _normalise_proxy_settings(candidate: object) -> Dict[str, Any]:
@@ -97,7 +122,7 @@ def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dic
     try:
         body = _prepare_user_payload(payload)
         r = SESSION.post(
-            urljoin(panel_url.rstrip("/") + "/", "api/user"),
+            _build_api_url(panel_url, "api", "user"),
             json=body,
             headers={**get_headers(token), "Content-Type": "application/json"},
             timeout=20,
@@ -116,7 +141,7 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
     """Fetch user details from the panel."""
     try:
         r = SESSION.get(
-            urljoin(panel_url.rstrip("/") + "/", f"api/user/{username}"),
+            _build_api_url(panel_url, "api", "user", username),
             headers=get_headers(token),
             timeout=15,
         )
@@ -209,15 +234,17 @@ def fetch_links_from_panel(panel_url: str, _username: str, key: str) -> List[str
 
     try:
         paths = [
-            f"sub/{key}/links",
-            f"sub/{key}/links_base64",
-            f"sub/{key}/",
-            f"sub/{key}/info",
-            f"sub/{key}/apps",
+            ("sub", key, "links", False),
+            ("sub", key, "links_base64", False),
+            ("sub", key, None, True),
+            ("sub", key, "info", False),
+            ("sub", key, "apps", False),
         ]
 
-        for path in paths:
-            url = urljoin(panel_url.rstrip("/") + "/", path)
+        for *segments, needs_trailing_slash in paths:
+            url = _build_api_url(panel_url, *segments)
+            if needs_trailing_slash:
+                url = url.rstrip("/") + "/"
             try:
                 resp = SESSION.get(
                     url,
@@ -238,7 +265,7 @@ def disable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool
     """Disable a user on the panel."""
     try:
         r = SESSION.put(
-            urljoin(panel_url.rstrip("/") + "/", f"api/user/{username}"),
+            _build_api_url(panel_url, "api", "user", username),
             json={"status": "disabled"},
             headers={**get_headers(token), "Content-Type": "application/json"},
             timeout=20,
@@ -254,7 +281,7 @@ def enable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
     """Enable a user on the panel."""
     try:
         r = SESSION.put(
-            urljoin(panel_url.rstrip("/") + "/", f"api/user/{username}"),
+            _build_api_url(panel_url, "api", "user", username),
             json={"status": "active"},
             headers={**get_headers(token), "Content-Type": "application/json"},
             timeout=20,
@@ -270,11 +297,11 @@ def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
     """Delete a user on the panel."""
     try:
         r = SESSION.delete(
-            urljoin(panel_url.rstrip("/") + "/", f"api/user/{username}"),
-            headers=get_headers(token),
+            _build_api_url(panel_url, "api", "user", username),
+            headers={**get_headers(token), "Accept": "application/json"},
             timeout=20,
         )
-        if r.status_code in (200, 204):
+        if r.status_code in (200, 204, 404):
             return True, None
         return False, f"{r.status_code} {r.text[:200]}"
     except Exception as e:  # pragma: no cover - network errors
@@ -285,7 +312,7 @@ def reset_remote_user_usage(panel_url: str, token: str, username: str) -> Tuple[
     """Reset traffic statistics for *username* on the panel."""
     try:
         r = SESSION.post(
-            urljoin(panel_url.rstrip("/") + "/", f"api/user/{username}/reset"),
+            _build_api_url(panel_url, "api", "user", username, "reset"),
             headers=get_headers(token),
             timeout=20,
         )
@@ -315,7 +342,7 @@ def update_remote_user(
     try:
         body = _prepare_user_payload(payload)
         r = SESSION.put(
-            urljoin(panel_url.rstrip("/") + "/", f"api/user/{username}"),
+            _build_api_url(panel_url, "api", "user", username),
             json=body,
             headers={**get_headers(token), "Content-Type": "application/json"},
             timeout=20,
