@@ -150,10 +150,45 @@ def _extract_links(candidate: object) -> List[str]:
     return links
 
 
+def _username_candidates(username: str) -> List[str]:
+    if not isinstance(username, str):
+        return [username]
+    lowered = username.lower()
+    if lowered and lowered != username:
+        return [username, lowered]
+    return [username]
+
+
 @cached(cache=_links_cache, lock=_links_lock)
 def fetch_links_from_panel(panel_url: str, username: str, key: str) -> List[str]:
     """Return list of subscription links for a user token."""
     try:
+        for candidate in _username_candidates(username):
+            url = urljoin(panel_url.rstrip("/") + "/", f"sub/{candidate}/{key}/links")
+            r = SESSION.get(
+                url,
+                headers={"accept": "application/json,text/plain"},
+                timeout=20,
+            )
+            if r.status_code != 200:
+                continue
+            if r.headers.get("content-type", "").startswith("application/json"):
+                try:
+                    data = r.json()
+                except Exception:
+                    data = None
+                if data is not None:
+                    links = _extract_links(data)
+                    if links:
+                        return links
+            lines = [
+                ln.strip()
+                for ln in (r.text or "").splitlines()
+                if ln.strip() and ln.strip().lower().startswith(ALLOWED_SCHEMES)
+            ]
+            if lines:
+                return lines
+
         url = urljoin(panel_url.rstrip("/") + "/", f"sub/{key}/v2ray")
         r = SESSION.get(url, headers={"accept": "text/plain"}, timeout=20)
         if r.status_code == 200:

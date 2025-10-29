@@ -25,7 +25,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from mysql.connector import pooling
-from apis import sanaei
+from apis import sanaei, pasarguard
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | flask_agg | %(message)s",
@@ -219,26 +219,38 @@ def disable_remote(panel_type, panel_url, token, remote_username):
     except Exception as e:
         return None, str(e)
 
+def _username_candidates(remote_username: str):
+    if not isinstance(remote_username, str):
+        return [remote_username]
+    lowered = remote_username.lower()
+    if lowered and lowered != remote_username:
+        return [remote_username, lowered]
+    return [remote_username]
+
+
 @cached(cache=_fetch_user_cache, lock=_fetch_user_lock)
 def fetch_user(panel_url: str, token: str, remote_username: str):
     try:
-        url = urljoin(panel_url.rstrip("/") + "/", f"api/users/{remote_username}")
-        r = SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
-        if r.status_code == 200:
-            return r.json()
+        for candidate in _username_candidates(remote_username):
+            url = urljoin(panel_url.rstrip("/") + "/", f"api/users/{candidate}")
+            r = SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+            if r.status_code == 200:
+                return r.json()
         # Fallback to Marzban endpoint
-        url = urljoin(panel_url.rstrip("/") + "/", f"api/user/{remote_username}")
-        r = SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
-        if r.status_code != 200:
-            return None
-        obj = r.json()
-        status = obj.get("status")
-        obj["enabled"] = status != "disabled"
-        sub_url = obj.get("subscription_url") or ""
-        token_part = sub_url.rstrip("/").split("/")[-1]
-        if token_part:
-            obj.setdefault("key", token_part)
-        return obj
+        for candidate in _username_candidates(remote_username):
+            url = urljoin(panel_url.rstrip("/") + "/", f"api/user/{candidate}")
+            r = SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+            if r.status_code != 200:
+                continue
+            obj = r.json()
+            status = obj.get("status")
+            obj["enabled"] = status != "disabled"
+            sub_url = obj.get("subscription_url") or ""
+            token_part = sub_url.rstrip("/").split("/")[-1]
+            if token_part:
+                obj.setdefault("key", token_part)
+            return obj
+        return None
     except:
         return None
 
@@ -265,29 +277,30 @@ def fetch_links_from_panel(panel_url: str, remote_username: str, key: str):
         else:
             errors.append(f"v2ray HTTP {r.status_code}")
 
-        # Fallback to Marzneshin style
-        url = urljoin(panel_url.rstrip("/") + "/", f"sub/{remote_username}/{key}/links")
-        r = SESSION.get(url, headers={"accept": "application/json,text/plain"}, timeout=20)
-        if r.status_code != 200:
-            errors.append(f"links HTTP {r.status_code}")
-            return [], "; ".join(errors)
-        try:
-            if r.headers.get("content-type", "").startswith("application/json"):
-                data = r.json()
-                if isinstance(data, list):
-                    return [str(x) for x in data], None
-                if isinstance(data, dict) and "links" in data:
-                    return [str(x) for x in data["links"]], None
-        except Exception as e:
-            errors.append(f"json {e}")
-        lines = [
-            ln.strip()
-            for ln in (r.text or "").splitlines()
-            if ln.strip() and ln.strip().lower().startswith(ALLOWED_SCHEMES)
-        ]
-        if lines:
-            return lines, None
-        errors.append("links empty")
+        # Fallback to Marzneshin style (supports lowercase usernames only)
+        for candidate in _username_candidates(remote_username):
+            url = urljoin(panel_url.rstrip("/") + "/", f"sub/{candidate}/{key}/links")
+            r = SESSION.get(url, headers={"accept": "application/json,text/plain"}, timeout=20)
+            if r.status_code != 200:
+                errors.append(f"links HTTP {r.status_code} ({candidate})")
+                continue
+            try:
+                if r.headers.get("content-type", "").startswith("application/json"):
+                    data = r.json()
+                    if isinstance(data, list):
+                        return [str(x) for x in data], None
+                    if isinstance(data, dict) and "links" in data:
+                        return [str(x) for x in data["links"]], None
+            except Exception as e:
+                errors.append(f"json {e} ({candidate})")
+            lines = [
+                ln.strip()
+                for ln in (r.text or "").splitlines()
+                if ln.strip() and ln.strip().lower().startswith(ALLOWED_SCHEMES)
+            ]
+            if lines:
+                return lines, None
+            errors.append(f"links empty ({candidate})")
         return [], "; ".join(errors)
     except Exception as e:
         errors.append(str(e))
@@ -345,14 +358,28 @@ def collect_links(mapped, local_username: str, want_html: bool):
                     if want_html and rinfo is None and info:
                         rinfo = info
         else:
-            u = fetch_user(l["panel_url"], l["access_token"], l["remote_username"])
-            if want_html:
-                rinfo = u
-            if u and u.get("key"):
-                ls, err = fetch_links_from_panel(l["panel_url"], l["remote_username"], u["key"])
-                if err:
-                    errs.append(f"{l['remote_username']}@{l['panel_url']}: {err}")
-                links.extend(ls)
+            panel_type = (l.get("panel_type") or "").lower()
+            if panel_type == "pasarguard":
+                u, uerr = pasarguard.get_user(l["panel_url"], l["access_token"], l["remote_username"])
+                if uerr:
+                    errs.append(f"{l['remote_username']}@{l['panel_url']}: {uerr}")
+                if want_html and rinfo is None and u:
+                    rinfo = u
+                key = u.get("key") if isinstance(u, dict) else None
+                if key:
+                    ls = pasarguard.fetch_links_from_panel(l["panel_url"], l["remote_username"], key)
+                    if not ls:
+                        errs.append(f"{l['remote_username']}@{l['panel_url']}: pasarguard links empty")
+                    links.extend(ls)
+            else:
+                u = fetch_user(l["panel_url"], l["access_token"], l["remote_username"])
+                if want_html and rinfo is None:
+                    rinfo = u
+                if u and u.get("key"):
+                    ls, err = fetch_links_from_panel(l["panel_url"], l["remote_username"], u["key"])
+                    if err:
+                        errs.append(f"{l['remote_username']}@{l['panel_url']}: {err}")
+                    links.extend(ls)
         if disabled_names:
             links = [x for x in links if (extract_name(x) or "") not in disabled_names]
         if disabled_nums:
