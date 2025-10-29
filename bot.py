@@ -2967,15 +2967,25 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
         limit_bytes_default = int(lu["plan_limit_bytes"] or 0)
         exp = lu["expire_at"]
         usage_duration_default = max(86400, int((exp - datetime.utcnow()).total_seconds())) if exp else 3650*86400
+        is_disabled = bool(lu.get("disabled_pushed"))
     else:
         limit_bytes_default = 0
         usage_duration_default = 3650*86400
+        is_disabled = False
 
     if to_add:
         expire_ts_default = (
             0 if usage_duration_default <= 0 else int(datetime.now(timezone.utc).timestamp()) + usage_duration_default
         )
         for pid in to_add:
+            if is_disabled:
+                log.info(
+                    "skip add panel %s for disabled user %s/%s",
+                    pid,
+                    owner_id,
+                    username,
+                )
+                continue
             p = panels_map.get(int(pid))
             if not p:
                 continue
@@ -3141,6 +3151,8 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                         added_errs.append(f"remove on {p['panel_url']}: {err or 'unknown error'}")
 
     for pid in selected_ids:
+        if is_disabled:
+            continue
         p = panels_map.get(int(pid))
         if not p:
             continue
