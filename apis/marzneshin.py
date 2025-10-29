@@ -30,8 +30,17 @@ def get_headers(token: str) -> Dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _canonical_username(username: str) -> str:
+    """Return the lowercase representation required by the panel API."""
+
+    if isinstance(username, str):
+        return username.lower()
+    return username
+
+
 def fetch_user_services(panel_url: str, token: str, username: str) -> Tuple[Optional[List[int]], Optional[str]]:
     """Return list of service IDs for *username* or an error message."""
+    username = _canonical_username(username)
     try:
         r = SESSION.get(
             urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}/services"),
@@ -48,6 +57,9 @@ def fetch_user_services(panel_url: str, token: str, username: str) -> Tuple[Opti
 
 def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dict], Optional[str]]:
     """Create a user on the remote panel."""
+    payload = dict(payload)
+    if isinstance(payload.get("username"), str):
+        payload["username"] = payload["username"].lower()
     try:
         r = SESSION.post(
             urljoin(panel_url.rstrip('/') + '/', '/api/users'),
@@ -64,6 +76,7 @@ def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dic
 
 def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict], Optional[str]]:
     """Fetch user details from the panel."""
+    username = _canonical_username(username)
     try:
         r = SESSION.get(
             urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}"),
@@ -80,6 +93,7 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
 @cached(cache=_links_cache, lock=_links_lock)
 def fetch_links_from_panel(panel_url: str, username: str, key: str) -> List[str]:
     """Return list of subscription links for a template user."""
+    username = _canonical_username(username)
     try:
         url = urljoin(panel_url.rstrip('/') + '/', f"sub/{username}/{key}/links")
         r = SESSION.get(url, headers={"accept": "application/json"}, timeout=20)
@@ -99,6 +113,7 @@ def fetch_links_from_panel(panel_url: str, username: str, key: str) -> List[str]
 
 def disable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
     """Disable a user on the panel."""
+    username = _canonical_username(username)
     try:
         r = SESSION.post(
             urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}/disable"),
@@ -114,6 +129,7 @@ def disable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool
 
 def enable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
     """Enable a user on the panel."""
+    username = _canonical_username(username)
     try:
         r = SESSION.post(
             urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}/enable"),
@@ -129,6 +145,7 @@ def enable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
 
 def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
     """Delete a user on the panel."""
+    username = _canonical_username(username)
     try:
         r = SESSION.delete(
             urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}"),
@@ -144,6 +161,7 @@ def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
 
 def reset_remote_user_usage(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
     """Reset traffic statistics for *username* on the panel."""
+    username = _canonical_username(username)
     try:
         r = SESSION.post(
             urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}/reset"),
@@ -165,6 +183,7 @@ def update_remote_user(
     expire: Optional[int] = None,
 ) -> Tuple[bool, Optional[str]]:
     """Update quota or expiry for *username* on the panel."""
+    username = _canonical_username(username)
     payload: Dict[str, object] = {"username": username}
     if data_limit is not None:
         payload["data_limit"] = int(data_limit)
