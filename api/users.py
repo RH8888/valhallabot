@@ -34,6 +34,12 @@ class UserOut(BaseModel):
     key_expires_at: datetime | None = Field(
         None, description="Expiration timestamp for the access key"
     )
+    key_revoked: bool = Field(
+        False, description="Whether the access key has been revoked"
+    )
+    key_revoked_at: datetime | None = Field(
+        None, description="Timestamp when the access key was revoked"
+    )
 
 
 class UserCreate(BaseModel):
@@ -83,7 +89,8 @@ def _fetch_user(owner_id: int, username: str) -> dict | None:
                    lu.service_id,
                    lu.disabled_pushed,
                    luk.access_key,
-                   luk.expires_at AS key_expires_at
+                   luk.expires_at AS key_expires_at,
+                   luk.revoked_at AS key_revoked_at
             FROM local_users lu
             LEFT JOIN local_user_keys luk ON luk.local_user_id = lu.id
             WHERE lu.owner_id IN ({placeholders}) AND lu.username=%s
@@ -121,7 +128,8 @@ def _list_users(
                    lu.service_id,
                    lu.disabled_pushed,
                    luk.access_key,
-                   luk.expires_at AS key_expires_at
+                   luk.expires_at AS key_expires_at,
+                   luk.revoked_at AS key_revoked_at
             FROM local_users lu
             LEFT JOIN local_user_keys luk ON luk.local_user_id = lu.id
             WHERE {where_clause}
@@ -198,6 +206,8 @@ async def create_user(
         disabled=bool(row.get("disabled_pushed")),
         access_key=row.get("access_key"),
         key_expires_at=row.get("key_expires_at"),
+        key_revoked=bool(row.get("key_revoked_at")),
+        key_revoked_at=row.get("key_revoked_at"),
     )
 
 
@@ -238,6 +248,8 @@ def list_users(
             disabled=bool(r.get("disabled_pushed")),
             access_key=r.get("access_key"),
             key_expires_at=r.get("key_expires_at"),
+            key_revoked=bool(r.get("key_revoked_at")),
+            key_revoked_at=r.get("key_revoked_at"),
         )
         for r in rows
     ]
@@ -273,7 +285,18 @@ async def edit_user(
         disabled=bool(row.get("disabled_pushed")),
         access_key=row.get("access_key"),
         key_expires_at=row.get("key_expires_at"),
+        key_revoked=bool(row.get("key_revoked_at")),
+        key_revoked_at=row.get("key_revoked_at"),
     )
+
+
+class KeyRevokeRequest(BaseModel):
+    owner_id: int | None = Field(None, description="Target agent ID (admin only)")
+    revoke: bool = Field(True, description="Set to false to restore a revoked key")
+
+
+class KeyPurgeRequest(BaseModel):
+    owner_id: int | None = Field(None, description="Target agent ID (admin only)")
 
 
 @router.delete("/{username}")
@@ -288,6 +311,83 @@ async def toggle_user(
         raise HTTPException(status_code=400, detail="owner_id required")
     _set_user_disabled(real_owner, username, disable)
     return {"status": "disabled" if disable else "enabled"}
+
+
+@router.post("/{username}/keys/revoke")
+def revoke_user_key(
+    username: str,
+    data: KeyRevokeRequest,
+    identity: Identity = Depends(get_identity),
+):
+    real_owner = identity.agent_id if identity.role == "agent" else data.owner_id
+    if real_owner is None:
+        raise HTTPException(status_code=400, detail="owner_id required")
+    ids = expand_owner_ids(real_owner)
+    placeholders = ",".join(["%s"] * len(ids))
+    params = tuple(ids) + (username,)
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT luk.id AS key_id,
+                   luk.access_key,
+                   luk.revoked_at
+            FROM local_users lu
+            JOIN local_user_keys luk ON luk.local_user_id = lu.id
+            WHERE lu.owner_id IN ({placeholders}) AND lu.username=%s
+            LIMIT 1
+            """,
+            params,
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Activation key not found")
+        access_key = row.get("access_key")
+        revoked_at = row.get("revoked_at")
+        key_id = row.get("key_id")
+        if data.revoke:
+            if not revoked_at:
+                revoked_at = datetime.utcnow()
+                cur.execute(
+                    "UPDATE local_user_keys SET revoked_at=%s WHERE id=%s",
+                    (revoked_at, key_id),
+                )
+        else:
+            if revoked_at:
+                cur.execute(
+                    "UPDATE local_user_keys SET revoked_at=NULL WHERE id=%s",
+                    (key_id,),
+                )
+                revoked_at = None
+    return {
+        "access_key": access_key,
+        "revoked": bool(revoked_at),
+        "revoked_at": revoked_at,
+    }
+
+
+@router.post("/keys/purge-expired")
+def purge_expired_keys(
+    data: KeyPurgeRequest,
+    identity: Identity = Depends(get_identity),
+):
+    real_owner = identity.agent_id if identity.role == "agent" else data.owner_id
+    if real_owner is None:
+        raise HTTPException(status_code=400, detail="owner_id required")
+    ids = expand_owner_ids(real_owner)
+    placeholders = ",".join(["%s"] * len(ids))
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"""
+            DELETE luk FROM local_user_keys luk
+            JOIN local_users lu ON lu.id = luk.local_user_id
+            WHERE lu.owner_id IN ({placeholders})
+              AND luk.expires_at IS NOT NULL
+              AND luk.expires_at <= UTC_TIMESTAMP()
+            """,
+            tuple(ids),
+        )
+        purged = cur.rowcount
+    return {"purged": purged}
 
 
 # POST is used because the endpoint requires a JSON body. GET requests with
