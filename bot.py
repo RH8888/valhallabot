@@ -556,10 +556,13 @@ def set_agent_service(agent_tg_id: int, service_id: int | None):
     set_agent_panels(agent_tg_id, pids)
 
 async def set_local_user_service(owner_id: int, username: str, service_id: int | None):
+    ids = expand_owner_ids(owner_id)
+    placeholders = ",".join(["%s"] * len(ids))
+    params: list[object] = [service_id, *ids, username]
     with with_mysql_cursor(dict_=False) as cur:
         cur.execute(
-            "UPDATE local_users SET service_id=%s WHERE owner_id=%s AND username=%s",
-            (service_id, owner_id, username),
+            f"UPDATE local_users SET service_id=%s WHERE owner_id IN ({placeholders}) AND username=%s",
+            params,
         )
     pids = list_service_panel_ids(service_id) if service_id else set()
     await sync_user_panels_async(owner_id, username, pids)
