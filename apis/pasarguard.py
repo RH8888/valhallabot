@@ -150,44 +150,51 @@ def _extract_links(candidate: object) -> List[str]:
     return links
 
 
+def _links_from_response(response: requests.Response) -> List[str]:
+    """Extract subscription links from a Pasarguard HTTP response."""
+
+    if response.headers.get("content-type", "").startswith("application/json"):
+        try:
+            data = response.json()
+        except Exception:
+            data = None
+        if data is not None:
+            links = _extract_links(data)
+            if links:
+                return links
+
+    txt = (response.text or "").strip()
+    if not txt:
+        return []
+    try:
+        decoded = base64.b64decode(txt + "===")
+        txt = decoded.decode(errors="ignore")
+    except Exception:
+        pass
+    lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
+    return [ln for ln in lines if ln.lower().startswith(ALLOWED_SCHEMES)]
+
+
 @cached(cache=_links_cache, lock=_links_lock)
 def fetch_links_from_panel(panel_url: str, username: str, key: str) -> List[str]:
     """Return list of subscription links for a user token."""
     try:
-        url = urljoin(panel_url.rstrip("/") + "/", f"sub/{key}/v2ray")
-        r = SESSION.get(url, headers={"accept": "text/plain"}, timeout=20)
-        if r.status_code == 200:
-            txt = (r.text or "").strip()
-            if txt:
-                try:
-                    decoded = base64.b64decode(txt + "===")
-                    txt = decoded.decode(errors="ignore")
-                except Exception:
-                    pass
-                lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
-                if any(ln.lower().startswith(ALLOWED_SCHEMES) for ln in lines):
-                    return lines
-        url = urljoin(panel_url.rstrip("/") + "/", f"sub/{key}/")
-        r = SESSION.get(
-            url,
-            headers={"accept": "application/json,text/plain"},
-            timeout=20,
-        )
-        if r.headers.get("content-type", "").startswith("application/json"):
-            try:
-                data = r.json()
-            except Exception:
-                data = None
-            if data is not None:
-                links = _extract_links(data)
-                if links:
-                    return links
-        if r.status_code == 200:
-            return [
-                ln.strip()
-                for ln in (r.text or "").splitlines()
-                if ln.strip() and ln.strip().lower().startswith(ALLOWED_SCHEMES)
-            ]
+        username_part = (username or "").strip()
+        candidate_paths: List[str] = []
+        if username_part:
+            candidate_paths.append(f"sub/{username_part}/{key}/links")
+        candidate_paths.extend((f"sub/{key}/v2ray", f"sub/{key}/"))
+
+        for path in candidate_paths:
+            url = urljoin(panel_url.rstrip("/") + "/", path)
+            r = SESSION.get(
+                url,
+                headers={"accept": "application/json,text/plain"},
+                timeout=20,
+            )
+            links = _links_from_response(r)
+            if links:
+                return links
         return []
     except Exception:  # pragma: no cover - network errors
         return []
