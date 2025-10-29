@@ -2846,10 +2846,15 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 )
                 per_panel[r["id"]] = {"proxies": {}, "inbounds": {}}
                 continue
-            per_panel[r["id"]] = {
+            tmpl_info = {
                 "proxies": obj.get("proxies") or {},
                 "inbounds": obj.get("inbounds") or {},
             }
+            if r.get("panel_type") == "pasarguard":
+                groups = obj.get("group_ids")
+                if groups is not None:
+                    tmpl_info["group_ids"] = list(groups)
+            per_panel[r["id"]] = tmpl_info
     if errs:
         await q.edit_message_text(
             "❌ خطا در خواندن سرویس بعضی پنل‌ها:\n" +
@@ -2919,6 +2924,10 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 "proxies": clone_proxy_settings(tmpl_info.get("proxies", {})),
                 "inbounds": tmpl_info.get("inbounds", {}),
             }
+            if r.get("panel_type") == "pasarguard":
+                groups = tmpl_info.get("group_ids")
+                if groups is not None:
+                    payload["group_ids"] = list(groups)
         obj, e = api.create_user(r["panel_url"], r["access_token"], payload)
         if not obj:
             obj, g = api.get_user(r["panel_url"], r["access_token"], remote_name)
@@ -3087,6 +3096,10 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                             "proxies": clone_proxy_settings(tmpl_obj.get("proxies") or {}),
                             "inbounds": tmpl_obj.get("inbounds") or {},
                         }
+                        if p.get("panel_type") == "pasarguard":
+                            groups = tmpl_obj.get("group_ids")
+                            if groups is not None:
+                                payload["group_ids"] = list(groups)
                         obj, e2 = api.create_user(
                             p["panel_url"], p["access_token"], payload
                         )

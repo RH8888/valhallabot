@@ -75,6 +75,13 @@ def _normalise_user_object(obj: Dict[str, Any]) -> Dict[str, Any]:
     if proxies:
         obj.setdefault("proxies", _normalise_proxy_settings(proxies))
     obj.setdefault("inbounds", {})
+    groups = obj.get("group_ids")
+    if groups is None:
+        obj["group_ids"] = []
+    elif isinstance(groups, Iterable) and not isinstance(groups, (str, bytes, bytearray)):
+        obj["group_ids"] = list(groups)
+    else:
+        obj["group_ids"] = [groups]
     return obj
 
 
