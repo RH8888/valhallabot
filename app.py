@@ -25,7 +25,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from mysql.connector import pooling
-from apis import sanaei, pasarguard
+from apis import sanaei
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | flask_agg | %(message)s",
@@ -71,8 +71,6 @@ _fetch_user_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
 _fetch_user_lock = RLock()
 _fetch_links_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
 _fetch_links_lock = RLock()
-_fetch_pasarguard_user_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
-_fetch_pasarguard_user_lock = RLock()
 
 class CurCtx:
     def __init__(self, dict_=True):
@@ -221,41 +219,13 @@ def disable_remote(panel_type, panel_url, token, remote_username):
     except Exception as e:
         return None, str(e)
 
-def _normalise_remote_user(obj):
-    """Normalise user payloads from different panel variants."""
-
-    if not isinstance(obj, dict):
-        return obj
-
-    status = obj.get("status")
-    if isinstance(status, str) and "enabled" not in obj:
-        obj["enabled"] = status.lower() not in {"disabled", "inactive"}
-
-    if "key" not in obj:
-        url_fields = (
-            "subscription_url",
-            "subscriptionUrl",
-            "subscriptionLink",
-            "subscription",
-        )
-        for field in url_fields:
-            val = obj.get(field)
-            if isinstance(val, str) and val.strip():
-                token_part = val.strip().split("?")[0].rstrip("/").split("/")[-1]
-                if token_part:
-                    obj["key"] = token_part
-                    break
-
-    return obj
-
-
 @cached(cache=_fetch_user_cache, lock=_fetch_user_lock)
 def fetch_user(panel_url: str, token: str, remote_username: str):
     try:
         url = urljoin(panel_url.rstrip("/") + "/", f"api/users/{remote_username}")
         r = SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
         if r.status_code == 200:
-            return _normalise_remote_user(r.json())
+            return r.json()
         # Fallback to Marzban endpoint
         url = urljoin(panel_url.rstrip("/") + "/", f"api/user/{remote_username}")
         r = SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
@@ -264,17 +234,13 @@ def fetch_user(panel_url: str, token: str, remote_username: str):
         obj = r.json()
         status = obj.get("status")
         obj["enabled"] = status != "disabled"
-        return _normalise_remote_user(obj)
+        sub_url = obj.get("subscription_url") or ""
+        token_part = sub_url.rstrip("/").split("/")[-1]
+        if token_part:
+            obj.setdefault("key", token_part)
+        return obj
     except:
         return None
-
-
-@cached(cache=_fetch_pasarguard_user_cache, lock=_fetch_pasarguard_user_lock)
-def fetch_pasarguard_user(panel_url: str, token: str, remote_username: str):
-    """Return Pasarguard user information and an optional error message."""
-
-    obj, err = pasarguard.get_user(panel_url, token, remote_username)
-    return obj, err
 
 @cached(cache=_fetch_links_cache, lock=_fetch_links_lock)
 def fetch_links_from_panel(panel_url: str, remote_username: str, key: str):
@@ -379,47 +345,14 @@ def collect_links(mapped, local_username: str, want_html: bool):
                     if want_html and rinfo is None and info:
                         rinfo = info
         else:
-            if l.get("panel_type") == "pasarguard":
-                u, err = fetch_pasarguard_user(
-                    l["panel_url"], l["access_token"], l["remote_username"]
-                )
-                if want_html:
-                    rinfo = u
-                if not u:
-                    errs.append(
-                        f"{l['remote_username']}@{l['panel_url']}: {err or 'not found'}"
-                    )
-                else:
-                    key = u.get("key")
-                    if not key:
-                        sub_url = u.get("subscription_url") or ""
-                        token_part = sub_url.rstrip("/").split("/")[-1]
-                        if token_part:
-                            key = token_part
-                    if not key:
-                        errs.append(
-                            f"{l['remote_username']}@{l['panel_url']}: no subscription key"
-                        )
-                    else:
-                        ls = pasarguard.fetch_links_from_panel(
-                            l["panel_url"], l["remote_username"], key
-                        )
-                        if not ls:
-                            errs.append(
-                                f"{l['remote_username']}@{l['panel_url']}: no configs found"
-                            )
-                        links.extend(ls)
-            else:
-                u = fetch_user(l["panel_url"], l["access_token"], l["remote_username"])
-                if want_html:
-                    rinfo = u
-                if u and u.get("key"):
-                    ls, err = fetch_links_from_panel(
-                        l["panel_url"], l["remote_username"], u["key"]
-                    )
-                    if err:
-                        errs.append(f"{l['remote_username']}@{l['panel_url']}: {err}")
-                    links.extend(ls)
+            u = fetch_user(l["panel_url"], l["access_token"], l["remote_username"])
+            if want_html:
+                rinfo = u
+            if u and u.get("key"):
+                ls, err = fetch_links_from_panel(l["panel_url"], l["remote_username"], u["key"])
+                if err:
+                    errs.append(f"{l['remote_username']}@{l['panel_url']}: {err}")
+                links.extend(ls)
         if disabled_names:
             links = [x for x in links if (extract_name(x) or "") not in disabled_names]
         if disabled_nums:
