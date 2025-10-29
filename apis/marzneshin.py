@@ -30,11 +30,19 @@ def get_headers(token: str) -> Dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _normalise_username(username: str) -> str:
+    """Return a lowercase representation of *username* for API requests."""
+
+    if isinstance(username, str):
+        return username.lower()
+    return username
+
+
 def fetch_user_services(panel_url: str, token: str, username: str) -> Tuple[Optional[List[int]], Optional[str]]:
     """Return list of service IDs for *username* or an error message."""
     try:
         r = SESSION.get(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}/services"),
+            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{_normalise_username(username)}/services"),
             headers=get_headers(token),
             timeout=15,
         )
@@ -49,9 +57,12 @@ def fetch_user_services(panel_url: str, token: str, username: str) -> Tuple[Opti
 def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dict], Optional[str]]:
     """Create a user on the remote panel."""
     try:
+        body = dict(payload)
+        if "username" in body:
+            body["username"] = _normalise_username(body["username"])
         r = SESSION.post(
             urljoin(panel_url.rstrip('/') + '/', '/api/users'),
-            json=payload,
+            json=body,
             headers={**get_headers(token), "Content-Type": "application/json"},
             timeout=20,
         )
@@ -66,7 +77,7 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
     """Fetch user details from the panel."""
     try:
         r = SESSION.get(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}"),
+            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{_normalise_username(username)}"),
             headers=get_headers(token),
             timeout=15,
         )
@@ -81,7 +92,10 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
 def fetch_links_from_panel(panel_url: str, username: str, key: str) -> List[str]:
     """Return list of subscription links for a template user."""
     try:
-        url = urljoin(panel_url.rstrip('/') + '/', f"sub/{username}/{key}/links")
+        url = urljoin(
+            panel_url.rstrip('/') + '/',
+            f"sub/{_normalise_username(username)}/{key}/links",
+        )
         r = SESSION.get(url, headers={"accept": "application/json"}, timeout=20)
         try:
             if r.headers.get("content-type", "").startswith("application/json"):
@@ -101,7 +115,10 @@ def disable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool
     """Disable a user on the panel."""
     try:
         r = SESSION.post(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}/disable"),
+            urljoin(
+                panel_url.rstrip('/') + '/',
+                f"/api/users/{_normalise_username(username)}/disable",
+            ),
             headers=get_headers(token),
             timeout=20,
         )
@@ -116,7 +133,10 @@ def enable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
     """Enable a user on the panel."""
     try:
         r = SESSION.post(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}/enable"),
+            urljoin(
+                panel_url.rstrip('/') + '/',
+                f"/api/users/{_normalise_username(username)}/enable",
+            ),
             headers=get_headers(token),
             timeout=20,
         )
@@ -131,7 +151,7 @@ def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
     """Delete a user on the panel."""
     try:
         r = SESSION.delete(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}"),
+            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{_normalise_username(username)}"),
             headers=get_headers(token),
             timeout=20,
         )
@@ -146,7 +166,10 @@ def reset_remote_user_usage(panel_url: str, token: str, username: str) -> Tuple[
     """Reset traffic statistics for *username* on the panel."""
     try:
         r = SESSION.post(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}/reset"),
+            urljoin(
+                panel_url.rstrip('/') + '/',
+                f"/api/users/{_normalise_username(username)}/reset",
+            ),
             headers=get_headers(token),
             timeout=20,
         )
@@ -165,7 +188,7 @@ def update_remote_user(
     expire: Optional[int] = None,
 ) -> Tuple[bool, Optional[str]]:
     """Update quota or expiry for *username* on the panel."""
-    payload: Dict[str, object] = {"username": username}
+    payload: Dict[str, object] = {"username": _normalise_username(username)}
     if data_limit is not None:
         payload["data_limit"] = int(data_limit)
         payload["data_limit_reset_strategy"] = "no_reset"
@@ -177,7 +200,7 @@ def update_remote_user(
         return True, None
     try:
         r = SESSION.put(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}"),
+            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{_normalise_username(username)}"),
             json=payload,
             headers={**get_headers(token), "Content-Type": "application/json"},
             timeout=20,
