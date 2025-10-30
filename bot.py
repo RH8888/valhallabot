@@ -2978,8 +2978,34 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
             log.info(
                 "sync_user_panels removing stale links for missing user %s/%s", owner_id, username
             )
-            for pid in list(links_map.keys()):
+            panels = (
+                list_panels_for_agent(owner_id)
+                if not is_admin(owner_id)
+                else list_my_panels_admin(owner_id)
+            )
+            panels_map = {int(p["id"]): p for p in panels}
+            for pid, remote in list(links_map.items()):
                 remove_link(owner_id, username, int(pid))
+                panel = panels_map.get(int(pid))
+                if not panel:
+                    continue
+                api = get_api(panel.get("panel_type"))
+                remotes = (
+                    remote.split(",")
+                    if panel.get("panel_type") == "sanaei"
+                    else [remote]
+                )
+                for rn in remotes:
+                    ok, err = api.remove_remote_user(
+                        panel["panel_url"], panel["access_token"], rn
+                    )
+                    if not ok:
+                        log.warning(
+                            "sync_user_panels failed removing remote %s from panel %s: %s",
+                            rn,
+                            panel.get("panel_url"),
+                            err or "unknown error",
+                        )
         log.info("sync_user_panels skip missing local user %s/%s", owner_id, username)
         return
 
