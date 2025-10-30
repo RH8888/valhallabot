@@ -32,6 +32,20 @@ get_kv () {
 gen_rand () { head -c 64 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 24; }
 gen_user () { echo "user_$(head -c 32 /dev/urandom | tr -dc 'a-z0-9' | head -c 10)"; }
 
+gen_fernet_key () {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import base64
+import os
+
+print(base64.urlsafe_b64encode(os.urandom(32)).decode())
+PY
+  else
+    echo "python3 is required to generate a Fernet key automatically." >&2
+    return 1
+  fi
+}
+
 ask_required () {
   local var="$1"; local question="$2"
   local current val=""
@@ -190,6 +204,22 @@ ensure_podman_dns () {
   fi
 }
 
+ensure_agent_token_key () {
+  local current
+  current="$(get_kv AGENT_TOKEN_ENCRYPTION_KEY)"
+  if [ -n "$current" ]; then
+    return 0
+  fi
+  local key=""
+  if key="$(gen_fernet_key 2>/dev/null)" && [ -n "$key" ]; then
+    echo "Generated AGENT_TOKEN_ENCRYPTION_KEY."
+    set_kv "AGENT_TOKEN_ENCRYPTION_KEY" "$key"
+  else
+    echo "Unable to auto-generate AGENT_TOKEN_ENCRYPTION_KEY."
+    ask_required "AGENT_TOKEN_ENCRYPTION_KEY" "Provide a base64 Fernet key for agent token encryption"
+  fi
+}
+
 # ---------- preflight ----------
 RUNTIME="$(choose_runtime)"
 if ! have_cmd "$RUNTIME"; then
@@ -204,6 +234,7 @@ if ! have_cmd "$RUNTIME"; then
 fi
 
 # ---------- defaults ----------
+[ -n "$(get_kv AGENT_TOKEN_ENCRYPTION_KEY)" ] || ensure_agent_token_key
 [ -n "$(get_kv MYSQL_HOST)" ] || set_kv "MYSQL_HOST" "mysql"
 [ -n "$(get_kv MYSQL_PORT)" ] || set_kv "MYSQL_PORT" "3306"
 [ -n "$(get_kv MYSQL_DATABASE)" ] || set_kv "MYSQL_DATABASE" "valhalla"
