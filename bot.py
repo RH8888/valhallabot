@@ -46,7 +46,11 @@ from telegram.ext import (
 )
 
 from scripts import usage_sync
-from models.agents import generate_api_token, get_api_token, rotate_api_token
+from models.agents import (
+    get_api_token,
+    migrate_agent_tokens_to_encrypted,
+    rotate_api_token,
+)
 
 # ---------- logging ----------
 logging.basicConfig(
@@ -313,7 +317,7 @@ def ensure_schema():
                 max_user_bytes BIGINT NOT NULL DEFAULT 0,
                 total_used_bytes BIGINT NOT NULL DEFAULT 0,
                 api_token CHAR(64) UNIQUE,
-                api_token_raw TEXT,
+                api_token_encrypted TEXT,
                 disabled_pushed TINYINT(1) NOT NULL DEFAULT 0,
                 disabled_pushed_at DATETIME NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -338,7 +342,7 @@ def ensure_schema():
         except MySQLError:
             pass
         try:
-            cur.execute("ALTER TABLE agents ADD COLUMN api_token_raw TEXT")
+            cur.execute("ALTER TABLE agents ADD COLUMN api_token_encrypted TEXT")
         except MySQLError:
             pass
         if added_total:
@@ -406,6 +410,9 @@ def ensure_schema():
                 PRIMARY KEY (owner_id, `key`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+
+    migrate_agent_tokens_to_encrypted()
+
 
 def get_setting(owner_id: int, key: str):
     oid = canonical_owner_id(owner_id)
@@ -1120,6 +1127,7 @@ def delete_panel_and_cleanup(owner_id: int, panel_id: int):
 # ---------- agents ----------
 def upsert_agent(tg_id: int, name: str):
     token = None
+    new_agent_id = None
     with with_mysql_cursor() as cur:
         cur.execute("SELECT id FROM agents WHERE telegram_user_id=%s", (tg_id,))
         row = cur.fetchone()
@@ -1129,12 +1137,14 @@ def upsert_agent(tg_id: int, name: str):
                 (name, tg_id),
             )
         else:
-            token, token_hash = generate_api_token()
             cur.execute(
-                "INSERT INTO agents(telegram_user_id,name,plan_limit_bytes,expire_at,active,user_limit,max_user_bytes,api_token,api_token_raw) "
-                "VALUES(%s,%s,0,NULL,1,0,0,%s,%s)",
-                (tg_id, name, token_hash, token),
+                "INSERT INTO agents(telegram_user_id,name,plan_limit_bytes,expire_at,active,user_limit,max_user_bytes,api_token,api_token_encrypted) "
+                "VALUES(%s,%s,0,NULL,1,0,0,NULL,NULL)",
+                (tg_id, name),
             )
+            new_agent_id = cur.lastrowid
+    if new_agent_id:
+        token = rotate_api_token(new_agent_id)
     return token
 
 def get_agent(tg_id: int):
