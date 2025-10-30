@@ -555,17 +555,36 @@ def set_agent_service(agent_tg_id: int, service_id: int | None):
     pids = list_service_panel_ids(service_id) if service_id else set()
     set_agent_panels(agent_tg_id, pids)
 
-async def set_local_user_service(owner_id: int, username: str, service_id: int | None):
+def resolve_local_user_owner(owner_id: int, username: str) -> int | None:
+    """Return the concrete owner ID for a given local user accessible to ``owner_id``."""
+
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
-    params: list[object] = [service_id, *ids, username]
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"SELECT owner_id FROM local_users WHERE owner_id IN ({placeholders}) AND username=%s LIMIT 1",
+            tuple(ids) + (username,),
+        )
+        row = cur.fetchone()
+        return int(row["owner_id"]) if row else None
+
+
+async def set_local_user_service(owner_id: int, username: str, service_id: int | None):
+    real_owner = resolve_local_user_owner(owner_id, username)
+    if real_owner is None:
+        log.info(
+            "set_local_user_service skip: owner=%s username=%s not found", owner_id, username
+        )
+        return
+
+    params: list[object] = [service_id, real_owner, username]
     with with_mysql_cursor(dict_=False) as cur:
         cur.execute(
-            f"UPDATE local_users SET service_id=%s WHERE owner_id IN ({placeholders}) AND username=%s",
+            "UPDATE local_users SET service_id=%s WHERE owner_id=%s AND username=%s",
             params,
         )
     pids = list_service_panel_ids(service_id) if service_id else set()
-    await sync_user_panels_async(owner_id, username, pids)
+    await sync_user_panels_async(real_owner, username, pids)
 
 async def propagate_service_panels(service_id: int):
     """After service panels change, update agents/users accordingly."""
@@ -2952,6 +2971,44 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
     await q.edit_message_text(txt)
 
 def sync_user_panels(owner_id: int, username: str, selected_ids: set):
+    lu = get_local_user(owner_id, username)
+    if not lu:
+        links_map = map_linked_remote_usernames(owner_id, username)
+        if links_map:
+            log.info(
+                "sync_user_panels removing stale links for missing user %s/%s", owner_id, username
+            )
+            panels = (
+                list_panels_for_agent(owner_id)
+                if not is_admin(owner_id)
+                else list_my_panels_admin(owner_id)
+            )
+            panels_map = {int(p["id"]): p for p in panels}
+            for pid, remote in list(links_map.items()):
+                remove_link(owner_id, username, int(pid))
+                panel = panels_map.get(int(pid))
+                if not panel:
+                    continue
+                api = get_api(panel.get("panel_type"))
+                remotes = (
+                    remote.split(",")
+                    if panel.get("panel_type") == "sanaei"
+                    else [remote]
+                )
+                for rn in remotes:
+                    ok, err = api.remove_remote_user(
+                        panel["panel_url"], panel["access_token"], rn
+                    )
+                    if not ok:
+                        log.warning(
+                            "sync_user_panels failed removing remote %s from panel %s: %s",
+                            rn,
+                            panel.get("panel_url"),
+                            err or "unknown error",
+                        )
+        log.info("sync_user_panels skip missing local user %s/%s", owner_id, username)
+        return
+
     links_map = map_linked_remote_usernames(owner_id, username)
     current = set(links_map.keys())
     to_add = selected_ids - current
@@ -2965,16 +3022,12 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
     panels = list_panels_for_agent(owner_id) if not is_admin(owner_id) else list_my_panels_admin(owner_id)
     panels_map = {int(p["id"]): p for p in panels}
 
-    lu = get_local_user(owner_id, username)
-    if lu:
-        limit_bytes_default = int(lu["plan_limit_bytes"] or 0)
-        exp = lu["expire_at"]
-        usage_duration_default = max(86400, int((exp - datetime.utcnow()).total_seconds())) if exp else 3650*86400
-        is_disabled = bool(lu.get("disabled_pushed"))
-    else:
-        limit_bytes_default = 0
-        usage_duration_default = 3650*86400
-        is_disabled = False
+    limit_bytes_default = int(lu["plan_limit_bytes"] or 0)
+    exp = lu["expire_at"]
+    usage_duration_default = (
+        max(86400, int((exp - datetime.utcnow()).total_seconds())) if exp else 3650 * 86400
+    )
+    is_disabled = bool(lu.get("disabled_pushed"))
 
     if to_add:
         expire_ts_default = (
