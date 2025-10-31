@@ -71,11 +71,15 @@
 
     .btn-secondary{ background:var(--surface2); color:var(--text); border-radius:.75rem; padding:.5rem 1rem; transition:transform .12s ease, background .2s; white-space:nowrap; }
     .btn-secondary:hover{ background:#444851; }
+    .btn-secondary[disabled]{ opacity:.55; cursor:not-allowed; background:rgba(255,255,255,.05); color:rgba(241,241,242,.6); }
 
     .under{ margin-top:1.25rem; display:flex; justify-content:center; }
 
     /* keep “number + unit” order in RTL */
     .num-unit{ direction:ltr; unicode-bidi:plaintext; }
+
+    .loading-indicator{ background:var(--surface2); border-radius:1rem; padding:1.25rem; display:flex; align-items:center; justify-content:center; gap:.75rem; color:var(--muted); text-align:center; }
+    .loading-indicator .spinner{ width:1.5rem; height:1.5rem; border-radius:999px; border:3px solid rgba(255,255,255,.18); border-top-color:var(--g1); animation:spin .9s linear infinite; }
 
     /* clicks + ripples */
     .pressable{ position:relative; overflow:hidden; will-change:transform; }
@@ -101,6 +105,7 @@
     @keyframes ripple{ to{ transform:scale(1); opacity:0; } }
     @keyframes fadeInUp{ from{ opacity:0; transform:translateY(8px); } to{ opacity:1; transform:translateY(0); } }
     @keyframes pop{ 0%{ transform:scale(.9); } 60%{ transform:scale(1.04); } 100%{ transform:scale(1); } }
+    @keyframes spin{ to{ transform:rotate(360deg); } }
 
     @media (prefers-reduced-motion: reduce){
       .pressable:active{ transform:none; }
@@ -395,22 +400,11 @@
 
       <p class="text-sm mt-2" style="color:var(--muted)">در اینجا شما به کانفیگ‌های خود به طور جداگانه دسترسی دارید و می‌توانید هر یک را کپی کنید.</p>
 
-      <div id="configs-list" class="mt-4 space-y-2">
-        <div class="row flex items-center justify-between gap-4 hover-lift-soft" data-empty>
-          <div class="flex items-center gap-3 min-w-0">
-            <div class="w-8 h-6 rounded flex items-center justify-center shrink-0" style="background:rgba(255,255,255,.08)">
-              <i class="fa-solid fa-signal text-xs" style="color:var(--g1)"></i>
-            </div>
-            <div class="min-w-0">
-              <div class="font-semibold truncate">در حال بارگذاری…</div>
-              <div class="text-xs" style="color:var(--muted)">&nbsp;</div>
-            </div>
-          </div>
-          <div class="flex gap-2 shrink-0">
-            <button disabled class="btn-secondary pressable hover-lift"><i class="fa-regular fa-copy ml-1"></i>کپی</button>
-          </div>
-        </div>
+      <div id="loading-indicator" class="loading-indicator mt-4 fade-in-up" role="status" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>در حال دریافت کانفیگ‌ها… لطفاً صبر کنید</span>
       </div>
+      <div id="configs-list" class="mt-4 space-y-2"></div>
     </section>
   </div>
 
@@ -557,6 +551,21 @@
     }
     function escapeHtml(s){ return s.replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;' }[m])) }
 
+    function setLoading(isLoading){
+      const loader=document.getElementById('loading-indicator');
+      const wrap=document.getElementById('configs-list');
+      const copyAll=document.getElementById('copyAll');
+      if(loader){
+        loader.style.display=isLoading?'flex':'none';
+        loader.setAttribute('aria-hidden', String(!isLoading));
+      }
+      if(wrap){
+        if(isLoading){ wrap.setAttribute('aria-busy','true'); }
+        else{ wrap.removeAttribute('aria-busy'); }
+      }
+      if(copyAll){ copyAll.disabled=!!isLoading; }
+    }
+
     function renderConfigs(items){
       const wrap=document.getElementById('configs-list'); wrap.innerHTML='';
       if(!items.length){
@@ -663,7 +672,10 @@
 
     document.addEventListener('DOMContentLoaded', async ()=>{
       setupGauges(); setExpireJalali(); setResetText();
-      const items=await fetchConfigs(SUBSCRIPTION_URL); renderConfigs(items);
+      setLoading(true);
+      const items=await fetchConfigs(SUBSCRIPTION_URL);
+      setLoading(false);
+      renderConfigs(items);
       initTabs(); initTopButtons(); initRipples(); enhanceDetailsAnimation();
     });
   </script>

@@ -72,6 +72,8 @@ _fetch_user_lock = RLock()
 _fetch_links_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
 _fetch_links_lock = RLock()
 
+PANEL_REQUEST_TIMEOUT = float(os.getenv("PANEL_REQUEST_TIMEOUT", "45"))
+
 class CurCtx:
     def __init__(self, dict_=True):
         self.dict_ = dict_
@@ -204,7 +206,11 @@ def disable_remote(panel_type, panel_url, token, remote_username):
             return (200 if all_ok else None), last_msg
         # Try Marzneshin style first
         url = urljoin(panel_url.rstrip("/") + "/", f"api/users/{remote_username}/disable")
-        r = SESSION.post(url, headers={"Authorization": f"Bearer {token}"}, timeout=20)
+        r = SESSION.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=PANEL_REQUEST_TIMEOUT,
+        )
         if r.status_code == 200:
             return r.status_code, r.text[:200]
         # Fallback to Marzban style
@@ -213,7 +219,7 @@ def disable_remote(panel_type, panel_url, token, remote_username):
             url,
             json={"status": "disabled"},
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            timeout=20,
+            timeout=PANEL_REQUEST_TIMEOUT,
         )
         return r.status_code, r.text[:200]
     except Exception as e:
@@ -233,13 +239,21 @@ def fetch_user(panel_url: str, token: str, remote_username: str):
     try:
         for candidate in _username_candidates(remote_username):
             url = urljoin(panel_url.rstrip("/") + "/", f"api/users/{candidate}")
-            r = SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+            r = SESSION.get(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=PANEL_REQUEST_TIMEOUT,
+            )
             if r.status_code == 200:
                 return r.json()
         # Fallback to Marzban endpoint
         for candidate in _username_candidates(remote_username):
             url = urljoin(panel_url.rstrip("/") + "/", f"api/user/{candidate}")
-            r = SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+            r = SESSION.get(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=PANEL_REQUEST_TIMEOUT,
+            )
             if r.status_code != 200:
                 continue
             obj = r.json()
@@ -261,7 +275,11 @@ def fetch_links_from_panel(panel_url: str, remote_username: str, key: str):
     try:
         # Try Marzban style first (/v2ray base64)
         url = urljoin(panel_url.rstrip("/") + "/", f"sub/{key}/v2ray")
-        r = SESSION.get(url, headers={"accept": "text/plain"}, timeout=20)
+        r = SESSION.get(
+            url,
+            headers={"accept": "text/plain"},
+            timeout=PANEL_REQUEST_TIMEOUT,
+        )
         if r.status_code == 200:
             txt = (r.text or "").strip()
             if txt:
@@ -280,7 +298,11 @@ def fetch_links_from_panel(panel_url: str, remote_username: str, key: str):
         # Fallback to Marzneshin style (supports lowercase usernames only)
         for candidate in _username_candidates(remote_username):
             url = urljoin(panel_url.rstrip("/") + "/", f"sub/{candidate}/{key}/links")
-            r = SESSION.get(url, headers={"accept": "application/json,text/plain"}, timeout=20)
+            r = SESSION.get(
+                url,
+                headers={"accept": "application/json,text/plain"},
+                timeout=PANEL_REQUEST_TIMEOUT,
+            )
             if r.status_code != 200:
                 errors.append(f"links HTTP {r.status_code} ({candidate})")
                 continue
