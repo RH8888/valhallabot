@@ -25,7 +25,7 @@ from types import SimpleNamespace
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
-from mysql.connector import pooling
+from mysql.connector import pooling, errors as mysql_errors, errorcode
 from apis import sanaei, pasarguard
 from .ownership import admin_ids, expand_owner_ids, canonical_owner_id
 
@@ -92,13 +92,27 @@ class CurCtx:
             self.conn.close()
 
 
+_settings_table_missing_logged = False
+
+
 def get_setting(owner_id: int, key: str):
     oid = canonical_owner_id(owner_id)
     with CurCtx() as cur:
-        cur.execute(
-            "SELECT value FROM settings WHERE owner_id=%s AND `key`=%s LIMIT 1",
-            (oid, key),
-        )
+        try:
+            cur.execute(
+                "SELECT value FROM settings WHERE owner_id=%s AND `key`=%s LIMIT 1",
+                (oid, key),
+            )
+        except mysql_errors.ProgrammingError as exc:
+            if getattr(exc, "errno", None) == errorcode.ER_NO_SUCH_TABLE:
+                global _settings_table_missing_logged
+                if not _settings_table_missing_logged:
+                    log.warning(
+                        "settings table missing; returning no setting values until it is created"
+                    )
+                    _settings_table_missing_logged = True
+                return None
+            raise
         row = cur.fetchone()
         return row["value"] if row else None
 
