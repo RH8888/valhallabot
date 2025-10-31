@@ -1,59 +1,38 @@
 import hashlib
 import logging
-import os
-import secrets
-from functools import lru_cache
 
-from cryptography.fernet import Fernet, InvalidToken
+from .token_crypto import (
+    TokenEncryptionError,
+    decrypt_token as _base_decrypt,
+    encrypt_token as _base_encrypt,
+    generate_token,
+)
 
 
 log = logging.getLogger(__name__)
 
 
-class AgentTokenEncryptionError(RuntimeError):
-    """Raised when the agent token cannot be encrypted or decrypted."""
-
-
-@lru_cache()
-def _get_cipher() -> Fernet:
-    key = os.environ.get("AGENT_TOKEN_ENCRYPTION_KEY")
-    if not key:
-        raise AgentTokenEncryptionError(
-            "AGENT_TOKEN_ENCRYPTION_KEY must be configured to encrypt agent tokens"
-        )
-    try:
-        return Fernet(key.encode())
-    except ValueError as exc:
-        raise AgentTokenEncryptionError(
-            "AGENT_TOKEN_ENCRYPTION_KEY is not a valid Fernet key"
-        ) from exc
+class AgentTokenEncryptionError(TokenEncryptionError):
+    """Backward-compatible alias for agent token encryption failures."""
 
 
 def _encrypt_token(token: str) -> str:
     try:
-        return _get_cipher().encrypt(token.encode()).decode()
-    except AgentTokenEncryptionError:
-        raise
-    except Exception as exc:  # pragma: no cover - defensive
-        raise AgentTokenEncryptionError("Failed to encrypt agent token") from exc
+        return _base_encrypt(token)
+    except TokenEncryptionError as exc:
+        raise AgentTokenEncryptionError(str(exc)) from exc
 
 
 def _decrypt_token(ciphertext: str) -> str:
     try:
-        return _get_cipher().decrypt(ciphertext.encode()).decode()
-    except AgentTokenEncryptionError:
-        raise
-    except InvalidToken as exc:
-        raise AgentTokenEncryptionError("Stored agent token cannot be decrypted") from exc
-    except Exception as exc:  # pragma: no cover - defensive
-        raise AgentTokenEncryptionError("Failed to decrypt agent token") from exc
+        return _base_decrypt(ciphertext)
+    except TokenEncryptionError as exc:
+        raise AgentTokenEncryptionError(str(exc)) from exc
 
 
 def generate_api_token() -> tuple[str, str]:
     """Generate a random API token and its hash."""
-    token = secrets.token_hex(32)
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    return token, token_hash
+    return generate_token()
 
 
 def rotate_api_token(agent_id: int) -> str:

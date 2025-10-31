@@ -65,6 +65,7 @@ from services import (
     renew_agent_days,
     set_agent_active,
 )
+from models.admins import TokenEncryptionError as AdminTokenEncryptionError
 
 # ---------- logging ----------
 logging.basicConfig(
@@ -1939,7 +1940,15 @@ async def admin_show_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(uid):
         await q.edit_message_text("دسترسی ندارید.")
         return ConversationHandler.END
-    tok = get_admin_token()
+    try:
+        tok = get_admin_token()
+    except AdminTokenEncryptionError as exc:
+        log.error("Failed to load admin token: %s", exc)
+        await context.bot.send_message(
+            uid,
+            "❌ Unable to decrypt the admin token. Check AGENT_TOKEN_ENCRYPTION_KEY.",
+        )
+        return ConversationHandler.END
     if not tok:
         await context.bot.send_message(uid, "No admin token set.")
         return ConversationHandler.END
@@ -1953,7 +1962,15 @@ async def admin_rotate_token(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not is_admin(uid):
         await q.edit_message_text("دسترسی ندارید.")
         return ConversationHandler.END
-    tok = rotate_admin_token()
+    try:
+        tok = rotate_admin_token()
+    except AdminTokenEncryptionError as exc:
+        log.error("Failed to rotate admin token: %s", exc)
+        await context.bot.send_message(
+            uid,
+            "❌ Unable to rotate the admin token. Check AGENT_TOKEN_ENCRYPTION_KEY.",
+        )
+        return ConversationHandler.END
     await context.bot.send_message(uid, f"New admin API token:\n<code>{tok}</code>", parse_mode="HTML")
     log.info("Admin %s rotated admin API token", uid)
     return ConversationHandler.END

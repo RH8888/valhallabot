@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from fastapi import Depends, Header, HTTPException, Request, status
 
 from services import with_mysql_cursor
+from models.admins import validate_admin_token
 
 
 @dataclass
@@ -23,9 +24,7 @@ async def get_identity(request: Request, authorization: str | None = Header(None
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
     token = authorization.split()[1]
-    with with_mysql_cursor() as cur:
-        cur.execute("SELECT is_super FROM admins WHERE api_token=%s", (token,))
-        admin_row = cur.fetchone()
+    admin_row = validate_admin_token(token)
     if admin_row:
         role = "super_admin" if admin_row["is_super"] else "admin"
         identity = Identity(role=role)

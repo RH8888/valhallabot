@@ -1,11 +1,12 @@
 from datetime import datetime
 from typing import List
-import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict
 
 from services import with_mysql_cursor
+from services import get_admin_token as service_get_admin_token
+from services import rotate_admin_token as service_rotate_admin_token
 from api.subscription_aggregator import admin_ids, canonical_owner_id
 from api.auth import require_admin, require_super_admin
 
@@ -24,21 +25,15 @@ router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 
 @router.get("/token", summary="Get admin token", dependencies=[Depends(require_super_admin)])
 def get_admin_token():
-    with with_mysql_cursor() as cur:
-        cur.execute("SELECT api_token FROM admins WHERE is_super=1 LIMIT 1")
-        row = cur.fetchone()
-    if not row:
+    token = service_get_admin_token()
+    if not token:
         raise HTTPException(status_code=404, detail="Token not set")
-    return {"api_token": row["api_token"]}
+    return {"api_token": token}
 
 
 @router.post("/token", summary="Rotate admin token", dependencies=[Depends(require_super_admin)])
 def rotate_admin_token():
-    token = secrets.token_hex(32)
-    with with_mysql_cursor() as cur:
-        cur.execute("UPDATE admins SET api_token=%s WHERE is_super=1", (token,))
-        if cur.rowcount == 0:
-            cur.execute("INSERT INTO admins (api_token, is_super) VALUES (%s, 1)", (token,))
+    token = service_rotate_admin_token()
     return {"api_token": token}
 
 
