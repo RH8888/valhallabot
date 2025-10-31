@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from mysql.connector import pooling
 import mysql.connector
 
-from apis import marzneshin, marzban, sanaei, pasarguard
+from apis import marzneshin, marzban, rebecca, sanaei, pasarguard
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | usage_sync | %(message)s",
@@ -24,6 +24,7 @@ POOL = None
 API_MODULES = {
     "marzneshin": marzneshin,
     "marzban": marzban,
+    "rebecca": rebecca,
     "sanaei": sanaei,
     "pasarguard": pasarguard,
 }
