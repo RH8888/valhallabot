@@ -6,9 +6,9 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from api.subscription_aggregator import expand_owner_ids
+from services import with_mysql_cursor
 from bot import (
-    expand_owner_ids,
-    with_mysql_cursor,
     upsert_local_user,
     update_limit,
     reset_used,

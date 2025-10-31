@@ -64,7 +64,7 @@ def rotate_api_token(agent_id: int) -> str:
     """
     token, token_hash = generate_api_token()
     # Import here to avoid circular import with bot.py
-    from bot import with_mysql_cursor
+    from services import with_mysql_cursor
 
     encrypted = _encrypt_token(token)
 
@@ -92,7 +92,7 @@ def get_api_token(agent_id: int) -> str:
 
     Raises ValueError if the agent does not exist.
     """
-    from bot import with_mysql_cursor
+    from services import with_mysql_cursor
 
     with with_mysql_cursor() as cur:
         cur.execute(
@@ -146,7 +146,7 @@ def get_api_token(agent_id: int) -> str:
 def migrate_agent_tokens_to_encrypted():
     """Encrypt legacy plaintext agent tokens stored in the database."""
 
-    from bot import with_mysql_cursor
+    from services import with_mysql_cursor
 
     with with_mysql_cursor() as cur:
         cur.execute(
