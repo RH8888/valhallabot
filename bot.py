@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 
 from dotenv import load_dotenv
-from mysql.connector import pooling, Error as MySQLError
+from mysql.connector import Error as MySQLError
 
 from apis import marzneshin, marzban, sanaei, pasarguard
 
@@ -45,11 +45,25 @@ from telegram.ext import (
     MessageHandler, ContextTypes, filters,
 )
 
-from scripts import usage_sync
-from models.agents import (
-    get_api_token,
-    migrate_agent_tokens_to_encrypted,
-    rotate_api_token,
+from api.subscription_aggregator import (
+    admin_ids,
+    expand_owner_ids,
+    canonical_owner_id,
+)
+from services import (
+    init_mysql_pool,
+    with_mysql_cursor,
+    ensure_schema,
+    get_agent_record,
+    get_agent_token_value,
+    rotate_agent_token_value,
+    get_admin_token,
+    rotate_admin_token,
+    set_agent_quota,
+    set_agent_user_limit,
+    set_agent_max_user_bytes,
+    renew_agent_days,
+    set_agent_active,
 )
 
 # ---------- logging ----------
@@ -95,33 +109,8 @@ def clone_proxy_settings(proxies: dict) -> dict:
     return cleaned
 
 # ---------- roles ----------
-def admin_ids():
-    ids = (os.getenv("ADMIN_IDS") or "").strip()
-    if not ids:
-        return set()
-    return {int(x.strip()) for x in ids.split(",") if x.strip().isdigit()}
-
 def is_admin(tg_id: int) -> bool:
     return tg_id in admin_ids()
-
-def expand_owner_ids(owner_id: int) -> list[int]:
-    """Return list of relevant owner IDs for queries.
-
-    If the supplied owner_id belongs to an admin, include all admin IDs so
-    that multiple admins share the same data. Otherwise return the owner_id
-    itself.
-    """
-    ids = admin_ids()
-    return list(ids) if owner_id in ids else [owner_id]
-
-def canonical_owner_id(owner_id: int) -> int:
-    """Return canonical owner id for inserts/updates.
-
-    Data created by any admin is stored under the first admin id so other
-    admins can access it as well.
-    """
-    ids = expand_owner_ids(owner_id)
-    return ids[0]
 
 # ---------- states ----------
 (
@@ -150,292 +139,6 @@ def canonical_owner_id(owner_id: int) -> int:
     ASK_LIMIT_MSG,
     ASK_SERVICE_EMERGENCY_CFG,
 ) = range(33)
-
-# ---------- MySQL ----------
-MYSQL_POOL = None
-
-
-def init_mysql_pool():
-    """Initialise the global MySQL connection pool if it hasn't been already."""
-    global MYSQL_POOL
-    # Ensure environment variables from a .env file are loaded if present
-    load_dotenv()
-    MYSQL_POOL = pooling.MySQLConnectionPool(
-        pool_name="bot_pool",
-        pool_size=5,
-        host=os.getenv("MYSQL_HOST", "127.0.0.1"),
-        port=int(os.getenv("MYSQL_PORT", "3306")),
-        user=os.getenv("MYSQL_USER", "root"),
-        password=os.getenv("MYSQL_PASSWORD", ""),
-        database=os.getenv("MYSQL_DATABASE", "botdb"),
-        charset="utf8mb4",
-        use_pure=True,
-    )
-
-
-def with_mysql_cursor(dict_=True):
-    """Context manager that yields a MySQL cursor.
-
-    Lazily initialises the connection pool on first use so callers do not need
-    to ensure :func:`init_mysql_pool` was called beforehand.
-    """
-
-    class _Ctx:
-        def __enter__(self):
-            global MYSQL_POOL
-            if MYSQL_POOL is None:
-                init_mysql_pool()
-            self.conn = MYSQL_POOL.get_connection()
-            self.cur = self.conn.cursor(dictionary=dict_)
-            return self.cur
-
-        def __exit__(self, exc, e, tb):
-            if exc is None:
-                self.conn.commit()
-            else:
-                self.conn.rollback()
-            self.cur.close()
-            self.conn.close()
-
-    return _Ctx()
-
-def ensure_schema():
-    with with_mysql_cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS admins(
-                id BIGINT PRIMARY KEY AUTO_INCREMENT,
-                api_token VARCHAR(128) NOT NULL UNIQUE,
-                is_super TINYINT(1) NOT NULL DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS panels(
-                id BIGINT PRIMARY KEY AUTO_INCREMENT,
-                telegram_user_id BIGINT NOT NULL,
-                panel_url VARCHAR(255) NOT NULL,
-                name VARCHAR(128) NOT NULL,
-                panel_type VARCHAR(32) NOT NULL DEFAULT 'marzneshin',
-                admin_username VARCHAR(64) NOT NULL,
-                access_token VARCHAR(2048) NOT NULL,
-                template_username VARCHAR(64) NULL,
-                sub_url VARCHAR(2048) NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE KEY uq_user_url (telegram_user_id, panel_url)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-        try:
-            cur.execute("ALTER TABLE panels ADD COLUMN panel_type VARCHAR(32) NOT NULL DEFAULT 'marzneshin' AFTER name")
-        except MySQLError:
-            pass
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS app_users(
-                id BIGINT PRIMARY KEY AUTO_INCREMENT,
-                telegram_user_id BIGINT NOT NULL,
-                username VARCHAR(64) NOT NULL,
-                app_key VARCHAR(64) NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE KEY uq_owner_username (telegram_user_id, username)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS local_users(
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                owner_id BIGINT NOT NULL,
-                username VARCHAR(64) NOT NULL,
-                plan_limit_bytes BIGINT NOT NULL,
-                used_bytes BIGINT NOT NULL DEFAULT 0,
-                expire_at DATETIME NULL,
-                note VARCHAR(255),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                disabled_pushed TINYINT(1) NOT NULL DEFAULT 0,
-                disabled_pushed_at DATETIME NULL,
-                UNIQUE KEY uq_local(owner_id, username)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS local_user_keys(
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                local_user_id BIGINT NOT NULL,
-                access_key VARCHAR(64) NOT NULL,
-                expires_at DATETIME NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE KEY uq_local_user(local_user_id),
-                UNIQUE KEY uq_access_key(access_key),
-                FOREIGN KEY (local_user_id) REFERENCES local_users(id) ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS local_user_panel_links(
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                owner_id BIGINT NOT NULL,
-                local_username VARCHAR(64) NOT NULL,
-                panel_id BIGINT NOT NULL,
-                remote_username VARCHAR(128) NOT NULL,
-                last_used_traffic BIGINT NOT NULL DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                UNIQUE KEY uq_link(owner_id, local_username, panel_id),
-                FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS panel_disabled_configs(
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                telegram_user_id BIGINT NOT NULL,
-                panel_id BIGINT NOT NULL,
-                config_name VARCHAR(255) NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE KEY uq_panel_cfg(panel_id, config_name),
-                INDEX idx_panel(panel_id),
-                FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS panel_disabled_numbers(
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                telegram_user_id BIGINT NOT NULL,
-                panel_id BIGINT NOT NULL,
-                config_index INT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE KEY uq_panel_idx(panel_id, config_index),
-                INDEX idx_panel(panel_id),
-                FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-        # agents
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS agents(
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                telegram_user_id BIGINT NOT NULL UNIQUE,
-                name VARCHAR(128) NOT NULL,
-                plan_limit_bytes BIGINT NOT NULL DEFAULT 0,
-                expire_at DATETIME NULL,
-                active TINYINT(1) NOT NULL DEFAULT 1,
-                user_limit BIGINT NOT NULL DEFAULT 0,
-                max_user_bytes BIGINT NOT NULL DEFAULT 0,
-                total_used_bytes BIGINT NOT NULL DEFAULT 0,
-                api_token CHAR(64) UNIQUE,
-                api_token_encrypted TEXT,
-                disabled_pushed TINYINT(1) NOT NULL DEFAULT 0,
-                disabled_pushed_at DATETIME NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-        try:
-            cur.execute("ALTER TABLE agents ADD COLUMN user_limit BIGINT NOT NULL DEFAULT 0")
-        except MySQLError:
-            pass
-        try:
-            cur.execute("ALTER TABLE agents ADD COLUMN max_user_bytes BIGINT NOT NULL DEFAULT 0")
-        except MySQLError:
-            pass
-        added_total = False
-        try:
-            cur.execute("ALTER TABLE agents ADD COLUMN total_used_bytes BIGINT NOT NULL DEFAULT 0")
-            added_total = True
-        except MySQLError:
-            pass
-        try:
-            cur.execute("ALTER TABLE agents ADD COLUMN api_token CHAR(64) UNIQUE")
-        except MySQLError:
-            pass
-        try:
-            cur.execute("ALTER TABLE agents ADD COLUMN api_token_encrypted TEXT")
-        except MySQLError:
-            pass
-        if added_total:
-            cur.execute(
-                """
-                UPDATE agents a
-                SET total_used_bytes = (
-                    SELECT COALESCE(SUM(used_bytes),0) FROM local_users WHERE owner_id=a.telegram_user_id
-                )
-                """
-            )
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS agent_panels(
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                agent_tg_id BIGINT NOT NULL,
-                panel_id BIGINT NOT NULL,
-                UNIQUE KEY uq_agent_panel(agent_tg_id, panel_id),
-                FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-
-        # services
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS services(
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(128) NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS service_panels(
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                service_id BIGINT NOT NULL,
-                panel_id BIGINT NOT NULL,
-                UNIQUE KEY uq_service_panel(service_id, panel_id),
-                FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE,
-                FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-        try:
-            cur.execute("ALTER TABLE agents ADD COLUMN service_id BIGINT NULL")
-        except MySQLError:
-            pass
-        try:
-            cur.execute("ALTER TABLE local_users ADD COLUMN service_id BIGINT NULL")
-        except MySQLError:
-            pass
-
-        # account presets
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS account_presets(
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                telegram_user_id BIGINT NOT NULL,
-                limit_bytes BIGINT NOT NULL,
-                duration_days INT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE KEY uq_owner_preset(telegram_user_id, limit_bytes, duration_days)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS settings(
-                owner_id BIGINT NOT NULL,
-                `key` VARCHAR(64) NOT NULL,
-                `value` VARCHAR(4096) NOT NULL,
-                PRIMARY KEY (owner_id, `key`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-
-    migrate_agent_tokens_to_encrypted()
-
-
-def get_setting(owner_id: int, key: str):
-    oid = canonical_owner_id(owner_id)
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            "SELECT value FROM settings WHERE owner_id=%s AND `key`=%s",
-            (oid, key),
-        )
-        row = cur.fetchone()
-        return row["value"] if row else None
-
-
-def set_setting(owner_id: int, key: str, value: str):
-    oid = canonical_owner_id(owner_id)
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO settings (owner_id, `key`, `value`)
-            VALUES (%s, %s, %s)
-            ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)
-            """,
-            (oid, key, value),
-        )
 
 # ---------- helpers ----------
 UNIT = 1024
@@ -1144,57 +847,16 @@ def upsert_agent(tg_id: int, name: str):
             )
             new_agent_id = cur.lastrowid
     if new_agent_id:
-        token = rotate_api_token(new_agent_id)
+        token = rotate_agent_token_value(new_agent_id)
     return token
 
 def get_agent(tg_id: int):
-    with with_mysql_cursor() as cur:
-        cur.execute("SELECT * FROM agents WHERE telegram_user_id=%s", (tg_id,))
-        return cur.fetchone()
-
-def set_agent_quota(tg_id: int, limit_bytes: int):
-    with with_mysql_cursor() as cur:
-        cur.execute("UPDATE agents SET plan_limit_bytes=%s WHERE telegram_user_id=%s",
-                    (int(limit_bytes), tg_id))
-    try:
-        usage_sync.sync_agent_now(tg_id)
-    except Exception as e:
-        log.warning("sync_agent_now failed for %s: %s", tg_id, e)
-
-def set_agent_user_limit(tg_id: int, max_users: int):
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            "UPDATE agents SET user_limit=%s WHERE telegram_user_id=%s",
-            (int(max_users), tg_id),
-        )
-
-def set_agent_max_user_bytes(tg_id: int, max_bytes: int):
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            "UPDATE agents SET max_user_bytes=%s WHERE telegram_user_id=%s",
-            (int(max_bytes), tg_id),
-        )
-
-def renew_agent_days(tg_id: int, add_days: int):
-    # if no expire_at -> set now + days; else add days
-    with with_mysql_cursor() as cur:
-        cur.execute("SELECT expire_at FROM agents WHERE telegram_user_id=%s", (tg_id,))
-        row = cur.fetchone()
-        if row and row.get("expire_at"):
-            cur.execute("UPDATE agents SET expire_at = expire_at + INTERVAL %s DAY WHERE telegram_user_id=%s",
-                        (add_days, tg_id))
-        else:
-            cur.execute("UPDATE agents SET expire_at = UTC_TIMESTAMP() + INTERVAL %s DAY WHERE telegram_user_id=%s",
-                        (add_days, tg_id))
+    return get_agent_record(tg_id)
 
 def list_agents():
     with with_mysql_cursor() as cur:
         cur.execute("SELECT * FROM agents ORDER BY created_at DESC")
         return cur.fetchall()
-
-def set_agent_active(tg_id: int, active: bool):
-    with with_mysql_cursor() as cur:
-        cur.execute("UPDATE agents SET active=%s WHERE telegram_user_id=%s", (1 if active else 0, tg_id))
 
 def list_agent_panel_ids(agent_tg_id: int):
     with with_mysql_cursor() as cur:
@@ -2249,9 +1911,9 @@ async def agent_show_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("دسترسی ندارید.")
         return ConversationHandler.END
     try:
-        tok = get_api_token(ag["id"])
-    except Exception:
-        tok = rotate_api_token(ag["id"])
+        tok = get_agent_token_value(ag["id"])
+    except ValueError:
+        tok = rotate_agent_token_value(ag["id"])
         log.warning("Token missing for agent %s, generated a new one", uid)
     await context.bot.send_message(
         uid, f"Your API token:\n<code>{tok}</code>", parse_mode="HTML"
@@ -2266,7 +1928,7 @@ async def agent_rotate_token(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not ag:
         await q.edit_message_text("دسترسی ندارید.")
         return ConversationHandler.END
-    tok = rotate_api_token(ag["id"])
+    tok = rotate_agent_token_value(ag["id"])
     await context.bot.send_message(uid, f"New API token:\n<code>{tok}</code>", parse_mode="HTML")
     log.info("Agent %s rotated API token", uid)
     return ConversationHandler.END
@@ -2277,13 +1939,10 @@ async def admin_show_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(uid):
         await q.edit_message_text("دسترسی ندارید.")
         return ConversationHandler.END
-    with with_mysql_cursor() as cur:
-        cur.execute("SELECT api_token FROM admins WHERE is_super=1 LIMIT 1")
-        row = cur.fetchone()
-    if not row:
+    tok = get_admin_token()
+    if not tok:
         await context.bot.send_message(uid, "No admin token set.")
         return ConversationHandler.END
-    tok = row["api_token"]
     await context.bot.send_message(uid, f"Admin API token:\n<code>{tok}</code>", parse_mode="HTML")
     log.info("Admin %s viewed admin API token", uid)
     return ConversationHandler.END
@@ -2294,11 +1953,7 @@ async def admin_rotate_token(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not is_admin(uid):
         await q.edit_message_text("دسترسی ندارید.")
         return ConversationHandler.END
-    tok = secrets.token_hex(32)
-    with with_mysql_cursor() as cur:
-        cur.execute("UPDATE admins SET api_token=%s WHERE is_super=1", (tok,))
-        if cur.rowcount == 0:
-            cur.execute("INSERT INTO admins (api_token, is_super) VALUES (%s, 1)", (tok,))
+    tok = rotate_admin_token()
     await context.bot.send_message(uid, f"New admin API token:\n<code>{tok}</code>", parse_mode="HTML")
     log.info("Admin %s rotated admin API token", uid)
     return ConversationHandler.END
@@ -2315,9 +1970,9 @@ async def admin_show_agent_token(update: Update, context: ContextTypes.DEFAULT_T
         await q.edit_message_text("نماینده پیدا نشد.")
         return ConversationHandler.END
     try:
-        tok = get_api_token(a["id"])
-    except Exception:
-        tok = rotate_api_token(a["id"])
+        tok = get_agent_token_value(a["id"])
+    except ValueError:
+        tok = rotate_agent_token_value(a["id"])
         log.warning("Token missing for agent %s, generated a new one", atg)
     await context.bot.send_message(
         uid,
@@ -2338,7 +1993,7 @@ async def admin_rotate_agent_token(update: Update, context: ContextTypes.DEFAULT
     if not a:
         await q.edit_message_text("نماینده پیدا نشد.")
         return ConversationHandler.END
-    tok = rotate_api_token(a["id"])
+    tok = rotate_agent_token_value(a["id"])
     await context.bot.send_message(uid, f"New token for {a['name']}:\n<code>{tok}</code>", parse_mode="HTML")
     log.info("Admin %s rotated token for agent %s", uid, atg)
     return await show_agent_card(q, context, atg, notice="✅ Token rotated.")

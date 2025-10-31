@@ -6,7 +6,8 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from bot import with_mysql_cursor, get_app_key
+from services import with_mysql_cursor
+from bot import get_app_key
 
 router = APIRouter(prefix="/activation", tags=["Activation"])
 

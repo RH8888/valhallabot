@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
-from bot import with_mysql_cursor
+from services import with_mysql_cursor
 
 
 @dataclass

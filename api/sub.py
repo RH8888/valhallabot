@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from api.auth import get_identity, Identity
-from app import (
+from api.subscription_aggregator.flask_app import (
     get_local_user,
     list_mapped_links,
     list_all_panels,

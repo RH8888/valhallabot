@@ -5,7 +5,8 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict
 
-from bot import with_mysql_cursor, admin_ids, canonical_owner_id
+from services import with_mysql_cursor
+from api.subscription_aggregator import admin_ids, canonical_owner_id
 from api.auth import require_admin, require_super_admin
 
 
