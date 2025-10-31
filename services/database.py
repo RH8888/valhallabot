@@ -69,10 +69,20 @@ def ensure_schema() -> None:
             CREATE TABLE IF NOT EXISTS admins(
                 id BIGINT PRIMARY KEY AUTO_INCREMENT,
                 api_token VARCHAR(128) NOT NULL UNIQUE,
+                api_token_encrypted TEXT,
+                api_token_raw VARCHAR(128) NULL,
                 is_super TINYINT(1) NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+        try:
+            cur.execute("ALTER TABLE admins ADD COLUMN api_token_encrypted TEXT")
+        except MySQLError:
+            pass
+        try:
+            cur.execute("ALTER TABLE admins ADD COLUMN api_token_raw VARCHAR(128) NULL")
+        except MySQLError:
+            pass
         cur.execute("""
             CREATE TABLE IF NOT EXISTS panels(
                 id BIGINT PRIMARY KEY AUTO_INCREMENT,

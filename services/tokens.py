@@ -1,9 +1,9 @@
 """Token management helpers extracted from the bot layer."""
 from __future__ import annotations
 
-import secrets
 from typing import Optional
 
+from models.admins import get_admin_token as _get_admin_token, rotate_admin_token as _rotate_admin_token
 from models.agents import get_api_token, rotate_api_token
 
 from .database import with_mysql_cursor
@@ -28,20 +28,12 @@ def rotate_agent_token_value(agent_db_id: int) -> str:
 
 def get_admin_token() -> Optional[str]:
     """Return the current administrator API token if configured."""
-    with with_mysql_cursor() as cur:
-        cur.execute("SELECT api_token FROM admins WHERE is_super=1 LIMIT 1")
-        row = cur.fetchone()
-        return row["api_token"] if row else None
+    return _get_admin_token()
 
 
 def rotate_admin_token() -> str:
     """Generate and persist a new administrator API token."""
-    token = secrets.token_hex(32)
-    with with_mysql_cursor() as cur:
-        cur.execute("UPDATE admins SET api_token=%s WHERE is_super=1", (token,))
-        if cur.rowcount == 0:
-            cur.execute("INSERT INTO admins (api_token, is_super) VALUES (%s, 1)", (token,))
-    return token
+    return _rotate_admin_token()
 
 
 __all__ = [
