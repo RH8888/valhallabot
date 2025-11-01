@@ -24,8 +24,8 @@ from flask import Flask, Response, abort, request, render_template_string
 from types import SimpleNamespace
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dotenv import load_dotenv
-from mysql.connector import pooling, errors as mysql_errors, errorcode
+from services import init_mysql_pool, with_mysql_cursor
+from services.database import errorcode, mysql_errors
 from apis import sanaei, pasarguard
 from .ownership import admin_ids, expand_owner_ids, canonical_owner_id
 
@@ -35,36 +35,15 @@ logging.basicConfig(
 )
 log = logging.getLogger("flask_agg")
 
-POOL = None
 ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 with (BASE_DIR / "templates" / "index.html").open(encoding="utf-8") as f:
     HTML_TEMPLATE = f.read()
 
-def init_pool():
-    global POOL
-    # Allow tuning the number of MySQL connections via the MYSQL_POOL_SIZE
-    # environment variable.  Default to a value based on CPU cores to better
-    # match the level of concurrency the host can sustain.
-    default_pool = (os.cpu_count() or 1) * 5
-    pool_size = int(os.getenv("MYSQL_POOL_SIZE", default_pool))
-    POOL = pooling.MySQLConnectionPool(
-        pool_name="flask_pool",
-        pool_size=pool_size,
-        host=os.getenv("MYSQL_HOST", "127.0.0.1"),
-        port=int(os.getenv("MYSQL_PORT", "3306")),
-        user=os.getenv("MYSQL_USER", "root"),
-        password=os.getenv("MYSQL_PASSWORD", ""),
-        database=os.getenv("MYSQL_DATABASE", "botdb"),
-        charset="utf8mb4",
-        use_pure=True,
-    )
-
 # Load environment variables and initialize the MySQL pool on import so that
 # the application is ready for WSGI servers like Gunicorn.
-load_dotenv()
-init_pool()
+init_mysql_pool()
 
 FETCH_CACHE_TTL = int(os.getenv("FETCH_CACHE_TTL", "300"))
 _fetch_user_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
@@ -72,32 +51,12 @@ _fetch_user_lock = RLock()
 _fetch_links_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
 _fetch_links_lock = RLock()
 
-class CurCtx:
-    def __init__(self, dict_=True):
-        self.dict_ = dict_
-    def __enter__(self):
-        try:
-            self.conn = POOL.get_connection()
-        except pooling.PoolError:
-            log.error("MySQL connection pool exhausted; consider increasing MYSQL_POOL_SIZE")
-            raise
-        self.cur = self.conn.cursor(dictionary=self.dict_)
-        return self.cur
-    def __exit__(self, exc_type, exc, tb):
-        try:
-            if exc_type is None:
-                self.conn.commit()
-        finally:
-            self.cur.close()
-            self.conn.close()
-
-
 _settings_table_missing_logged = False
 
 
 def get_setting(owner_id: int, key: str):
     oid = canonical_owner_id(owner_id)
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         try:
             cur.execute(
                 "SELECT value FROM settings WHERE owner_id=%s AND `key`=%s LIMIT 1",
@@ -118,7 +77,7 @@ def get_setting(owner_id: int, key: str):
 
 # ---------- queries ----------
 def get_owner_id(app_username, app_key):
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute(
             "SELECT telegram_user_id FROM app_users WHERE username=%s AND app_key=%s LIMIT 1",
             (app_username, app_key),
@@ -129,7 +88,7 @@ def get_owner_id(app_username, app_key):
 def get_local_user(owner_id, local_username):
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute(
             f"""
             SELECT owner_id, username, plan_limit_bytes, used_bytes, expire_at, disabled_pushed, service_id
@@ -149,7 +108,7 @@ def list_mapped_links(owner_id, local_username):
     """
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute(
             f"""
             SELECT lup.panel_id, lup.remote_username,
@@ -171,7 +130,7 @@ def list_all_panels(owner_id):
     """
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute(
             f"SELECT id, panel_url, access_token, panel_type FROM panels WHERE telegram_user_id IN ({placeholders})",
             tuple(ids),
@@ -181,7 +140,7 @@ def list_all_panels(owner_id):
 def mark_user_disabled(owner_id, local_username):
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute(
             f"""
             UPDATE local_users
@@ -439,7 +398,7 @@ def load_disabled_filters(panel_ids: list[int]):
     placeholders = ",".join(["%s"] * len(panel_ids))
     names: dict[int, set[str]] = {}
     nums: dict[int, set[int]] = {}
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute(
             f"SELECT panel_id, config_name FROM panel_disabled_configs WHERE panel_id IN ({placeholders})",
             tuple(panel_ids),
@@ -462,7 +421,7 @@ def load_disabled_filters(panel_ids: list[int]):
 def get_agent(owner_id: int):
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute(
             f"""
             SELECT telegram_user_id, plan_limit_bytes, expire_at, disabled_pushed
@@ -477,7 +436,7 @@ def get_agent(owner_id: int):
 def get_agent_total_used(owner_id: int) -> int:
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute(
             f"SELECT total_used_bytes AS su FROM agents WHERE telegram_user_id IN ({placeholders}) AND active=1 LIMIT 1",
             tuple(ids),
@@ -488,7 +447,7 @@ def get_agent_total_used(owner_id: int) -> int:
 def list_all_agent_links(owner_id: int):
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute(
             f"""
             SELECT lup.local_username, lup.remote_username, p.panel_url, p.access_token, p.panel_type
@@ -503,7 +462,7 @@ def list_all_agent_links(owner_id: int):
 def mark_agent_disabled(owner_id: int):
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute(
             f"""
             UPDATE agents
