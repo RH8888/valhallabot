@@ -1,34 +1,67 @@
 """Database utilities shared across application layers."""
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import AbstractContextManager
-from typing import Any
+from typing import Any, Dict
 
 from dotenv import load_dotenv
-from mysql.connector import pooling, Error as MySQLError
+from mysql.connector import Error as MySQLError
+from mysql.connector import errorcode, errors as mysql_errors, pooling
+
+log = logging.getLogger(__name__)
 
 
 MYSQL_POOL: pooling.MySQLConnectionPool | None = None
+PoolError = pooling.PoolError
 
 
-def init_mysql_pool() -> None:
+def _int_from_env(key: str, default: int) -> int:
+    value = os.getenv(key)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        log.warning("Invalid integer for %s=%s; using default %s", key, value, default)
+        return default
+
+
+def _build_pool_config(overrides: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    load_dotenv()
+    default_pool_size = (os.cpu_count() or 1) * 5
+    config: Dict[str, Any] = {
+        "pool_name": os.getenv("MYSQL_POOL_NAME", "bot_pool"),
+        "pool_size": _int_from_env("MYSQL_POOL_SIZE", default_pool_size),
+        "host": os.getenv("MYSQL_HOST", "127.0.0.1"),
+        "port": _int_from_env("MYSQL_PORT", 3306),
+        "user": os.getenv("MYSQL_USER", "root"),
+        "password": os.getenv("MYSQL_PASSWORD", ""),
+        "database": os.getenv("MYSQL_DATABASE", "botdb"),
+        "charset": os.getenv("MYSQL_CHARSET", "utf8mb4"),
+        "use_pure": True,
+    }
+    if overrides:
+        config.update({k: v for k, v in overrides.items() if v is not None})
+    return config
+
+
+def init_mysql_pool(**overrides: Any) -> None:
     """Initialise the global MySQL connection pool if needed."""
     global MYSQL_POOL
     if MYSQL_POOL is not None:
         return
-    load_dotenv()
-    MYSQL_POOL = pooling.MySQLConnectionPool(
-        pool_name="bot_pool",
-        pool_size=5,
-        host=os.getenv("MYSQL_HOST", "127.0.0.1"),
-        port=int(os.getenv("MYSQL_PORT", "3306")),
-        user=os.getenv("MYSQL_USER", "root"),
-        password=os.getenv("MYSQL_PASSWORD", ""),
-        database=os.getenv("MYSQL_DATABASE", "botdb"),
-        charset="utf8mb4",
-        use_pure=True,
-    )
+    config = _build_pool_config(overrides)
+    MYSQL_POOL = pooling.MySQLConnectionPool(**config)
+
+
+def get_mysql_pool() -> pooling.MySQLConnectionPool:
+    """Return the active MySQL connection pool, initialising it on demand."""
+    global MYSQL_POOL
+    if MYSQL_POOL is None:
+        init_mysql_pool()
+    return MYSQL_POOL
 
 
 class _CursorContext(AbstractContextManager):
@@ -38,10 +71,14 @@ class _CursorContext(AbstractContextManager):
         self.cur: Any = None
 
     def __enter__(self):
-        global MYSQL_POOL
-        if MYSQL_POOL is None:
-            init_mysql_pool()
-        self.conn = MYSQL_POOL.get_connection()
+        pool = get_mysql_pool()
+        try:
+            self.conn = pool.get_connection()
+        except PoolError:
+            log.error(
+                "MySQL connection pool exhausted; consider increasing MYSQL_POOL_SIZE"
+            )
+            raise
         self.cur = self.conn.cursor(dictionary=self.dict_)
         return self.cur
 
@@ -52,8 +89,10 @@ class _CursorContext(AbstractContextManager):
             else:
                 self.conn.rollback()
         finally:
-            self.cur.close()
-            self.conn.close()
+            if self.cur is not None:
+                self.cur.close()
+            if self.conn is not None:
+                self.conn.close()
         return False
 
 
@@ -283,4 +322,14 @@ def ensure_schema() -> None:
         """)
 
 
-__all__ = ["init_mysql_pool", "with_mysql_cursor", "ensure_schema", "MYSQL_POOL"]
+__all__ = [
+    "init_mysql_pool",
+    "get_mysql_pool",
+    "with_mysql_cursor",
+    "ensure_schema",
+    "MYSQL_POOL",
+    "MySQLError",
+    "mysql_errors",
+    "PoolError",
+    "errorcode",
+]

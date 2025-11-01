@@ -8,8 +8,8 @@ from urllib.parse import urljoin
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
-from mysql.connector import pooling
-import mysql.connector
+from services import init_mysql_pool, with_mysql_cursor
+from services.database import mysql_errors
 
 from apis import marzneshin, marzban, rebecca, sanaei, pasarguard
 
@@ -18,8 +18,6 @@ logging.basicConfig(
     level=logging.INFO,
 )
 log = logging.getLogger("usage_sync")
-
-POOL = None
 
 API_MODULES = {
     "marzneshin": marzneshin,
@@ -34,48 +32,11 @@ def get_api(panel_type: str):
     """Return API module for the given panel type."""
     return API_MODULES.get(panel_type or "marzneshin", marzneshin)
 
-def init_db():
-    global POOL
-    POOL = pooling.MySQLConnectionPool(
-        pool_name="usage_pool",
-        pool_size=5,
-        host=os.getenv("MYSQL_HOST", "127.0.0.1"),
-        port=int(os.getenv("MYSQL_PORT", "3306")),
-        user=os.getenv("MYSQL_USER", "root"),
-        password=os.getenv("MYSQL_PASSWORD", ""),
-        database=os.getenv("MYSQL_DATABASE", "botdb"),
-        charset="utf8mb4",
-        use_pure=True,
-    )
-
-
-def init_if_needed():
-    """Initialize DB pool if not already initialized."""
-    global POOL
-    if POOL is None:
-        load_dotenv()
-        init_db()
-
-class CurCtx:
-    def __init__(self, dict_=True):
-        self.dict_ = dict_
-    def __enter__(self):
-        self.conn = POOL.get_connection()
-        self.cur = self.conn.cursor(dictionary=self.dict_)
-        return self.cur
-    def __exit__(self, exc_type, exc, tb):
-        try:
-            if exc_type is None:
-                self.conn.commit()
-        finally:
-            self.cur.close()
-            self.conn.close()
-
 # ---------------- existing per-link / per-user logic ----------------
 
 def ensure_links_table():
     """Create local_user_panel_links table if missing."""
-    with CurCtx(dict_=False) as cur:
+    with with_mysql_cursor(dict_=False) as cur:
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS local_user_panel_links(
@@ -96,7 +57,7 @@ def ensure_links_table():
 
 def fetch_all_links():
     try:
-        with CurCtx() as cur:
+        with with_mysql_cursor() as cur:
             cur.execute(
                 """
                 SELECT lup.id AS link_id,
@@ -114,7 +75,7 @@ def fetch_all_links():
                 """
             )
             return cur.fetchall()
-    except mysql.connector.errors.ProgrammingError as e:
+    except mysql_errors.ProgrammingError as e:
         if getattr(e, "errno", None) == 1146:  # table doesn't exist
             log.warning("local_user_panel_links table missing; creating")
             ensure_links_table()
@@ -143,7 +104,7 @@ def fetch_used_traffic(panel_type, panel_url, bearer, remote_username):
 def add_usage(owner_id, local_username, delta):
     if delta <= 0:
         return
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute(
             """
             UPDATE local_users
@@ -162,14 +123,14 @@ def add_usage(owner_id, local_username, delta):
         )
 
 def update_last(link_id, new_used):
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute(
             "UPDATE local_user_panel_links SET last_used_traffic=%s WHERE id=%s",
             (int(new_used), int(link_id)),
         )
 
 def get_local_user(owner_id, local_username):
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute("""
             SELECT plan_limit_bytes, used_bytes, disabled_pushed
             FROM local_users
@@ -179,7 +140,7 @@ def get_local_user(owner_id, local_username):
         return cur.fetchone()
 
 def list_links_of_local_user(owner_id, local_username):
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute("""
             SELECT lup.panel_id, lup.remote_username, p.panel_url, p.access_token, p.panel_type
             FROM local_user_panel_links lup
@@ -189,7 +150,7 @@ def list_links_of_local_user(owner_id, local_username):
         return cur.fetchall()
 
 def mark_user_disabled(owner_id, local_username):
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute("""
             UPDATE local_users
             SET disabled_pushed=1, disabled_pushed_at=NOW()
@@ -220,7 +181,7 @@ def enable_remote(panel_type, panel_url, token, remote_username):
     return (200 if all_ok else None), last_msg
 
 def mark_user_enabled(owner_id, local_username):
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute("""
             UPDATE local_users
             SET disabled_pushed=0, disabled_pushed_at=NULL
@@ -267,7 +228,7 @@ def try_enable_if_user_ok(owner_id, local_username):
 
 def get_agent(owner_id: int):
     """owner_id همان Telegram User ID نماینده/ادمین است."""
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute("""
             SELECT telegram_user_id, name, plan_limit_bytes, expire_at, active, disabled_pushed
             FROM agents
@@ -277,7 +238,7 @@ def get_agent(owner_id: int):
         return cur.fetchone()
 
 def total_used_by_owner(owner_id: int) -> int:
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute(
             "SELECT total_used_bytes AS tot FROM agents WHERE telegram_user_id=%s", (owner_id,)
         )
@@ -285,13 +246,13 @@ def total_used_by_owner(owner_id: int) -> int:
         return int(row.get("tot") or 0) if row else 0
 
 def list_all_local_usernames(owner_id: int):
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute("SELECT username FROM local_users WHERE owner_id=%s", (owner_id,))
         return [r["username"] for r in cur.fetchall()]
 
 def list_agent_assigned_panels(owner_id: int):
     """پنل‌هایی که به نماینده assign شده‌اند (agent_panels)."""
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute("""
             SELECT p.id, p.panel_url, p.access_token, p.panel_type
             FROM agent_panels ap
@@ -301,7 +262,7 @@ def list_agent_assigned_panels(owner_id: int):
         return cur.fetchall()
 
 def mark_agent_disabled(owner_id: int):
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute("""
             UPDATE agents
             SET disabled_pushed=1, disabled_pushed_at=NOW()
@@ -309,7 +270,7 @@ def mark_agent_disabled(owner_id: int):
         """, (owner_id,))
 
 def mark_all_users_disabled(owner_id: int):
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute("""
             UPDATE local_users
             SET disabled_pushed=1, disabled_pushed_at=NOW()
@@ -337,7 +298,7 @@ def enable_user_on_assigned_panels(owner_id: int, username: str):
             log.info("(assigned) enabled %s on %s", username, p["panel_url"])
 
 def mark_agent_enabled(owner_id: int):
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute("""
             UPDATE agents
             SET disabled_pushed=0, disabled_pushed_at=NULL
@@ -345,7 +306,7 @@ def mark_agent_enabled(owner_id: int):
         """, (owner_id,))
 
 def mark_all_users_enabled(owner_id: int):
-    with CurCtx() as cur:
+    with with_mysql_cursor() as cur:
         cur.execute("""
             UPDATE local_users
             SET disabled_pushed=0, disabled_pushed_at=NULL
@@ -446,7 +407,7 @@ def try_enable_agent_if_ok(owner_id: int):
 
 def sync_agent_now(owner_id: int):
     """Public helper for bot to immediately re-check agent status."""
-    init_if_needed()
+    init_mysql_pool()
     try:
         try_disable_agent_if_exceeded(owner_id)
         try_enable_agent_if_ok(owner_id)
@@ -501,7 +462,7 @@ def loop():
 
 def main():
     load_dotenv()
-    init_db()
+    init_mysql_pool()
     loop()
 
 if __name__ == "__main__":
