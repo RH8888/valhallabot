@@ -555,28 +555,22 @@ def build_user(local_username, app_key, lu, remote=None):
     user["is_active"] = user["enabled"] and not user["expired"] and not user["data_limit_reached"]
     return user
 
-def _require_owner(local_username, app_key):
+@app.route("/sub/<local_username>/<app_key>/links", methods=["GET"])
+def unified_links(local_username, app_key):
     owner_id = get_owner_id(local_username, app_key)
     if not owner_id:
         abort(404)
-    return owner_id
 
+    want_html = "text/html" in request.headers.get("Accept", "")
 
-def _wants_html_response():
-    return "text/html" in request.headers.get("Accept", "")
-
-
-def _get_local_user_or_response(owner_id, local_username, app_key, want_html):
     lu = get_local_user(owner_id, local_username)
-    if lu:
-        return lu, None
-    if want_html:
-        user = build_user(local_username, app_key, {})
-        return None, render_template_string(HTML_TEMPLATE, user=user)
-    return None, Response("", mimetype="text/plain")
+    if not lu:
+        if want_html:
+            user = build_user(local_username, app_key, {})
+            return render_template_string(HTML_TEMPLATE, user=user)
+        return Response("", mimetype="text/plain")
 
-
-def _enforce_agent_quota(owner_id, want_html):
+    # ---- Agent-level quota/expiry enforcement (global gate) ----
     ag = get_agent(owner_id)
     agent_blocked = False
     if ag:
@@ -592,24 +586,15 @@ def _enforce_agent_quota(owner_id, want_html):
             agent_blocked = True
             if not pushed_a:
                 for l in list_all_agent_links(owner_id):
-                    code, msg = disable_remote(
-                        l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"]
-                    )
+                    code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
                     if code and code != 200:
-                        log.warning(
-                            "AGENT disable on %s@%s -> %s %s",
-                            l["remote_username"],
-                            l["panel_url"],
-                            code,
-                            msg,
-                        )
+                        log.warning("AGENT disable on %s@%s -> %s %s",
+                                    l["remote_username"], l["panel_url"], code, msg)
                 mark_agent_disabled(owner_id)
             if not want_html:
-                return agent_blocked, Response("", mimetype="text/plain")
-    return agent_blocked, None
+                return Response("", mimetype="text/plain")
 
-
-def _enforce_user_quota(owner_id, local_username, lu, want_html):
+    # ---- User-level quota enforcement ----
     limit = int(lu["plan_limit_bytes"])
     used = int(lu["used_bytes"])
     pushed = int(lu.get("disabled_pushed", 0) or 0)
@@ -620,28 +605,13 @@ def _enforce_user_quota(owner_id, local_username, lu, want_html):
             links = list_mapped_links(owner_id, local_username)
             if not links:
                 panels = list_all_panels(owner_id)
-                links = [
-                    {
-                        "panel_id": p["id"],
-                        "remote_username": local_username,
-                        "panel_url": p["panel_url"],
-                        "access_token": p["access_token"],
-                        "panel_type": p["panel_type"],
-                    }
-                    for p in panels
-                ]
+                links = [{"panel_id": p["id"], "remote_username": local_username,
+                          "panel_url": p["panel_url"], "access_token": p["access_token"],
+                          "panel_type": p["panel_type"]} for p in panels]
             for l in links:
-                code, msg = disable_remote(
-                    l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"]
-                )
+                code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
                 if code and code != 200:
-                    log.warning(
-                        "disable on %s@%s -> %s %s",
-                        l["remote_username"],
-                        l["panel_url"],
-                        code,
-                        msg,
-                    )
+                    log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
             mark_user_disabled(owner_id, local_username)
         if not want_html:
             limit_config = os.getenv(
@@ -662,16 +632,12 @@ def _enforce_user_quota(owner_id, local_username, lu, want_html):
             resp.headers["X-Used-Bytes"] = str(used)
             resp.headers["X-Remaining-Bytes"] = "0"
             resp.headers["X-Disabled-Pushed"] = "1"
-            return limit_reached, resp, limit, used, pushed
-    return limit_reached, None, limit, used, pushed
+            return resp
 
-
-def _collect_subscription_payload(
-    owner_id, local_username, want_html, agent_blocked, limit_reached, lu
-):
+    # ---- Aggregate & filter links (per-panel config-name filters) ----
+    mapped = list_mapped_links(owner_id, local_username)
     all_links, errors, remote_info = [], [], None
     if not agent_blocked and not limit_reached:
-        mapped = list_mapped_links(owner_id, local_username)
         if mapped:
             all_links, errors, remote_info = collect_links(mapped, local_username, want_html)
         else:
@@ -698,26 +664,6 @@ def _collect_subscription_payload(
     if emerg:
         uniq.append(emerg.strip())
         uniq = filter_dedupe(uniq)
-
-    return uniq, errors, remote_info
-
-
-def _render_unified_links_response(
-    want_html,
-    local_username,
-    app_key,
-    lu,
-    remote_info,
-    uniq,
-    errors,
-    limit,
-    used,
-    pushed,
-):
-    if want_html:
-        user = build_user(local_username, app_key, lu, remote_info)
-        return render_template_string(HTML_TEMPLATE, user=user)
-
     if uniq:
         body = "\n".join(uniq) + "\n"
     elif errors:
@@ -726,49 +672,15 @@ def _render_unified_links_response(
         body = ""
 
     remaining = (limit - used) if limit > 0 else -1
+    if want_html:
+        user = build_user(local_username, app_key, lu, remote_info)
+        return render_template_string(HTML_TEMPLATE, user=user)
     resp = Response(body, mimetype="text/plain")
     resp.headers["X-Plan-Limit-Bytes"] = str(limit)
     resp.headers["X-Used-Bytes"] = str(used)
     resp.headers["X-Remaining-Bytes"] = str(max(0, remaining)) if remaining >= 0 else "unlimited"
     resp.headers["X-Disabled-Pushed"] = str(pushed)
     return resp
-
-
-@app.route("/sub/<local_username>/<app_key>/links", methods=["GET"])
-def unified_links(local_username, app_key):
-    owner_id = _require_owner(local_username, app_key)
-    want_html = _wants_html_response()
-
-    lu, response = _get_local_user_or_response(owner_id, local_username, app_key, want_html)
-    if response is not None:
-        return response
-
-    agent_blocked, agent_response = _enforce_agent_quota(owner_id, want_html)
-    if agent_response is not None:
-        return agent_response
-
-    limit_reached, user_response, limit, used, pushed = _enforce_user_quota(
-        owner_id, local_username, lu, want_html
-    )
-    if user_response is not None:
-        return user_response
-
-    uniq, errors, remote_info = _collect_subscription_payload(
-        owner_id, local_username, want_html, agent_blocked, limit_reached, lu
-    )
-
-    return _render_unified_links_response(
-        want_html,
-        local_username,
-        app_key,
-        lu,
-        remote_info,
-        uniq,
-        errors,
-        limit,
-        used,
-        pushed,
-    )
 
 def main():
     host = os.getenv("FLASK_HOST", "0.0.0.0")
