@@ -220,6 +220,27 @@ def list_panels_for_agent(agent_tg_id: int):
         """, (agent_tg_id,))
         return cur.fetchall()
 
+def get_setting(owner_id: int, key: str):
+    """Return the stored value for a setting or ``None`` if missing."""
+    canonical_owner = canonical_owner_id(owner_id)
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            "SELECT `value` FROM settings WHERE owner_id=%s AND `key`=%s LIMIT 1",
+            (canonical_owner, key),
+        )
+        row = cur.fetchone()
+        return row["value"] if row else None
+
+def set_setting(owner_id: int, key: str, value: str) -> None:
+    """Persist a setting value for the given owner."""
+    canonical_owner = canonical_owner_id(owner_id)
+    stored_value = "" if value is None else str(value)
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            "REPLACE INTO settings (owner_id, `key`, `value`) VALUES (%s, %s, %s)",
+            (canonical_owner, key, stored_value),
+        )
+
 # ----- service helpers -----
 def create_service(name: str) -> int:
     with with_mysql_cursor(dict_=False) as cur:
