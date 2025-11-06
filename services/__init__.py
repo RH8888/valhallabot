@@ -1,5 +1,11 @@
 """Service layer helpers."""
-from .database import init_mysql_pool, with_mysql_cursor, ensure_schema
+from .database import (
+    init_mysql_pool,
+    with_mysql_cursor,
+    ensure_schema,
+    mysql_errors,
+    errorcode,
+)
 from .tokens import (
     get_admin_token,
     rotate_admin_token,
@@ -19,6 +25,8 @@ __all__ = [
     "init_mysql_pool",
     "with_mysql_cursor",
     "ensure_schema",
+    "mysql_errors",
+    "errorcode",
     "get_admin_token",
     "rotate_admin_token",
     "get_agent_record",

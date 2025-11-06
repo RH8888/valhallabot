@@ -284,6 +284,10 @@ def ensure_schema() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+        try:
+            cur.execute("ALTER TABLE services ADD UNIQUE KEY uq_services_name (name)")
+        except MySQLError:
+            pass
         cur.execute("""
             CREATE TABLE IF NOT EXISTS service_panels(
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,

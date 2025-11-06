@@ -22,6 +22,7 @@ export const servicesKeys = {
   all: ['services'] as const,
   lists: () => [...servicesKeys.all, 'list'] as const,
   detail: (id: number) => [...servicesKeys.all, 'detail', id] as const,
+  panels: (id: number) => [...servicesKeys.detail(id), 'panels'] as const,
 }
 
 export const settingsKeys = {

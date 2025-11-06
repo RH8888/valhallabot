@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   Monitor,
   Palette,
+  Layers,
   Settings2,
   ShieldCheck,
   Users,
@@ -59,6 +60,11 @@ export const sidebarData: SidebarData = {
           title: 'Agents',
           url: '/_authenticated/admin/agents/',
           icon: KeyRound,
+        },
+        {
+          title: 'Services',
+          url: '/_authenticated/admin/services/',
+          icon: Layers,
         },
         {
           title: 'Settings',
