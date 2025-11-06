@@ -6,12 +6,14 @@ import { SearchProvider } from '@/context/search-provider'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '@/components/layout/app-sidebar'
 import { SkipToMain } from '@/components/skip-to-main'
+import { useAuthGuard } from '@/hooks/use-auth-guard'
 
 type AuthenticatedLayoutProps = {
   children?: React.ReactNode
 }
 
 export function AuthenticatedLayout({ children }: AuthenticatedLayoutProps) {
+  useAuthGuard()
   const defaultOpen = getCookie('sidebar_state') !== 'false'
   return (
     <SearchProvider>

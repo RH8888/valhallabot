@@ -1,34 +1,49 @@
-import { useState } from 'react'
+import { useMemo } from 'react'
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { useMutation } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { Loader2, LogIn } from 'lucide-react'
 import { toast } from 'sonner'
-import { IconFacebook, IconGithub } from '@/assets/brand-icons'
+import { AxiosError } from 'axios'
 import { useAuthStore } from '@/stores/auth-store'
-import { sleep, cn } from '@/lib/utils'
+import { fetchWhoAmI } from '@/services/auth-service'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
   Form,
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
-import { Input } from '@/components/ui/input'
-import { PasswordInput } from '@/components/password-input'
+import { Textarea } from '@/components/ui/textarea'
 
 const formSchema = z.object({
-  email: z.email({
-    error: (iss) => (iss.input === '' ? 'Please enter your email' : undefined),
-  }),
-  password: z
+  token: z
     .string()
-    .min(1, 'Please enter your password')
-    .min(7, 'Password must be at least 7 characters long'),
+    .min(1, 'Enter an API token')
+    .max(512, 'Tokens are limited to 512 characters'),
 })
+
+function resolveErrorMessage(error: unknown): string {
+  if (error instanceof AxiosError) {
+    if (error.response?.status === 401) {
+      return 'The provided token is invalid or has expired. Please try again.'
+    }
+    if (error.response?.status === 403) {
+      return 'This token is not authorized to access the console.'
+    }
+    const detail = (error.response?.data as { detail?: string } | undefined)?.detail
+    return detail ?? error.message
+  }
+
+  if (error instanceof Error) return error.message
+  return 'Unable to verify API token. Please try again.'
+}
 
 interface UserAuthFormProps extends React.HTMLAttributes<HTMLFormElement> {
   redirectTo?: string
@@ -39,110 +54,88 @@ export function UserAuthForm({
   redirectTo,
   ...props
 }: UserAuthFormProps) {
-  const [isLoading, setIsLoading] = useState(false)
   const navigate = useNavigate()
-  const { auth } = useAuthStore()
+  const setSession = useAuthStore((state) => state.setSession)
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      email: '',
-      password: '',
+      token: '',
     },
   })
 
-  function onSubmit(data: z.infer<typeof formSchema>) {
-    setIsLoading(true)
+  const mutation = useMutation({
+    mutationFn: async (values: z.infer<typeof formSchema>) => {
+      const identity = await fetchWhoAmI(values.token.trim())
+      return { identity, token: values.token.trim() }
+    },
+    onSuccess: ({ identity, token }) => {
+      setSession(token, identity)
 
-    toast.promise(sleep(2000), {
-      loading: 'Signing in...',
-      success: () => {
-        setIsLoading(false)
+      const label = identity.role === 'agent' ? identity.agent_name ?? 'Agent' : identity.role
+      toast.success(`Authenticated as ${label}`)
 
-        // Mock successful authentication with expiry computed at success time
-        const mockUser = {
-          accountNo: 'ACC001',
-          email: data.email,
-          role: ['user'],
-          exp: Date.now() + 24 * 60 * 60 * 1000, // 24 hours from now
-        }
+      const targetPath = redirectTo || '/_authenticated/'
+      navigate({ to: targetPath, replace: true })
+    },
+    onError: (error: unknown) => {
+      toast.error(resolveErrorMessage(error))
+    },
+  })
 
-        // Set user and access token
-        auth.setUser(mockUser)
-        auth.setAccessToken('mock-access-token')
+  const isLoading = mutation.isPending
 
-        // Redirect to the stored location or default to dashboard
-        const targetPath = redirectTo || '/'
-        navigate({ to: targetPath, replace: true })
+  const errorMessage = useMemo(() => {
+    const error = mutation.error
+    if (!error) return null
+    return resolveErrorMessage(error)
+  }, [mutation.error])
 
-        return `Welcome back, ${data.email}!`
-      },
-      error: 'Error',
-    })
+  function onSubmit(values: z.infer<typeof formSchema>) {
+    mutation.mutate(values)
   }
 
   return (
     <Form {...form}>
       <form
         onSubmit={form.handleSubmit(onSubmit)}
-        className={cn('grid gap-3', className)}
+        className={cn('grid gap-5', className)}
         {...props}
       >
         <FormField
           control={form.control}
-          name='email'
+          name='token'
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Email</FormLabel>
+              <FormLabel>API token</FormLabel>
               <FormControl>
-                <Input placeholder='name@example.com' {...field} />
+                <Textarea
+                  placeholder='Paste an admin or agent API token'
+                  rows={4}
+                  className='resize-y'
+                  {...field}
+                />
               </FormControl>
+              <FormDescription>
+                Tokens are validated against the Valhalla API and stored securely in your
+                browser for future requests.
+              </FormDescription>
               <FormMessage />
             </FormItem>
           )}
         />
-        <FormField
-          control={form.control}
-          name='password'
-          render={({ field }) => (
-            <FormItem className='relative'>
-              <FormLabel>Password</FormLabel>
-              <FormControl>
-                <PasswordInput placeholder='********' {...field} />
-              </FormControl>
-              <FormMessage />
-              <Link
-                to='/forgot-password'
-                className='text-muted-foreground absolute end-0 -top-0.5 text-sm font-medium hover:opacity-75'
-              >
-                Forgot password?
-              </Link>
-            </FormItem>
-          )}
-        />
+
+        {errorMessage ? (
+          <p className='text-destructive text-sm font-medium'>{errorMessage}</p>
+        ) : null}
+
         <Button className='mt-2' disabled={isLoading}>
           {isLoading ? <Loader2 className='animate-spin' /> : <LogIn />}
-          Sign in
+          Authenticate
         </Button>
 
-        <div className='relative my-2'>
-          <div className='absolute inset-0 flex items-center'>
-            <span className='w-full border-t' />
-          </div>
-          <div className='relative flex justify-center text-xs uppercase'>
-            <span className='bg-background text-muted-foreground px-2'>
-              Or continue with
-            </span>
-          </div>
-        </div>
-
-        <div className='grid grid-cols-2 gap-2'>
-          <Button variant='outline' type='button' disabled={isLoading}>
-            <IconGithub className='h-4 w-4' /> GitHub
-          </Button>
-          <Button variant='outline' type='button' disabled={isLoading}>
-            <IconFacebook className='h-4 w-4' /> Facebook
-          </Button>
+        <div className='text-muted-foreground text-center text-sm'>
+          Need help finding a token? Ask a Valhalla administrator to generate one for you.
         </div>
       </form>
     </Form>

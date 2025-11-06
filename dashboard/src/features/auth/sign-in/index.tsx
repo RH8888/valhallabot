@@ -17,10 +17,10 @@ export function SignIn() {
     <AuthLayout>
       <Card className='gap-4'>
         <CardHeader>
-          <CardTitle className='text-lg tracking-tight'>Sign in</CardTitle>
+          <CardTitle className='text-lg tracking-tight'>Connect with an API token</CardTitle>
           <CardDescription>
-            Enter your email and password below to <br />
-            log into your account
+            Paste an admin or agent token to unlock the Valhalla console. Tokens never
+            leave your browser except when verifying identity.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -28,21 +28,8 @@ export function SignIn() {
         </CardContent>
         <CardFooter>
           <p className='text-muted-foreground px-8 text-center text-sm'>
-            By clicking sign in, you agree to our{' '}
-            <a
-              href='/terms'
-              className='hover:text-primary underline underline-offset-4'
-            >
-              Terms of Service
-            </a>{' '}
-            and{' '}
-            <a
-              href='/privacy'
-              className='hover:text-primary underline underline-offset-4'
-            >
-              Privacy Policy
-            </a>
-            .
+            Valhalla stores your credentials locally so you can pick up where you left off.
+            Use the menu in the dashboard to rotate or revoke a token at any time.
           </p>
         </CardFooter>
       </Card>

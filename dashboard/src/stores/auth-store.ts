@@ -1,53 +1,50 @@
 import { create } from 'zustand'
-import { getCookie, setCookie, removeCookie } from '@/lib/cookies'
-
-const ACCESS_TOKEN = 'thisisjustarandomstring'
-
-interface AuthUser {
-  accountNo: string
-  email: string
-  role: string[]
-  exp: number
-}
+import { persist, createJSONStorage } from 'zustand/middleware'
+import { applyAuthToken } from '@/lib/http-client'
+import type { Identity } from '@/types/auth'
 
 interface AuthState {
-  auth: {
-    user: AuthUser | null
-    setUser: (user: AuthUser | null) => void
-    accessToken: string
-    setAccessToken: (accessToken: string) => void
-    resetAccessToken: () => void
-    reset: () => void
-  }
+  token: string | null
+  identity: Identity | null
+  isAuthenticated: () => boolean
+  setSession: (token: string, identity: Identity) => void
+  updateToken: (token: string) => void
+  clearSession: () => void
 }
 
-export const useAuthStore = create<AuthState>()((set) => {
-  const cookieState = getCookie(ACCESS_TOKEN)
-  const initToken = cookieState ? JSON.parse(cookieState) : ''
-  return {
-    auth: {
-      user: null,
-      setUser: (user) =>
-        set((state) => ({ ...state, auth: { ...state.auth, user } })),
-      accessToken: initToken,
-      setAccessToken: (accessToken) =>
-        set((state) => {
-          setCookie(ACCESS_TOKEN, JSON.stringify(accessToken))
-          return { ...state, auth: { ...state.auth, accessToken } }
-        }),
-      resetAccessToken: () =>
-        set((state) => {
-          removeCookie(ACCESS_TOKEN)
-          return { ...state, auth: { ...state.auth, accessToken: '' } }
-        }),
-      reset: () =>
-        set((state) => {
-          removeCookie(ACCESS_TOKEN)
-          return {
-            ...state,
-            auth: { ...state.auth, user: null, accessToken: '' },
-          }
-        }),
-    },
-  }
-})
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set, get) => ({
+      token: null,
+      identity: null,
+      isAuthenticated: () => Boolean(get().token),
+      setSession: (token, identity) => {
+        applyAuthToken(token)
+        set({ token, identity })
+      },
+      updateToken: (token) => {
+        applyAuthToken(token)
+        set((state) => ({ ...state, token }))
+      },
+      clearSession: () => {
+        applyAuthToken(null)
+        set({ token: null, identity: null })
+      },
+    }),
+    {
+      name: 'valhalla-auth',
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({ token: state.token, identity: state.identity }),
+      onRehydrateStorage: () => (state, error) => {
+        if (error) {
+          // eslint-disable-next-line no-console
+          console.error('Failed to rehydrate auth store', error)
+          return
+        }
+        if (state?.token) {
+          applyAuthToken(state.token)
+        }
+      },
+    }
+  )
+)
