@@ -99,6 +99,7 @@ def _list_users(
     offset: int,
     limit: int,
     service_id: int | None,
+    disabled: bool | None,
 ) -> tuple[List[dict], int]:
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
@@ -110,6 +111,9 @@ def _list_users(
     if service_id is not None:
         conds.append("lu.service_id=%s")
         params.append(service_id)
+    if disabled is not None:
+        conds.append("lu.disabled_pushed=%s")
+        params.append(1 if disabled else 0)
     where_clause = " AND ".join(conds)
     with with_mysql_cursor() as cur:
         cur.execute(
@@ -207,6 +211,7 @@ class UserListRequest(BaseModel):
     limit: int = Field(25, description="Maximum number of users to return")
     search: str | None = Field(None, description="Search term")
     service_id: int | None = Field(None, description="Filter by service ID")
+    disabled: bool | None = Field(None, description="Filter by disabled state")
 
 
 @router.post("", response_model=UserListResponse)
@@ -227,6 +232,7 @@ def list_users(
         data.offset,
         data.limit,
         data.service_id,
+        data.disabled,
     )
     users = [
         UserOut(

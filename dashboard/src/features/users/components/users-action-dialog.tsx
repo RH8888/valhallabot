@@ -1,18 +1,8 @@
-'use client'
-
+import { useEffect } from 'react'
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { showSubmittedData } from '@/lib/show-submitted-data'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import {
   Form,
   FormControl,
@@ -22,305 +12,360 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { PasswordInput } from '@/components/password-input'
-import { SelectDropdown } from '@/components/select-dropdown'
-import { roles } from '../data/data'
-import { type User } from '../data/schema'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
+import {
+  useCreateUserMutation,
+  useUpdateUserMutation,
+} from '@/lib/api/users'
+import { type User, type UserUpdate } from '@/lib/api/types'
 
-const formSchema = z
-  .object({
-    firstName: z.string().min(1, 'First Name is required.'),
-    lastName: z.string().min(1, 'Last Name is required.'),
-    username: z.string().min(1, 'Username is required.'),
-    phoneNumber: z.string().min(1, 'Phone number is required.'),
-    email: z.email({
-      error: (iss) => (iss.input === '' ? 'Email is required.' : undefined),
-    }),
-    password: z.string().transform((pwd) => pwd.trim()),
-    role: z.string().min(1, 'Role is required.'),
-    confirmPassword: z.string().transform((pwd) => pwd.trim()),
-    isEdit: z.boolean(),
-  })
-  .refine(
-    (data) => {
-      if (data.isEdit && !data.password) return true
-      return data.password.length > 0
-    },
-    {
-      message: 'Password is required.',
-      path: ['password'],
-    }
-  )
-  .refine(
-    ({ isEdit, password }) => {
-      if (isEdit && !password) return true
-      return password.length >= 8
-    },
-    {
-      message: 'Password must be at least 8 characters long.',
-      path: ['password'],
-    }
-  )
-  .refine(
-    ({ isEdit, password }) => {
-      if (isEdit && !password) return true
-      return /[a-z]/.test(password)
-    },
-    {
-      message: 'Password must contain at least one lowercase letter.',
-      path: ['password'],
-    }
-  )
-  .refine(
-    ({ isEdit, password }) => {
-      if (isEdit && !password) return true
-      return /\d/.test(password)
-    },
-    {
-      message: 'Password must contain at least one number.',
-      path: ['password'],
-    }
-  )
-  .refine(
-    ({ isEdit, password, confirmPassword }) => {
-      if (isEdit && !password) return true
-      return password === confirmPassword
-    },
-    {
-      message: "Passwords don't match.",
-      path: ['confirmPassword'],
-    }
-  )
-type UserForm = z.infer<typeof formSchema>
-
-type UserActionDialogProps = {
-  currentRow?: User
-  open: boolean
-  onOpenChange: (open: boolean) => void
+export type ServiceOption = {
+  label: string
+  value: number
 }
 
-export function UsersActionDialog({
-  currentRow,
+type BaseDrawerProps = {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  services: ServiceOption[]
+  isLoadingServices?: boolean
+}
+
+type CreateDrawerProps = BaseDrawerProps & {
+  mode: 'create'
+}
+
+type EditDrawerProps = BaseDrawerProps & {
+  mode: 'edit'
+  user: User
+}
+
+type UserDrawerProps = CreateDrawerProps | EditDrawerProps
+
+const createSchema = z.object({
+  username: z
+    .string({ required_error: 'Username is required.' })
+    .trim()
+    .min(1, 'Username is required.'),
+  limitBytes: z.coerce
+    .number({ invalid_type_error: 'Limit must be a number.' })
+    .min(0, 'Limit cannot be negative.'),
+  durationDays: z.coerce
+    .number({ invalid_type_error: 'Duration must be a number.' })
+    .min(0, 'Duration cannot be negative.'),
+  serviceId: z.union([
+    z.literal(''),
+    z.coerce.number({ invalid_type_error: 'Invalid service.' }).int().positive(),
+  ]),
+})
+
+type CreateFormValues = z.infer<typeof createSchema>
+
+const editSchema = z.object({
+  limitBytes: z.coerce
+    .number({ invalid_type_error: 'Limit must be a number.' })
+    .min(0, 'Limit cannot be negative.'),
+  serviceId: z.union([
+    z.literal(''),
+    z.coerce.number({ invalid_type_error: 'Invalid service.' }).int().positive(),
+  ]),
+})
+
+type EditFormValues = z.infer<typeof editSchema>
+
+function CreateUserDrawer({
   open,
   onOpenChange,
-}: UserActionDialogProps) {
-  const isEdit = !!currentRow
-  const form = useForm<UserForm>({
-    resolver: zodResolver(formSchema),
-    defaultValues: isEdit
-      ? {
-          ...currentRow,
-          password: '',
-          confirmPassword: '',
-          isEdit,
-        }
-      : {
-          firstName: '',
-          lastName: '',
-          username: '',
-          email: '',
-          role: '',
-          phoneNumber: '',
-          password: '',
-          confirmPassword: '',
-          isEdit,
-        },
+  services,
+  isLoadingServices,
+}: CreateDrawerProps) {
+  const createMutation = useCreateUserMutation()
+  const form = useForm<CreateFormValues>({
+    resolver: zodResolver(createSchema),
+    defaultValues: {
+      username: '',
+      limitBytes: 0,
+      durationDays: 0,
+      serviceId: '',
+    },
   })
 
-  const onSubmit = (values: UserForm) => {
-    form.reset()
-    showSubmittedData(values)
-    onOpenChange(false)
+  const handleSubmit = (values: CreateFormValues) => {
+    const payload = {
+      username: values.username.trim(),
+      limit_bytes: values.limitBytes,
+      duration_days: values.durationDays,
+      service_id: values.serviceId === '' ? null : Number(values.serviceId),
+    }
+    createMutation.mutate(payload, {
+      onSuccess: () => {
+        form.reset()
+        onOpenChange(false)
+      },
+    })
   }
 
-  const isPasswordTouched = !!form.formState.dirtyFields.password
-
   return (
-    <Dialog
+    <Sheet
       open={open}
-      onOpenChange={(state) => {
-        form.reset()
-        onOpenChange(state)
+      onOpenChange={(next) => {
+        if (!next) {
+          form.reset()
+          onOpenChange(false)
+        }
       }}
     >
-      <DialogContent className='sm:max-w-lg'>
-        <DialogHeader className='text-start'>
-          <DialogTitle>{isEdit ? 'Edit User' : 'Add New User'}</DialogTitle>
-          <DialogDescription>
-            {isEdit ? 'Update the user here. ' : 'Create new user here. '}
-            Click save when you&apos;re done.
-          </DialogDescription>
-        </DialogHeader>
-        <div className='h-[26.25rem] w-[calc(100%+0.75rem)] overflow-y-auto py-1 pe-3'>
-          <Form {...form}>
-            <form
-              id='user-form'
-              onSubmit={form.handleSubmit(onSubmit)}
-              className='space-y-4 px-0.5'
-            >
+      <SheetContent className='w-full sm:max-w-lg'>
+        <SheetHeader>
+          <SheetTitle>Create user</SheetTitle>
+          <SheetDescription>
+            Provision a new user account with service access and usage quota.
+          </SheetDescription>
+        </SheetHeader>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(handleSubmit)} className='flex flex-1 flex-col gap-4 p-4'>
+            <FormField
+              control={form.control}
+              name='username'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Username</FormLabel>
+                  <FormControl>
+                    <Input placeholder='customer001' autoComplete='off' {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <div className='grid gap-4 sm:grid-cols-2'>
               <FormField
                 control={form.control}
-                name='firstName'
+                name='limitBytes'
                 render={({ field }) => (
-                  <FormItem className='grid grid-cols-6 items-center space-y-0 gap-x-4 gap-y-1'>
-                    <FormLabel className='col-span-2 text-end'>
-                      First Name
-                    </FormLabel>
+                  <FormItem>
+                    <FormLabel>Limit (bytes)</FormLabel>
                     <FormControl>
-                      <Input
-                        placeholder='John'
-                        className='col-span-4'
-                        autoComplete='off'
-                        {...field}
-                      />
+                      <Input type='number' min={0} step={1} {...field} />
                     </FormControl>
-                    <FormMessage className='col-span-4 col-start-3' />
+                    <FormMessage />
                   </FormItem>
                 )}
               />
               <FormField
                 control={form.control}
-                name='lastName'
+                name='durationDays'
                 render={({ field }) => (
-                  <FormItem className='grid grid-cols-6 items-center space-y-0 gap-x-4 gap-y-1'>
-                    <FormLabel className='col-span-2 text-end'>
-                      Last Name
-                    </FormLabel>
+                  <FormItem>
+                    <FormLabel>Duration (days)</FormLabel>
                     <FormControl>
-                      <Input
-                        placeholder='Doe'
-                        className='col-span-4'
-                        autoComplete='off'
-                        {...field}
-                      />
+                      <Input type='number' min={0} step={1} {...field} />
                     </FormControl>
-                    <FormMessage className='col-span-4 col-start-3' />
+                    <FormMessage />
                   </FormItem>
                 )}
               />
-              <FormField
-                control={form.control}
-                name='username'
-                render={({ field }) => (
-                  <FormItem className='grid grid-cols-6 items-center space-y-0 gap-x-4 gap-y-1'>
-                    <FormLabel className='col-span-2 text-end'>
-                      Username
-                    </FormLabel>
+            </div>
+            <FormField
+              control={form.control}
+              name='serviceId'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Service assignment</FormLabel>
+                  <Select
+                    value={field.value}
+                    onValueChange={field.onChange}
+                    disabled={isLoadingServices}
+                  >
                     <FormControl>
-                      <Input
-                        placeholder='john_doe'
-                        className='col-span-4'
-                        {...field}
-                      />
+                      <SelectTrigger>
+                        <SelectValue placeholder='Select service (optional)' />
+                      </SelectTrigger>
                     </FormControl>
-                    <FormMessage className='col-span-4 col-start-3' />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name='email'
-                render={({ field }) => (
-                  <FormItem className='grid grid-cols-6 items-center space-y-0 gap-x-4 gap-y-1'>
-                    <FormLabel className='col-span-2 text-end'>Email</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder='john.doe@gmail.com'
-                        className='col-span-4'
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage className='col-span-4 col-start-3' />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name='phoneNumber'
-                render={({ field }) => (
-                  <FormItem className='grid grid-cols-6 items-center space-y-0 gap-x-4 gap-y-1'>
-                    <FormLabel className='col-span-2 text-end'>
-                      Phone Number
-                    </FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder='+123456789'
-                        className='col-span-4'
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage className='col-span-4 col-start-3' />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name='role'
-                render={({ field }) => (
-                  <FormItem className='grid grid-cols-6 items-center space-y-0 gap-x-4 gap-y-1'>
-                    <FormLabel className='col-span-2 text-end'>Role</FormLabel>
-                    <SelectDropdown
-                      defaultValue={field.value}
-                      onValueChange={field.onChange}
-                      placeholder='Select a role'
-                      className='col-span-4'
-                      items={roles.map(({ label, value }) => ({
-                        label,
-                        value,
-                      }))}
-                    />
-                    <FormMessage className='col-span-4 col-start-3' />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name='password'
-                render={({ field }) => (
-                  <FormItem className='grid grid-cols-6 items-center space-y-0 gap-x-4 gap-y-1'>
-                    <FormLabel className='col-span-2 text-end'>
-                      Password
-                    </FormLabel>
-                    <FormControl>
-                      <PasswordInput
-                        placeholder='e.g., S3cur3P@ssw0rd'
-                        className='col-span-4'
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage className='col-span-4 col-start-3' />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name='confirmPassword'
-                render={({ field }) => (
-                  <FormItem className='grid grid-cols-6 items-center space-y-0 gap-x-4 gap-y-1'>
-                    <FormLabel className='col-span-2 text-end'>
-                      Confirm Password
-                    </FormLabel>
-                    <FormControl>
-                      <PasswordInput
-                        disabled={!isPasswordTouched}
-                        placeholder='e.g., S3cur3P@ssw0rd'
-                        className='col-span-4'
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage className='col-span-4 col-start-3' />
-                  </FormItem>
-                )}
-              />
-            </form>
-          </Form>
-        </div>
-        <DialogFooter>
-          <Button type='submit' form='user-form'>
-            Save changes
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+                    <SelectContent>
+                      <SelectItem value=''>Unassigned</SelectItem>
+                      {services.map((service) => (
+                        <SelectItem key={service.value} value={String(service.value)}>
+                          {service.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <SheetFooter>
+              <Button type='submit' disabled={createMutation.isPending}>
+                {createMutation.isPending ? 'Creating…' : 'Create user'}
+              </Button>
+            </SheetFooter>
+          </form>
+        </Form>
+      </SheetContent>
+    </Sheet>
   )
+}
+
+function EditUserDrawer({
+  open,
+  onOpenChange,
+  services,
+  isLoadingServices,
+  user,
+}: EditDrawerProps) {
+  const updateMutation = useUpdateUserMutation(user.username)
+  const form = useForm<EditFormValues>({
+    resolver: zodResolver(editSchema),
+    defaultValues: {
+      limitBytes: user.plan_limit_bytes,
+      serviceId: user.service_id ? String(user.service_id) : '',
+    },
+  })
+
+  useEffect(() => {
+    if (open) {
+      form.reset({
+        limitBytes: user.plan_limit_bytes,
+        serviceId: user.service_id ? String(user.service_id) : '',
+      })
+    }
+  }, [open, user, form])
+
+  const handleSubmit = (values: EditFormValues) => {
+    const payload: UserUpdate = {}
+    if (values.limitBytes !== user.plan_limit_bytes) {
+      payload.limit_bytes = values.limitBytes
+    }
+    if (values.serviceId === '') {
+      if (user.service_id !== null) {
+        payload.service_id = null
+      }
+    } else {
+      const nextService = Number(values.serviceId)
+      if (nextService !== user.service_id) {
+        payload.service_id = nextService
+      }
+    }
+    updateMutation.mutate(payload, {
+      onSuccess: () => {
+        form.reset({
+          limitBytes: values.limitBytes,
+          serviceId: values.serviceId,
+        })
+        onOpenChange(false)
+      },
+    })
+  }
+
+  return (
+    <Sheet
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) {
+          form.reset({
+            limitBytes: user.plan_limit_bytes,
+            serviceId: user.service_id ? String(user.service_id) : '',
+          })
+          onOpenChange(false)
+        }
+      }}
+    >
+      <SheetContent className='w-full sm:max-w-lg'>
+        <SheetHeader>
+          <SheetTitle>Edit user</SheetTitle>
+          <SheetDescription>
+            Adjust quota limits and service assignments for this user.
+          </SheetDescription>
+        </SheetHeader>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(handleSubmit)} className='flex flex-1 flex-col gap-4 p-4'>
+            <div className='space-y-1'>
+              <p className='text-sm font-medium text-muted-foreground'>Username</p>
+              <p className='font-semibold'>{user.username}</p>
+            </div>
+            <div className='grid gap-4 sm:grid-cols-2'>
+              <FormField
+                control={form.control}
+                name='limitBytes'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Limit (bytes)</FormLabel>
+                    <FormControl>
+                      <Input type='number' min={0} step={1} {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <div className='space-y-1'>
+                <p className='text-sm font-medium text-muted-foreground'>Current usage</p>
+                <p>
+                  {user.used_bytes.toLocaleString()} bytes used of{' '}
+                  {user.plan_limit_bytes > 0
+                    ? `${user.plan_limit_bytes.toLocaleString()} bytes`
+                    : 'no quota limit'}
+                </p>
+              </div>
+            </div>
+            <FormField
+              control={form.control}
+              name='serviceId'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Service assignment</FormLabel>
+                  <Select
+                    value={field.value}
+                    onValueChange={field.onChange}
+                    disabled={isLoadingServices}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder='Select service (optional)' />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value=''>Unassigned</SelectItem>
+                      {services.map((service) => (
+                        <SelectItem key={service.value} value={String(service.value)}>
+                          {service.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <SheetFooter>
+              <Button type='submit' disabled={updateMutation.isPending}>
+                {updateMutation.isPending ? 'Saving…' : 'Save changes'}
+              </Button>
+            </SheetFooter>
+          </form>
+        </Form>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+export function UsersActionDialog(props: UserDrawerProps) {
+  if (props.mode === 'create') {
+    return <CreateUserDrawer {...props} />
+  }
+
+  return <EditUserDrawer {...props} />
 }

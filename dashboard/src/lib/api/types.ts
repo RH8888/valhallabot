@@ -145,6 +145,7 @@ export interface UserListRequest {
   limit?: number
   search?: string | null
   service_id?: number | null
+  disabled?: boolean | null
 }
 
 export interface UserListResponse {
