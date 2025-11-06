@@ -62,10 +62,15 @@ export function useCreatePanelMutation() {
   })
 }
 
-export function useUpdatePanelMutation(panelId: number) {
+export function useUpdatePanelMutation(panelId?: number) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (payload: PanelUpdate) => updatePanel(panelId, payload),
+    mutationFn: async (payload: PanelUpdate) => {
+      if (panelId === undefined) {
+        throw new Error('Panel id is required to update a panel.')
+      }
+      return updatePanel(panelId, payload)
+    },
     onSuccess: (panel) => {
       toast.success('Panel updated successfully')
       queryClient.invalidateQueries({ queryKey: panelsKeys.lists() })

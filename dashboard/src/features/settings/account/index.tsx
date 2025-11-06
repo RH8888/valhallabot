@@ -1,16 +1,15 @@
 import { ContentSection } from '../components/content-section'
-import { AccountForm } from './account-form'
+import { AgentOverview } from './agent-overview'
 import { TokenManager } from './token-manager'
 
 export function SettingsAccount() {
   return (
     <ContentSection
-      title='Account'
-      desc='Update your account settings. Set your preferred language and
-          timezone.'
+      title='My account'
+      desc='Inspect your Valhalla agent quotas, expiry, and credentials from a single view.'
     >
-      <div className='grid gap-6 lg:grid-cols-[2fr,1fr]'>
-        <AccountForm />
+      <div className='space-y-6'>
+        <AgentOverview />
         <TokenManager />
       </div>
     </ContentSection>

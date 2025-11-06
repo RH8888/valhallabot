@@ -1,6 +1,8 @@
 import {
+  Bell,
   Bot,
   GaugeCircle,
+  KeyRound,
   LayoutDashboard,
   Monitor,
   Palette,
@@ -8,7 +10,6 @@ import {
   ShieldCheck,
   Users,
   Workflow,
-  Bell,
 } from 'lucide-react'
 import { type SidebarData } from '../types'
 
@@ -51,13 +52,18 @@ export const sidebarData: SidebarData = {
         },
       ],
     },
-      {
-        title: 'Administration',
-        items: [
-          {
-            title: 'Settings',
-            icon: Settings2,
-            items: [
+    {
+      title: 'Administration',
+      items: [
+        {
+          title: 'Agents',
+          url: '/_authenticated/admin/agents/',
+          icon: KeyRound,
+        },
+        {
+          title: 'Settings',
+          icon: Settings2,
+          items: [
             {
               title: 'General',
               url: '/_authenticated/settings/',

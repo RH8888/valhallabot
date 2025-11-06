@@ -48,12 +48,35 @@ export interface Agent extends AgentBase {
   id: number
   created_at: string
   active: boolean
+  total_used_bytes: number
 }
 
 export type AgentCreate = AgentBase
 
 export type AgentUpdate = Partial<Omit<AgentBase, 'telegram_user_id'>> & {
   expire_at?: string | null
+}
+
+export interface AgentUsageSnapshot {
+  username: string
+  used_bytes: number
+  plan_limit_bytes: number
+  expire_at: string | null
+}
+
+export interface AgentProfile {
+  id: number
+  telegram_user_id: number
+  name: string
+  plan_limit_bytes: number
+  total_used_bytes: number
+  expire_at: string | null
+  active: boolean
+  user_limit: number
+  max_user_bytes: number
+  total_users: number
+  created_at: string
+  usage_snapshots: AgentUsageSnapshot[]
 }
 
 export interface ServiceBase {

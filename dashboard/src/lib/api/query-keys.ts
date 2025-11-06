@@ -12,6 +12,12 @@ export const agentsKeys = {
   detail: (id: number) => [...agentsKeys.all, 'detail', id] as const,
 }
 
+export const agentSelfKeys = {
+  all: ['agentSelf'] as const,
+  profile: () => [...agentSelfKeys.all, 'profile'] as const,
+  token: () => [...agentSelfKeys.all, 'token'] as const,
+}
+
 export const servicesKeys = {
   all: ['services'] as const,
   lists: () => [...servicesKeys.all, 'list'] as const,
