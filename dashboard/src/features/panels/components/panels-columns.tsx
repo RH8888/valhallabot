@@ -100,7 +100,7 @@ export const panelsColumns: ColumnDef<Panel>[] = [
             {format(new Date(value), 'PP p')}
           </time>
         )
-      } catch (error) {
+      } catch {
         return <span className='text-muted-foreground'>{value}</span>
       }
     },

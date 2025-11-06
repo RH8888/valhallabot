@@ -1,8 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { apiClient } from './client'
-import { agentsKeys } from './query-keys'
-import type { Agent, AgentCreate, AgentUpdate } from './types'
+import { agentSelfKeys, agentsKeys } from './query-keys'
+import type {
+  Agent,
+  AgentCreate,
+  AgentProfile,
+  AgentUpdate,
+} from './types'
 
 export async function fetchAgents() {
   const response = await apiClient.get<Agent[]>('/admin/agents')
@@ -28,6 +33,31 @@ export async function deleteAgent(agentId: number) {
   await apiClient.delete(`/admin/agents/${agentId}`)
 }
 
+export async function fetchAgentToken(agentId: number) {
+  const response = await apiClient.get<{ api_token: string }>(`/agents/${agentId}/token`)
+  return response.data.api_token
+}
+
+export async function rotateAgentToken(agentId: number) {
+  const response = await apiClient.post<{ api_token: string }>(`/agents/${agentId}/token`)
+  return response.data.api_token
+}
+
+export async function fetchMyAgentProfile() {
+  const response = await apiClient.get<AgentProfile>('/agents/me')
+  return response.data
+}
+
+export async function fetchMyAgentToken() {
+  const response = await apiClient.get<{ api_token: string }>('/agents/me/token')
+  return response.data.api_token
+}
+
+export async function rotateMyAgentToken() {
+  const response = await apiClient.post<{ api_token: string }>('/agents/me/token')
+  return response.data.api_token
+}
+
 export function useAgentsQuery() {
   return useQuery({
     queryKey: agentsKeys.lists(),
@@ -39,6 +69,21 @@ export function useAgentQuery(agentId: number, enabled = true) {
   return useQuery({
     queryKey: agentsKeys.detail(agentId),
     queryFn: () => fetchAgent(agentId),
+    enabled,
+  })
+}
+
+export function useAgentProfileQuery() {
+  return useQuery({
+    queryKey: agentSelfKeys.profile(),
+    queryFn: fetchMyAgentProfile,
+  })
+}
+
+export function useAgentTokenQuery(enabled = false) {
+  return useQuery({
+    queryKey: agentSelfKeys.token(),
+    queryFn: fetchMyAgentToken,
     enabled,
   })
 }
@@ -63,6 +108,13 @@ export function useUpdateAgentMutation(agentId: number) {
       toast.success('Agent updated successfully')
       queryClient.invalidateQueries({ queryKey: agentsKeys.lists() })
       queryClient.setQueryData(agentsKeys.detail(agent.id), agent)
+    },
+    onError: (error: unknown) => {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Unable to update the agent. Please try again.'
+      toast.error(message)
     },
   })
 }

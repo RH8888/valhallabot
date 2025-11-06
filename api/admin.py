@@ -217,6 +217,7 @@ class AgentUpdate(BaseModel):
 class AgentOut(AgentBase):
     id: int
     created_at: datetime
+    total_used_bytes: int = Field(0, description="Total bytes consumed by the agent")
 
 
 @router.get("/agents", response_model=List[AgentOut], summary="List agents")

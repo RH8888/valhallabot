@@ -47,10 +47,9 @@ const optionalUrlSchema = z
   .refine((value) => {
     if (!value) return true
     try {
-      // eslint-disable-next-line no-new
       new URL(value)
       return true
-    } catch (error) {
+    } catch {
       return false
     }
   }, {
@@ -88,7 +87,7 @@ type PanelFormValues = z.infer<typeof panelFormSchema>
 export function PanelFormDialog({ mode, open, onOpenChange, panel }: PanelFormDialogProps) {
   const isEdit = mode === 'edit' && !!panel
   const createPanel = useCreatePanelMutation()
-  const updatePanel = panel ? useUpdatePanelMutation(panel.id) : null
+  const updatePanel = useUpdatePanelMutation(panel?.id)
 
   const form = useForm<PanelFormValues>({
     resolver: zodResolver(panelFormSchema),
@@ -129,7 +128,7 @@ export function PanelFormDialog({ mode, open, onOpenChange, panel }: PanelFormDi
     }
 
     try {
-      if (isEdit && panel && updatePanel) {
+      if (isEdit && panel) {
         await updatePanel.mutateAsync(payload)
       } else {
         await createPanel.mutateAsync(payload)
@@ -150,7 +149,7 @@ export function PanelFormDialog({ mode, open, onOpenChange, panel }: PanelFormDi
   }
 
   const mutationPending =
-    createPanel.isPending || updatePanel?.isPending === true
+    createPanel.isPending || updatePanel.isPending
 
   const title = isEdit ? 'Edit panel' : 'Create panel'
   const description = isEdit

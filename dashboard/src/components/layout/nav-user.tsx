@@ -5,11 +5,13 @@ import {
   BadgeCheck,
   Bell,
   ChevronsUpDown,
+  Copy,
   CreditCard,
   LogOut,
   RefreshCw,
   Sparkles,
 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { rotateToken } from '@/services/auth-service'
@@ -67,7 +69,8 @@ export function NavUser({ user }: NavUserProps) {
     onSuccess: (newToken) => {
       updateToken(newToken)
       toast.success('API token rotated', {
-        description: 'Your new token has been saved for subsequent requests.',
+        description: <TokenToast token={newToken} />,
+        duration: 10000,
       })
     },
     onError: (error: unknown) => {
@@ -188,5 +191,28 @@ export function NavUser({ user }: NavUserProps) {
 
       <SignOutDialog open={!!open} onOpenChange={setOpen} />
     </>
+  )
+}
+
+function TokenToast({ token }: { token: string }) {
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(token)
+      toast.success('Token copied to clipboard', { duration: 2000 })
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Clipboard copy failed. Try manually copying.'
+      toast.error(message)
+    }
+  }
+
+  return (
+    <div className='space-y-2'>
+      <p className='break-all font-mono text-xs'>{token}</p>
+      <Button size='sm' variant='outline' className='gap-2' onClick={handleCopy}>
+        <Copy className='h-3 w-3' />
+        Copy to clipboard
+      </Button>
+    </div>
   )
 }
