@@ -1,48 +1,61 @@
-import { UsersActionDialog } from './users-action-dialog'
-import { UsersDeleteDialog } from './users-delete-dialog'
-import { UsersInviteDialog } from './users-invite-dialog'
+import { UsersActionDialog, type ServiceOption } from './users-action-dialog'
+import { UsersRenewDialog } from './users-renew-dialog'
 import { useUsers } from './users-provider'
 
-export function UsersDialogs() {
+type UsersDialogsProps = {
+  services: ServiceOption[]
+  isLoadingServices?: boolean
+}
+
+export function UsersDialogs({ services, isLoadingServices }: UsersDialogsProps) {
   const { open, setOpen, currentRow, setCurrentRow } = useUsers()
+
   return (
     <>
       <UsersActionDialog
-        key='user-add'
-        open={open === 'add'}
-        onOpenChange={() => setOpen('add')}
-      />
-
-      <UsersInviteDialog
-        key='user-invite'
-        open={open === 'invite'}
-        onOpenChange={() => setOpen('invite')}
+        key='user-create'
+        mode='create'
+        open={open === 'create'}
+        onOpenChange={(state) => {
+          if (!state) {
+            setOpen('create')
+          }
+        }}
+        services={services}
+        isLoadingServices={isLoadingServices}
       />
 
       {currentRow && (
         <>
           <UsersActionDialog
-            key={`user-edit-${currentRow.id}`}
+            key={`user-edit-${currentRow.username}`}
+            mode='edit'
+            user={currentRow}
             open={open === 'edit'}
-            onOpenChange={() => {
-              setOpen('edit')
-              setTimeout(() => {
-                setCurrentRow(null)
-              }, 500)
+            onOpenChange={(state) => {
+              if (!state) {
+                setOpen('edit')
+                setTimeout(() => {
+                  setCurrentRow(null)
+                }, 150)
+              }
             }}
-            currentRow={currentRow}
+            services={services}
+            isLoadingServices={isLoadingServices}
           />
 
-          <UsersDeleteDialog
-            key={`user-delete-${currentRow.id}`}
-            open={open === 'delete'}
-            onOpenChange={() => {
-              setOpen('delete')
-              setTimeout(() => {
-                setCurrentRow(null)
-              }, 500)
+          <UsersRenewDialog
+            key={`user-renew-${currentRow.username}`}
+            user={currentRow}
+            open={open === 'renew'}
+            onOpenChange={(state) => {
+              if (!state) {
+                setOpen('renew')
+                setTimeout(() => {
+                  setCurrentRow(null)
+                }, 150)
+              }
             }}
-            currentRow={currentRow}
           />
         </>
       )}
