@@ -86,11 +86,22 @@ export interface ServiceBase {
 export interface Service extends ServiceBase {
   id: number
   created_at: string
+  panel_count: number
+  user_count: number
 }
 
 export type ServiceCreate = ServiceBase
 
 export type ServiceUpdate = Partial<ServiceBase>
+
+export interface ServicePanelsResponse {
+  service: Service
+  panels: Panel[]
+}
+
+export interface ServicePanelsPayload {
+  panel_ids: number[]
+}
 
 export interface Setting {
   key: string
