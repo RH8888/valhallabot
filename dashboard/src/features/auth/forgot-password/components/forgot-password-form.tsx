@@ -3,10 +3,11 @@ import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useNavigate } from '@tanstack/react-router'
-import { ArrowRight, Loader2 } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
 import { sleep, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { LoadingIndicator } from '@/components/ui/loading-indicator'
 import {
   Form,
   FormControl,
@@ -74,7 +75,16 @@ export function ForgotPasswordForm({
         />
         <Button className='mt-2' disabled={isLoading}>
           Continue
-          {isLoading ? <Loader2 className='animate-spin' /> : <ArrowRight />}
+          {isLoading ? (
+            <LoadingIndicator
+              inline
+              label=''
+              size={18}
+              className='text-primary-foreground'
+            />
+          ) : (
+            <ArrowRight />
+          )}
         </Button>
       </form>
     </Form>

@@ -4,13 +4,14 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { Loader2, LogIn } from 'lucide-react'
+import { LogIn } from 'lucide-react'
 import { toast } from 'sonner'
 import { AxiosError } from 'axios'
 import { useAuthStore } from '@/stores/auth-store'
 import { fetchWhoAmI } from '@/services/auth-service'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { LoadingIndicator } from '@/components/ui/loading-indicator'
 import {
   Form,
   FormControl,
@@ -130,7 +131,16 @@ export function UserAuthForm({
         ) : null}
 
         <Button className='mt-2' disabled={isLoading}>
-          {isLoading ? <Loader2 className='animate-spin' /> : <LogIn />}
+          {isLoading ? (
+            <LoadingIndicator
+              inline
+              label=''
+              size={18}
+              className='text-primary-foreground'
+            />
+          ) : (
+            <LogIn />
+          )}
           Authenticate
         </Button>
 

@@ -22,6 +22,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
+import { LoadingOverlay } from '@/components/ui/loading-indicator'
 import { roles } from '../data/data'
 import { type User } from '../data/schema'
 import { DataTableBulkActions } from './data-table-bulk-actions'
@@ -31,9 +32,10 @@ type DataTableProps = {
   data: User[]
   search: Record<string, unknown>
   navigate: NavigateFn
+  isLoading?: boolean
 }
 
-export function UsersTable({ data, search, navigate }: DataTableProps) {
+export function UsersTable({ data, search, navigate, isLoading = false }: DataTableProps) {
   // Local UI-only states
   const [rowSelection, setRowSelection] = useState({})
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
@@ -150,7 +152,13 @@ export function UsersTable({ data, search, navigate }: DataTableProps) {
             ))}
           </TableHeader>
           <TableBody>
-            {table.getRowModel().rows?.length ? (
+            {isLoading ? (
+              <TableRow>
+                <TableCell colSpan={columns.length} className='h-24 text-center'>
+                  <LoadingOverlay label='Loading users…' />
+                </TableCell>
+              </TableRow>
+            ) : table.getRowModel().rows?.length ? (
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.id}

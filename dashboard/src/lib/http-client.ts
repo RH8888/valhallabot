@@ -1,15 +1,16 @@
-import axios from 'axios'
+import { apiClient } from '@/lib/api/client'
+import { setAuthToken } from '@/lib/api/token'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
-
-export const httpClient = axios.create({
-  baseURL: API_BASE_URL,
-})
+export const httpClient = apiClient
 
 export function applyAuthToken(token?: string | null) {
-  if (token) {
-    httpClient.defaults.headers.common.Authorization = `Bearer ${token}`
+  const resolvedToken = token ?? null
+  setAuthToken(resolvedToken)
+
+  if (resolvedToken) {
+    httpClient.defaults.headers.common.Authorization = `Bearer ${resolvedToken}`
     return
   }
+
   delete httpClient.defaults.headers.common.Authorization
 }
