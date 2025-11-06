@@ -20,6 +20,20 @@ export type PanelUpdate = Partial<Omit<PanelBase, 'panel_url'>> & {
   panel_url?: string | null
 }
 
+export interface PanelDisableResult {
+  status?: string
+  message?: string
+  detail?: string | string[]
+  errors?: string[]
+  remote_errors?: string[]
+  remote_cleanup?: Array<{
+    target?: string
+    ok?: boolean
+    status?: string
+    message?: string
+  }>
+}
+
 export interface AgentBase {
   telegram_user_id: number
   name: string

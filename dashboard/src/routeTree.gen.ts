@@ -23,6 +23,8 @@ import { Route as authOtpRouteImport } from './routes/(auth)/otp'
 import { Route as authForgotPasswordRouteImport } from './routes/(auth)/forgot-password'
 import { Route as AuthenticatedSettingsRouteRouteImport } from './routes/_authenticated/settings/route'
 import { Route as AuthenticatedUsersIndexRouteImport } from './routes/_authenticated/users/index'
+import { Route as AuthenticatedPanelsIndexRouteImport } from './routes/_authenticated/panels/index'
+import { Route as AuthenticatedPanelsPanelIdRouteImport } from './routes/_authenticated/panels/$panelId'
 import { Route as AuthenticatedSettingsIndexRouteImport } from './routes/_authenticated/settings/index'
 import { Route as AuthenticatedSettingsNotificationsRouteImport } from './routes/_authenticated/settings/notifications'
 import { Route as AuthenticatedSettingsDisplayRouteImport } from './routes/_authenticated/settings/display'
@@ -99,6 +101,17 @@ const AuthenticatedUsersIndexRoute = AuthenticatedUsersIndexRouteImport.update({
   path: '/users/',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedPanelsIndexRoute = AuthenticatedPanelsIndexRouteImport.update({
+  id: '/panels/',
+  path: '/panels/',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedPanelsPanelIdRoute =
+  AuthenticatedPanelsPanelIdRouteImport.update({
+    id: '/$panelId',
+    path: '/$panelId',
+    getParentRoute: () => AuthenticatedPanelsIndexRoute,
+  } as any)
 const AuthenticatedSettingsIndexRoute =
   AuthenticatedSettingsIndexRouteImport.update({
     id: '/',
@@ -148,6 +161,8 @@ export interface FileRoutesByFullPath {
   '/settings/display': typeof AuthenticatedSettingsDisplayRoute
   '/settings/notifications': typeof AuthenticatedSettingsNotificationsRoute
   '/settings/': typeof AuthenticatedSettingsIndexRoute
+  '/panels': typeof AuthenticatedPanelsIndexRoute
+  '/panels/$panelId': typeof AuthenticatedPanelsPanelIdRoute
   '/users': typeof AuthenticatedUsersIndexRoute
 }
 export interface FileRoutesByTo {
@@ -167,6 +182,8 @@ export interface FileRoutesByTo {
   '/settings/display': typeof AuthenticatedSettingsDisplayRoute
   '/settings/notifications': typeof AuthenticatedSettingsNotificationsRoute
   '/settings': typeof AuthenticatedSettingsIndexRoute
+  '/panels': typeof AuthenticatedPanelsIndexRoute
+  '/panels/$panelId': typeof AuthenticatedPanelsPanelIdRoute
   '/users': typeof AuthenticatedUsersIndexRoute
 }
 export interface FileRoutesById {
@@ -189,6 +206,8 @@ export interface FileRoutesById {
   '/_authenticated/settings/display': typeof AuthenticatedSettingsDisplayRoute
   '/_authenticated/settings/notifications': typeof AuthenticatedSettingsNotificationsRoute
   '/_authenticated/settings/': typeof AuthenticatedSettingsIndexRoute
+  '/_authenticated/panels/': typeof AuthenticatedPanelsIndexRoute
+  '/_authenticated/panels/$panelId': typeof AuthenticatedPanelsPanelIdRoute
   '/_authenticated/users/': typeof AuthenticatedUsersIndexRoute
 }
 export interface FileRouteTypes {
@@ -211,6 +230,8 @@ export interface FileRouteTypes {
     | '/settings/display'
     | '/settings/notifications'
     | '/settings/'
+    | '/panels'
+    | '/panels/$panelId'
     | '/users'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -230,6 +251,8 @@ export interface FileRouteTypes {
     | '/settings/display'
     | '/settings/notifications'
     | '/settings'
+    | '/panels'
+    | '/panels/$panelId'
     | '/users'
   id:
     | '__root__'
@@ -251,6 +274,8 @@ export interface FileRouteTypes {
     | '/_authenticated/settings/display'
     | '/_authenticated/settings/notifications'
     | '/_authenticated/settings/'
+    | '/_authenticated/panels/'
+    | '/_authenticated/panels/$panelId'
     | '/_authenticated/users/'
   fileRoutesById: FileRoutesById
 }
@@ -368,6 +393,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedUsersIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/panels/': {
+      id: '/_authenticated/panels/'
+      path: '/panels'
+      fullPath: '/panels'
+      preLoaderRoute: typeof AuthenticatedPanelsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/panels/$panelId': {
+      id: '/_authenticated/panels/$panelId'
+      path: '/$panelId'
+      fullPath: '/panels/$panelId'
+      preLoaderRoute: typeof AuthenticatedPanelsPanelIdRouteImport
+      parentRoute: typeof AuthenticatedPanelsIndexRoute
+    }
     '/_authenticated/settings/': {
       id: '/_authenticated/settings/'
       path: '/'
@@ -429,15 +468,31 @@ const AuthenticatedSettingsRouteRouteWithChildren =
     AuthenticatedSettingsRouteRouteChildren,
   )
 
+interface AuthenticatedPanelsIndexRouteChildren {
+  AuthenticatedPanelsPanelIdRoute: typeof AuthenticatedPanelsPanelIdRoute
+}
+
+const AuthenticatedPanelsIndexRouteChildren: AuthenticatedPanelsIndexRouteChildren =
+  {
+    AuthenticatedPanelsPanelIdRoute: AuthenticatedPanelsPanelIdRoute,
+  }
+
+const AuthenticatedPanelsIndexRouteWithChildren =
+  AuthenticatedPanelsIndexRoute._addFileChildren(
+    AuthenticatedPanelsIndexRouteChildren,
+  )
+
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedSettingsRouteRoute: typeof AuthenticatedSettingsRouteRouteWithChildren
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
+  AuthenticatedPanelsIndexRoute: typeof AuthenticatedPanelsIndexRouteWithChildren
   AuthenticatedUsersIndexRoute: typeof AuthenticatedUsersIndexRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedSettingsRouteRoute: AuthenticatedSettingsRouteRouteWithChildren,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
+  AuthenticatedPanelsIndexRoute: AuthenticatedPanelsIndexRouteWithChildren,
   AuthenticatedUsersIndexRoute: AuthenticatedUsersIndexRoute,
 }
 
