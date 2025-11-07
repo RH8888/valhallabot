@@ -13,6 +13,7 @@ import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedAdminRouteRouteImport } from './routes/_authenticated/admin/route'
 import { Route as AuthenticatedAdminAgentsIndexRouteImport } from './routes/_authenticated/admin/agents/index'
 import { Route as AuthenticatedAdminServicesIndexRouteImport } from './routes/_authenticated/admin/services/index'
+import { Route as AuthenticatedAdminSettingsIndexRouteImport } from './routes/_authenticated/admin/settings/index'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as errors503RouteImport } from './routes/(errors)/503'
 import { Route as errors500RouteImport } from './routes/(errors)/500'
@@ -53,6 +54,12 @@ const AuthenticatedAdminServicesIndexRoute =
   AuthenticatedAdminServicesIndexRouteImport.update({
     id: '/services/',
     path: '/services/',
+    getParentRoute: () => AuthenticatedAdminRouteRoute,
+  } as any)
+const AuthenticatedAdminSettingsIndexRoute =
+  AuthenticatedAdminSettingsIndexRouteImport.update({
+    id: '/settings/',
+    path: '/settings/',
     getParentRoute: () => AuthenticatedAdminRouteRoute,
   } as any)
 const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
@@ -167,6 +174,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AuthenticatedAdminRouteRouteWithChildren
   '/admin/agents': typeof AuthenticatedAdminAgentsIndexRoute
   '/admin/services': typeof AuthenticatedAdminServicesIndexRoute
+  '/admin/settings': typeof AuthenticatedAdminSettingsIndexRoute
   '/settings': typeof AuthenticatedSettingsRouteRouteWithChildren
   '/forgot-password': typeof authForgotPasswordRoute
   '/otp': typeof authOtpRoute
@@ -192,6 +200,7 @@ export interface FileRoutesByTo {
   '/admin': typeof AuthenticatedAdminRouteRouteWithChildren
   '/admin/agents': typeof AuthenticatedAdminAgentsIndexRoute
   '/admin/services': typeof AuthenticatedAdminServicesIndexRoute
+  '/admin/settings': typeof AuthenticatedAdminSettingsIndexRoute
   '/forgot-password': typeof authForgotPasswordRoute
   '/otp': typeof authOtpRoute
   '/sign-in': typeof authSignInRoute
@@ -218,6 +227,7 @@ export interface FileRoutesById {
   '/_authenticated/admin': typeof AuthenticatedAdminRouteRouteWithChildren
   '/_authenticated/admin/agents/': typeof AuthenticatedAdminAgentsIndexRoute
   '/_authenticated/admin/services/': typeof AuthenticatedAdminServicesIndexRoute
+  '/_authenticated/admin/settings/': typeof AuthenticatedAdminSettingsIndexRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRouteRouteWithChildren
   '/(auth)/forgot-password': typeof authForgotPasswordRoute
   '/(auth)/otp': typeof authOtpRoute
@@ -245,6 +255,8 @@ export interface FileRouteTypes {
     | '/admin'
     | '/admin/agents'
     | '/admin/services'
+    | '/admin/settings'
+    | '/admin/settings'
     | '/settings'
     | '/forgot-password'
     | '/otp'
@@ -270,6 +282,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/admin/agents'
     | '/admin/services'
+    | '/admin/settings'
     | '/forgot-password'
     | '/otp'
     | '/sign-in'
@@ -295,6 +308,7 @@ export interface FileRouteTypes {
     | '/_authenticated/admin'
     | '/_authenticated/admin/agents/'
     | '/_authenticated/admin/services/'
+    | '/_authenticated/admin/settings/'
     | '/_authenticated/settings'
     | '/(auth)/forgot-password'
     | '/(auth)/otp'
@@ -445,6 +459,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAdminServicesIndexRouteImport
       parentRoute: typeof AuthenticatedAdminRouteRoute
     }
+    '/_authenticated/admin/settings/': {
+      id: '/_authenticated/admin/settings/'
+      path: '/settings'
+      fullPath: '/admin/settings'
+      preLoaderRoute: typeof AuthenticatedAdminSettingsIndexRouteImport
+      parentRoute: typeof AuthenticatedAdminRouteRoute
+    }
     '/_authenticated/users/': {
       id: '/_authenticated/users/'
       path: '/users'
@@ -544,11 +565,13 @@ const AuthenticatedPanelsIndexRouteWithChildren =
 interface AuthenticatedAdminRouteRouteChildren {
   AuthenticatedAdminAgentsIndexRoute: typeof AuthenticatedAdminAgentsIndexRoute
   AuthenticatedAdminServicesIndexRoute: typeof AuthenticatedAdminServicesIndexRoute
+  AuthenticatedAdminSettingsIndexRoute: typeof AuthenticatedAdminSettingsIndexRoute
 }
 
 const AuthenticatedAdminRouteRouteChildren: AuthenticatedAdminRouteRouteChildren = {
   AuthenticatedAdminAgentsIndexRoute: AuthenticatedAdminAgentsIndexRoute,
   AuthenticatedAdminServicesIndexRoute: AuthenticatedAdminServicesIndexRoute,
+  AuthenticatedAdminSettingsIndexRoute: AuthenticatedAdminSettingsIndexRoute,
 }
 
 const AuthenticatedAdminRouteRouteWithChildren =
