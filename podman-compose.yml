@@ -24,8 +24,7 @@ services:
     container_name: valhalla-app
     restart: unless-stopped
     depends_on:
-      mysql:
-        condition: service_healthy
+      - mysql
     environment:
       MYSQL_HOST: ${MYSQL_HOST}
       MYSQL_PORT: ${MYSQL_PORT}
@@ -50,8 +49,7 @@ services:
     container_name: valhalla-bot
     restart: unless-stopped
     depends_on:
-      mysql:
-        condition: service_healthy
+      - mysql
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
       ADMIN_IDS: ${ADMIN_IDS}
@@ -70,8 +68,7 @@ services:
     container_name: valhalla-usage
     restart: unless-stopped
     depends_on:
-      mysql:
-        condition: service_healthy
+      - mysql
     environment:
       MYSQL_HOST: ${MYSQL_HOST}
       MYSQL_PORT: ${MYSQL_PORT}
@@ -92,8 +89,7 @@ services:
     container_name: valhalla-dashboard
     restart: unless-stopped
     depends_on:
-      app:
-        condition: service_started
+      - app
     environment:
       DASHBOARD_BASE_URL: ${DASHBOARD_BASE_URL:-/}
       PORT: ${DASHBOARD_INTERNAL_PORT:-4173}

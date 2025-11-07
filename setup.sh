@@ -3,7 +3,9 @@ set -euo pipefail
 
 APP_DIR="/app"
 ENV_FILE="$APP_DIR/.env"
-COMPOSE_URL="https://raw.githubusercontent.com/rh8888/Valhallabot/refs/heads/main/docker-compose.yml"
+DOCKER_COMPOSE_URL="https://raw.githubusercontent.com/rh8888/Valhallabot/refs/heads/main/docker-compose.yml"
+PODMAN_COMPOSE_URL="https://raw.githubusercontent.com/rh8888/Valhallabot/refs/heads/main/podman-compose.yml"
+COMPOSE_URL="$DOCKER_COMPOSE_URL"
 COMPOSE_FILE="$APP_DIR/docker-compose.yml"
 
 mkdir -p "$APP_DIR"
@@ -233,6 +235,14 @@ if ! have_cmd "$RUNTIME"; then
   fi
 fi
 
+if [ "$RUNTIME" = "podman" ]; then
+  COMPOSE_FILE="$APP_DIR/podman-compose.yml"
+  COMPOSE_URL="$PODMAN_COMPOSE_URL"
+else
+  COMPOSE_FILE="$APP_DIR/docker-compose.yml"
+  COMPOSE_URL="$DOCKER_COMPOSE_URL"
+fi
+
 # ---------- defaults ----------
 [ -n "$(get_kv AGENT_TOKEN_ENCRYPTION_KEY)" ] || ensure_agent_token_key
 [ -n "$(get_kv MYSQL_HOST)" ] || set_kv "MYSQL_HOST" "mysql"
@@ -240,6 +250,11 @@ fi
 [ -n "$(get_kv MYSQL_DATABASE)" ] || set_kv "MYSQL_DATABASE" "valhalla"
 [ -n "$(get_kv FLASK_HOST)" ] || set_kv "FLASK_HOST" "0.0.0.0"
 [ -n "$(get_kv FLASK_PORT)" ] || set_kv "FLASK_PORT" "5000"
+[ -n "$(get_kv DASHBOARD_PORT)" ] || set_kv "DASHBOARD_PORT" "4173"
+[ -n "$(get_kv DASHBOARD_INTERNAL_PORT)" ] || set_kv "DASHBOARD_INTERNAL_PORT" "4173"
+[ -n "$(get_kv DASHBOARD_BASE_URL)" ] || set_kv "DASHBOARD_BASE_URL" "/"
+[ -n "$(get_kv DASHBOARD_API_BASE_URL)" ] || set_kv "DASHBOARD_API_BASE_URL" "http://app:5000/api/v1"
+[ -n "$(get_kv DASHBOARD_IMAGE)" ] || set_kv "DASHBOARD_IMAGE" "valhallabot-dashboard:latest"
 [ -n "$(get_kv WORKERS)" ] || set_kv "WORKERS" "$((2 * $(nproc 2>/dev/null || echo 1) + 1))"
 [ -n "$(get_kv USAGE_SYNC_INTERVAL)" ] || set_kv "USAGE_SYNC_INTERVAL" "60"
 [ -n "$(get_kv IMAGE)" ] || set_kv "IMAGE" "ghcr.io/rh8888/valhallabot:v1.0.0"
@@ -253,6 +268,27 @@ validate_admins
 ask_required "PUBLIC_BASE_URL" "What is your public base URL (e.g. https://example.com)"
 
 ask_required "FLASK_PORT" "Which port should the app listen on"
+
+flask_port="$(get_kv FLASK_PORT)"
+current_dashboard_api="$(get_kv DASHBOARD_API_BASE_URL)"
+if [ -z "$current_dashboard_api" ] || [ "$current_dashboard_api" = "http://app:5000/api/v1" ]; then
+  set_kv "DASHBOARD_API_BASE_URL" "http://app:${flask_port}/api/v1"
+fi
+
+echo "---- Dashboard ----"
+ask_required "DASHBOARD_PORT" "Which host port should expose the dashboard"
+ask_required "DASHBOARD_BASE_URL" "Which base URL path should the dashboard use (e.g. / or /dashboard)"
+ask_required "DASHBOARD_API_BASE_URL" "What API URL should the dashboard call (e.g. http://app:${flask_port}/api/v1)"
+
+dashboard_base="$(get_kv DASHBOARD_BASE_URL)"
+if [[ "$dashboard_base" != /* ]]; then
+  dashboard_base="/$dashboard_base"
+fi
+if [[ "$dashboard_base" != "/" ]]; then
+  dashboard_base="${dashboard_base%/}"
+fi
+set_kv "DASHBOARD_BASE_URL" "$dashboard_base"
+
 if [ "$(get_kv FLASK_PORT)" = "443" ]; then
   ask_required "SSL_DOMAIN" "What domain should be used for HTTPS"
   domain="$(get_kv SSL_DOMAIN)"
@@ -292,8 +328,8 @@ COMPOSE_BIN="$(detect_compose || true)"
 if [ -n "$COMPOSE_BIN" ] && [ -f "$COMPOSE_FILE" ]; then
   echo "Pulling images with $COMPOSE_BIN -f $COMPOSE_FILE pull ..."
   $COMPOSE_BIN -f "$COMPOSE_FILE" pull
-  echo "Starting services with $COMPOSE_BIN -f $COMPOSE_FILE up -d --no-build ..."
-  $COMPOSE_BIN -f "$COMPOSE_FILE" up -d --no-build
+  echo "Starting services with $COMPOSE_BIN -f $COMPOSE_FILE up -d --build ..."
+  $COMPOSE_BIN -f "$COMPOSE_FILE" up -d --build
   echo "Done. Use '$COMPOSE_BIN -f $COMPOSE_FILE logs -f' to follow logs."
 
   # quick post-check (best effort)
