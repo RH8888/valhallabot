@@ -21,6 +21,7 @@ ENV DASHBOARD_BASE_URL=$DASHBOARD_BASE_URL
 RUN pnpm install --frozen-lockfile
 
 COPY tsconfig*.json ./
+COPY index.html ./
 COPY vite.config.ts ./
 COPY eslint.config.js ./
 COPY knip.config.ts ./
