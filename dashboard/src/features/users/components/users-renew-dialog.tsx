@@ -24,13 +24,24 @@ import { useUpdateUserMutation } from '@/lib/api/users'
 import { type User } from '@/lib/api/types'
 
 const renewSchema = z.object({
-  days: z.coerce
-    .number({ invalid_type_error: 'Please enter a number of days.' })
-    .int()
-    .min(1, 'Renewal must be at least one day.'),
+  days: z
+    .union([z.number(), z.string().trim()])
+    .transform((value, ctx) => {
+      const numeric = typeof value === 'number' ? value : Number(value)
+      if (Number.isNaN(numeric)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Please enter a number of days.',
+        })
+        return z.NEVER
+      }
+      return numeric
+    })
+    .pipe(z.number().int().min(1, 'Renewal must be at least one day.')),
 })
 
-type RenewFormValues = z.infer<typeof renewSchema>
+type RenewFormValues = z.input<typeof renewSchema>
+type RenewFormOutput = z.output<typeof renewSchema>
 
 type UsersRenewDialogProps = {
   user: User
@@ -39,7 +50,7 @@ type UsersRenewDialogProps = {
 }
 
 export function UsersRenewDialog({ user, open, onOpenChange }: UsersRenewDialogProps) {
-  const form = useForm<RenewFormValues>({
+  const form = useForm<RenewFormValues, any, RenewFormOutput>({
     resolver: zodResolver(renewSchema),
     defaultValues: { days: 1 },
   })
@@ -51,7 +62,7 @@ export function UsersRenewDialog({ user, open, onOpenChange }: UsersRenewDialogP
     }
   }, [open, form])
 
-  const handleSubmit = (values: RenewFormValues) => {
+  const handleSubmit = (values: RenewFormOutput) => {
     updateMutation.mutate(
       {
         renew_days: values.days,
