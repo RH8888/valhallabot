@@ -7,18 +7,29 @@ This project uses [Uvicorn](https://www.uvicorn.org/) as its ASGI server.
 ### Docker
 
 ```sh
-docker build -t valhalla .
-docker run --rm -p ${FLASK_PORT:-5000}:${FLASK_PORT:-5000} valhalla
-docker compose up -d
+docker build -t valhalla-api .
+docker run --rm -p ${FLASK_PORT:-5000}:${FLASK_PORT:-5000} valhalla-api
+docker compose -f docker-compose.yml up -d --build
 ```
+
+The last command builds the dashboard image from `dashboard/Dockerfile`, embeds
+the API endpoint configured via `DASHBOARD_API_BASE_URL`, and brings up the
+entire stack. Once complete, the API is reachable at
+`http://<host>:<FLASK_PORT>/api/v1/health` and the dashboard is served from
+`http://<host>:<DASHBOARD_PORT><DASHBOARD_BASE_URL>`.
 
 ### Podman
 
 ```sh
-podman build -t valhalla .
-podman run --rm -p ${FLASK_PORT:-5000}:${FLASK_PORT:-5000} valhalla
-podman compose up -d
+podman build -t valhalla-api .
+podman run --rm -p ${FLASK_PORT:-5000}:${FLASK_PORT:-5000} valhalla-api
+podman compose -f podman-compose.yml up -d --build
 ```
+
+The provided [`podman-compose.yml`](../podman-compose.yml) mirrors the Docker
+definition, including the dashboard build arguments and volume mounts, so both
+stacks behave identically. Use `podman generate systemd --name valhalla-app` and
+`valhalla-dashboard` if you prefer systemd-managed services.
 
 **Podman prerequisites**
 
