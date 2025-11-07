@@ -9,6 +9,7 @@ import {
   Layers,
   Settings2,
   ShieldCheck,
+  Wrench,
   Users,
   Workflow,
 } from 'lucide-react'
@@ -65,6 +66,11 @@ export const sidebarData: SidebarData = {
           title: 'Services',
           url: '/_authenticated/admin/services/',
           icon: Layers,
+        },
+        {
+          title: 'System settings',
+          url: '/_authenticated/admin/settings/',
+          icon: Wrench,
         },
         {
           title: 'Settings',
