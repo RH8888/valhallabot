@@ -254,7 +254,6 @@ fi
 [ -n "$(get_kv DASHBOARD_INTERNAL_PORT)" ] || set_kv "DASHBOARD_INTERNAL_PORT" "4173"
 [ -n "$(get_kv DASHBOARD_BASE_URL)" ] || set_kv "DASHBOARD_BASE_URL" "/"
 [ -n "$(get_kv DASHBOARD_API_BASE_URL)" ] || set_kv "DASHBOARD_API_BASE_URL" "http://app:5000/api/v1"
-[ -n "$(get_kv DASHBOARD_IMAGE)" ] || set_kv "DASHBOARD_IMAGE" "ghcr.io/rh8888/valhallabot-dashboard:latest"
 [ -n "$(get_kv WORKERS)" ] || set_kv "WORKERS" "$((2 * $(nproc 2>/dev/null || echo 1) + 1))"
 [ -n "$(get_kv USAGE_SYNC_INTERVAL)" ] || set_kv "USAGE_SYNC_INTERVAL" "60"
 [ -n "$(get_kv IMAGE)" ] || set_kv "IMAGE" "ghcr.io/rh8888/valhallabot:v1.0.0"
@@ -328,6 +327,7 @@ COMPOSE_BIN="$(detect_compose || true)"
 if [ -n "$COMPOSE_BIN" ] && [ -f "$COMPOSE_FILE" ]; then
   echo "Pulling images with $COMPOSE_BIN -f $COMPOSE_FILE pull ..."
   $COMPOSE_BIN -f "$COMPOSE_FILE" pull
+  echo "Building the dashboard UI locally from ./dashboard during the next step."
   echo "Starting services with $COMPOSE_BIN -f $COMPOSE_FILE up -d --build ..."
   $COMPOSE_BIN -f "$COMPOSE_FILE" up -d --build
   echo "Done. Use '$COMPOSE_BIN -f $COMPOSE_FILE logs -f' to follow logs."
