@@ -37,7 +37,7 @@ type ServiceFormDialogProps = {
 
 const serviceFormSchema = z.object({
   name: z
-    .string({ required_error: 'Name is required.' })
+    .string()
     .trim()
     .min(1, 'Name is required.')
     .max(128, 'Name must be 128 characters or fewer.'),

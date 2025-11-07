@@ -8,7 +8,9 @@ import type { Panel } from '@/lib/api/types'
 import { PANEL_TYPES } from '../constants'
 import { PanelRowActions } from './panels-row-actions'
 
-const PANEL_TYPE_LOOKUP = new Map(PANEL_TYPES.map((type) => [type.value, type.label]))
+const PANEL_TYPE_LOOKUP = new Map<string, string>(
+  PANEL_TYPES.map((type) => [type.value, type.label])
+)
 
 export const panelsColumns: ColumnDef<Panel>[] = [
   {
