@@ -10,6 +10,7 @@ from .agent_profile import router as agent_profile_router
 from .agent_tokens import router as agent_token_router
 from .health import router as health_router
 from .identity import router as identity_router
+from .analytics import router as analytics_router
 
 api_router = APIRouter()
 api_router.include_router(health_router)
@@ -20,5 +21,6 @@ api_router.include_router(admin_router)
 api_router.include_router(users_router)
 api_router.include_router(sub_router)
 api_router.include_router(activation_router)
+api_router.include_router(analytics_router)
 
 __all__ = ["api_router"]

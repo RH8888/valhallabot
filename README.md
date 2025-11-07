@@ -17,6 +17,9 @@ control over subscriptions, usage limits, and automated provisioning.
 - **REST API for automation** – FastAPI endpoints exposed under `/api/v1`
   provide the same capabilities as the Telegram bot for integration with other
   systems. Interactive docs are available at `/docs` once the stack is running.
+  Additional analytics-specific routes are documented in
+  [`docs/analytics-endpoints.md`](./docs/analytics-endpoints.md) so dashboard
+  features can reuse the backend data layer.
 - **Usage synchronisation worker** – Continuously polls linked panels to keep
   usage information in sync, apply disablement policies when quotas are
   exceeded, and push changes back to the panels.
