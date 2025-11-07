@@ -327,7 +327,17 @@ fi
 COMPOSE_BIN="$(detect_compose || true)"
 if [ -n "$COMPOSE_BIN" ] && [ -f "$COMPOSE_FILE" ]; then
   echo "Pulling images with $COMPOSE_BIN -f $COMPOSE_FILE pull ..."
-  services_to_pull=(mysql app bot usage dashboard)
+  services_to_pull=(mysql app bot usage)
+  dashboard_image="$(get_kv DASHBOARD_IMAGE)"
+  if [ -z "$dashboard_image" ]; then
+    dashboard_image="ghcr.io/rh8888/valhallabot-dashboard:v1.0.0"
+  fi
+  if [[ "$dashboard_image" == */* ]]; then
+    services_to_pull+=(dashboard)
+  else
+    echo "Skipping dashboard pull; image '$dashboard_image' looks like a local build target."
+    echo "Run '$COMPOSE_BIN -f $COMPOSE_FILE build dashboard' if you need to build it from source."
+  fi
   $COMPOSE_BIN -f "$COMPOSE_FILE" pull "${services_to_pull[@]}"
   echo "Starting services with $COMPOSE_BIN -f $COMPOSE_FILE up -d ..."
   $COMPOSE_BIN -f "$COMPOSE_FILE" up -d
