@@ -31,10 +31,7 @@ import { useSettingQuery, useUpsertSettingMutation } from '@/lib/api/settings'
 import type { Setting } from '@/lib/api/types'
 import type { SettingMetadata } from '../settings-metadata'
 
-const baseValueSchema = z
-  .string({ required_error: 'Value is required.' })
-  .trim()
-  .min(1, 'Value is required.')
+const baseValueSchema = z.string().trim().min(1, 'Value is required.')
 
 const numberValueSchema = baseValueSchema.refine(
   (value) => !Number.isNaN(Number(value)),
