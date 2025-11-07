@@ -1,4 +1,4 @@
-name: Build Docker image
+name: Build Docker images
 
 on:
   push:
@@ -15,6 +15,16 @@ jobs:
       contents: read
       packages: write
 
+    strategy:
+      matrix:
+        include:
+          - name: valhallabot
+            context: .
+            file: ./Dockerfile
+          - name: valhallabot-dashboard
+            context: ./dashboard
+            file: ./dashboard/Dockerfile
+
     steps:
       - uses: actions/checkout@v4
 
@@ -25,13 +35,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set lower-case image name
-        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+      - name: Set image owner
+        run: |
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          echo "IMAGE_OWNER=${OWNER,,}" >> $GITHUB_ENV
 
-      - name: Build and push Docker image
+      - name: Build and push ${{ matrix.name }} image
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v1.0.0
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.name }}:v1.0.0
 
