@@ -92,8 +92,11 @@ sudo podman compose -f podman-compose.yml logs -f
 The API becomes available at `http://<host>:<FLASK_PORT>/api/v1/health` once
 `valhalla-app` is healthy and the dashboard is served from
 `http://<host>:<DASHBOARD_PORT><DASHBOARD_BASE_URL>` when `valhalla-dashboard`
-is running. The `setup.sh` script writes both `docker-compose.yml` and
-`podman-compose.yml` into `/app`, so switching runtimes does not require
+is running. The dashboard image is built locally from the repository's
+[`dashboard/`](./dashboard) sources when `docker compose up -d --build` runs, so
+no external registry download is required. The `setup.sh` script writes both
+`docker-compose.yml` and `podman-compose.yml` into `/app`, so switching runtimes
+does not require
 reconfiguring environment variables. The Telegram bot connects automatically
 using the `BOT_TOKEN` you supplied during setup.
 

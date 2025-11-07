@@ -327,6 +327,7 @@ COMPOSE_BIN="$(detect_compose || true)"
 if [ -n "$COMPOSE_BIN" ] && [ -f "$COMPOSE_FILE" ]; then
   echo "Pulling images with $COMPOSE_BIN -f $COMPOSE_FILE pull ..."
   $COMPOSE_BIN -f "$COMPOSE_FILE" pull
+  echo "Building the dashboard UI locally from ./dashboard during the next step."
   echo "Starting services with $COMPOSE_BIN -f $COMPOSE_FILE up -d --build ..."
   $COMPOSE_BIN -f "$COMPOSE_FILE" up -d --build
   echo "Done. Use '$COMPOSE_BIN -f $COMPOSE_FILE logs -f' to follow logs."
