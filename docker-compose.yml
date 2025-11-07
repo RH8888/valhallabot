@@ -82,12 +82,7 @@ services:
       SERVICE: scripts.usage_sync
 
   dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile
-      args:
-        VITE_API_BASE_URL: ${DASHBOARD_API_BASE_URL:-http://app:${FLASK_PORT:-5000}/api/v1}
-        DASHBOARD_BASE_URL: ${DASHBOARD_BASE_URL:-/}
+    image: ${DASHBOARD_IMAGE:-ghcr.io/rh8888/valhallabot-dashboard:v1.0.0}
     container_name: valhalla-dashboard
     restart: unless-stopped
     depends_on:

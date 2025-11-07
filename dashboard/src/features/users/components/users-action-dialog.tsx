@@ -56,36 +56,47 @@ type EditDrawerProps = BaseDrawerProps & {
 
 type UserDrawerProps = CreateDrawerProps | EditDrawerProps
 
+const coerceNumber = (message: string) =>
+  z
+    .union([z.number(), z.string().trim()])
+    .transform((value, ctx) => {
+      const numeric = typeof value === 'number' ? value : Number(value)
+      if (Number.isNaN(numeric)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message })
+        return z.NEVER
+      }
+      return numeric
+    })
+
 const createSchema = z.object({
-  username: z
-    .string({ required_error: 'Username is required.' })
-    .trim()
-    .min(1, 'Username is required.'),
-  limitBytes: z.coerce
-    .number({ invalid_type_error: 'Limit must be a number.' })
-    .min(0, 'Limit cannot be negative.'),
-  durationDays: z.coerce
-    .number({ invalid_type_error: 'Duration must be a number.' })
-    .min(0, 'Duration cannot be negative.'),
+  username: z.string().trim().min(1, 'Username is required.'),
+  limitBytes: coerceNumber('Limit must be a number.').pipe(
+    z.number().min(0, 'Limit cannot be negative.')
+  ),
+  durationDays: coerceNumber('Duration must be a number.').pipe(
+    z.number().min(0, 'Duration cannot be negative.')
+  ),
   serviceId: z.union([
     z.literal(''),
-    z.coerce.number({ invalid_type_error: 'Invalid service.' }).int().positive(),
+    coerceNumber('Invalid service.').pipe(z.number().int().positive()),
   ]),
 })
 
-type CreateFormValues = z.infer<typeof createSchema>
+type CreateFormValues = z.input<typeof createSchema>
+type CreateFormOutput = z.output<typeof createSchema>
 
 const editSchema = z.object({
-  limitBytes: z.coerce
-    .number({ invalid_type_error: 'Limit must be a number.' })
-    .min(0, 'Limit cannot be negative.'),
+  limitBytes: coerceNumber('Limit must be a number.').pipe(
+    z.number().min(0, 'Limit cannot be negative.')
+  ),
   serviceId: z.union([
     z.literal(''),
-    z.coerce.number({ invalid_type_error: 'Invalid service.' }).int().positive(),
+    coerceNumber('Invalid service.').pipe(z.number().int().positive()),
   ]),
 })
 
-type EditFormValues = z.infer<typeof editSchema>
+type EditFormValues = z.input<typeof editSchema>
+type EditFormOutput = z.output<typeof editSchema>
 
 function CreateUserDrawer({
   open,
@@ -94,7 +105,7 @@ function CreateUserDrawer({
   isLoadingServices,
 }: CreateDrawerProps) {
   const createMutation = useCreateUserMutation()
-  const form = useForm<CreateFormValues>({
+  const form = useForm<CreateFormValues, any, CreateFormOutput>({
     resolver: zodResolver(createSchema),
     defaultValues: {
       username: '',
@@ -104,7 +115,7 @@ function CreateUserDrawer({
     },
   })
 
-  const handleSubmit = (values: CreateFormValues) => {
+  const handleSubmit = (values: CreateFormOutput) => {
     const payload = {
       username: values.username.trim(),
       limit_bytes: values.limitBytes,
@@ -186,8 +197,10 @@ function CreateUserDrawer({
                 <FormItem>
                   <FormLabel>Service assignment</FormLabel>
                   <Select
-                    value={field.value}
-                    onValueChange={field.onChange}
+                    value={field.value === '' ? '' : String(field.value)}
+                    onValueChange={(next) =>
+                      field.onChange(next === '' ? '' : Number(next))
+                    }
                     disabled={isLoadingServices}
                   >
                     <FormControl>
@@ -228,7 +241,7 @@ function EditUserDrawer({
   user,
 }: EditDrawerProps) {
   const updateMutation = useUpdateUserMutation(user.username)
-  const form = useForm<EditFormValues>({
+  const form = useForm<EditFormValues, any, EditFormOutput>({
     resolver: zodResolver(editSchema),
     defaultValues: {
       limitBytes: user.plan_limit_bytes,
@@ -245,7 +258,7 @@ function EditUserDrawer({
     }
   }, [open, user, form])
 
-  const handleSubmit = (values: EditFormValues) => {
+  const handleSubmit = (values: EditFormOutput) => {
     const payload: UserUpdate = {}
     if (values.limitBytes !== user.plan_limit_bytes) {
       payload.limit_bytes = values.limitBytes
@@ -328,8 +341,10 @@ function EditUserDrawer({
                 <FormItem>
                   <FormLabel>Service assignment</FormLabel>
                   <Select
-                    value={field.value}
-                    onValueChange={field.onChange}
+                    value={field.value === '' ? '' : String(field.value)}
+                    onValueChange={(next) =>
+                      field.onChange(next === '' ? '' : Number(next))
+                    }
                     disabled={isLoadingServices}
                   >
                     <FormControl>

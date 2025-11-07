@@ -56,8 +56,8 @@ const optionalUrlSchema = z
     message: 'Must be a valid URL including the protocol.',
   })
 
-type OptionalString = z.infer<typeof optionalStringSchema>
-type OptionalUrl = z.infer<typeof optionalUrlSchema>
+type OptionalString = z.input<typeof optionalStringSchema>
+type OptionalUrl = z.input<typeof optionalUrlSchema>
 
 const panelFormSchema = z.object({
   name: z.string().min(1, 'Name is required.'),
@@ -82,7 +82,7 @@ function resolveOptionalField(value?: OptionalString | OptionalUrl) {
   return trimmed.length > 0 ? trimmed : null
 }
 
-type PanelFormValues = z.infer<typeof panelFormSchema>
+type PanelFormValues = z.input<typeof panelFormSchema>
 
 export function PanelFormDialog({ mode, open, onOpenChange, panel }: PanelFormDialogProps) {
   const isEdit = mode === 'edit' && !!panel

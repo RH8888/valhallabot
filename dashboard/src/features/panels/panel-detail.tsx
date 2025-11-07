@@ -18,7 +18,9 @@ import { PANEL_TYPES } from './constants'
 
 const route = getRouteApi('/_authenticated/panels/$panelId')
 
-const PANEL_TYPE_LABELS = new Map(PANEL_TYPES.map((type) => [type.value, type.label]))
+const PANEL_TYPE_LABELS = new Map<string, string>(
+  PANEL_TYPES.map((type) => [type.value, type.label])
+)
 
 function PanelDetailContent() {
   const { panelId } = route.useParams()
