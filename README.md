@@ -22,7 +22,7 @@ control over subscriptions, usage limits, and automated provisioning.
   exceeded, and push changes back to the panels.
 - **Containerised deployment** – Docker/Podman images ship with Gunicorn,
   Uvicorn, the Telegram bot, and the usage synchroniser so everything runs from
-  a single compose file backed by MySQL 8.0.
+  a compose file backed by either MySQL 8.0 or MongoDB 7.0.
 
 ## Architecture overview
 
@@ -33,13 +33,13 @@ The default deployment (created by `setup.sh`) runs the following containers:
 | `valhalla-app`           | FastAPI entry point that mounts the existing Flask subscription aggregator. |
 | `valhalla-bot`           | Telegram bot for administrators and agents.                                 |
 | `valhalla-usage`         | Background worker that synchronises usage with remote panels.               |
-| `valhalla-mysql`         | MySQL 8.0 database used by all services.                                    |
-| `valhalla-mongodb`       | MongoDB 7.0 database for installations using the Mongo backend.             |
-| `valhalla-mongo-express` | Optional Mongo Express web console (disabled unless the profile is enabled).|
+| `valhalla-mysql`         | MySQL 8.0 database when the MySQL backend is selected.                      |
+| `valhalla-mongodb`       | MongoDB 7.0 database when the MongoDB backend is selected.                  |
+| `valhalla-mongo-express` | Optional Mongo Express web console (Mongo deployments only, profile gated). |
 
 Certificates are read from `/app/certs` when HTTPS is enabled. Persistent
-database data is stored in the `valhalla-mysql-data` and `valhalla-mongo-data`
-Docker volumes.
+database data is stored in either the `valhalla-mysql-data` or
+`valhalla-mongo-data` Docker volume depending on the selected backend.
 
 ## Installation
 
@@ -64,7 +64,8 @@ sudo apt install podman-compose
 
 ### 2. Run the setup script
 
-The script creates `/app/.env`, downloads the `docker-compose.yml`, pulls the
+The script creates `/app/.env`, downloads the `docker-compose.yml` tailored to
+your database choice, pulls the
 published images, and starts the stack. It will prompt for your Telegram bot
 credentials, admin user IDs, database passwords, and the public base URL used to
 serve subscription links. When you choose port `443` it can also request a
@@ -84,14 +85,14 @@ cd /app
 sudo docker compose ps
 sudo docker compose logs -f
 
-# Start Mongo Express when you need the web console
+# Start Mongo Express when you need the web console (MongoDB deployments only)
 sudo docker compose --profile mongo-express up -d mongo-express
 
 # Podman example
 sudo podman compose ps
 sudo podman compose logs -f
 
-# Start Mongo Express when you need the web console
+# Start Mongo Express when you need the web console (MongoDB deployments only)
 sudo podman compose --profile mongo-express up -d mongo-express
 ```
 
@@ -101,6 +102,9 @@ The API becomes available at `http://<host>:<FLASK_PORT>/api/v1/health` once
 
 ### MongoDB deployment notes
 
+- The repository ships `docker-compose.mongo.yml` for MongoDB deployments. Use
+  `docker compose -f docker-compose.mongo.yml up -d` (or `podman compose -f ...`)
+  when managing services manually without the setup script.
 - Set `DATABASE_BACKEND=mongodb` when you want the application to use the bundled
   MongoDB service. The container provisions the admin account using
   `MONGO_USER` and `MONGO_PASS`, so ensure both variables are defined before

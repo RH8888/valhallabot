@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_DIR="/app"
 ENV_FILE="$APP_DIR/.env"
-COMPOSE_URL="https://raw.githubusercontent.com/rh8888/Valhallabot/refs/heads/main/docker-compose.yml"
+COMPOSE_BASE_URL="https://raw.githubusercontent.com/rh8888/Valhallabot/refs/heads/main"
 COMPOSE_FILE="$APP_DIR/docker-compose.yml"
 
 mkdir -p "$APP_DIR"
@@ -341,15 +341,21 @@ fi
 echo "✓ Saved to $ENV_FILE."
 
 # ---------- fetch docker-compose.yml ----------
-if [ ! -f "$COMPOSE_FILE" ]; then
-  echo "Fetching docker-compose.yml from $COMPOSE_URL ..."
-  curl -fsSL "$COMPOSE_URL" -o "$COMPOSE_FILE"
-  echo "Saved as $COMPOSE_FILE"
+if [ "$db_backend" = "mongodb" ]; then
+  compose_url="$COMPOSE_BASE_URL/docker-compose.mongo.yml"
+else
+  compose_url="$COMPOSE_BASE_URL/docker-compose.yml"
 fi
+
+echo "Fetching docker-compose.yml from $compose_url ..."
+curl -fsSL "$compose_url" -o "$COMPOSE_FILE"
+echo "Saved as $COMPOSE_FILE"
 
 # If runtime is podman, ensure FQ mysql image + working DNS
 if [ "$RUNTIME" = "podman" ]; then
-  ensure_mysql_fq_image
+  if [ "$db_backend" = "mysql" ]; then
+    ensure_mysql_fq_image
+  fi
   ensure_podman_dns
 fi
 
@@ -364,8 +370,13 @@ if [ -n "$COMPOSE_BIN" ] && [ -f "$COMPOSE_FILE" ]; then
 
   # quick post-check (best effort)
   if [ "$RUNTIME" = "podman" ]; then
-    echo "Verifying container-to-container DNS (mysql)…"
-    ( podman exec -it valhalla-app getent hosts mysql >/dev/null 2>&1 && echo "DNS OK" ) || echo "DNS check failed (run: podman exec -it valhalla-app getent hosts mysql)"
+    if [ "$db_backend" = "mysql" ]; then
+      echo "Verifying container-to-container DNS (mysql)…"
+      ( podman exec -it valhalla-app getent hosts mysql >/dev/null 2>&1 && echo "DNS OK" ) || echo "DNS check failed (run: podman exec -it valhalla-app getent hosts mysql)"
+    else
+      echo "Verifying container-to-container DNS (mongodb)…"
+      ( podman exec -it valhalla-app getent hosts mongodb >/dev/null 2>&1 && echo "DNS OK" ) || echo "DNS check failed (run: podman exec -it valhalla-app getent hosts mongodb)"
+    fi
   fi
 else
   echo "compose not found or $COMPOSE_FILE missing. Start services manually later."
