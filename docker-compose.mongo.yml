@@ -6,8 +6,8 @@ services:
     container_name: valhalla-mongodb
     restart: unless-stopped
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-valhalla}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS:-changeme}
     healthcheck:
       test:
         [
@@ -32,8 +32,8 @@ services:
         condition: service_healthy
     environment:
       ME_CONFIG_MONGODB_SERVER: mongodb
-      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_USER}
-      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_PASS}
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_USER:-valhalla}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_PASS:-changeme}
       ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USER:-admin}
       ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASS:-changeme}
     ports:
@@ -59,8 +59,8 @@ services:
       MONGODB_HOST: ${MONGODB_HOST:-mongodb}
       MONGODB_PORT: ${MONGODB_PORT:-27017}
       MONGO_URI: ${MONGO_URI}
-      MONGO_USER: ${MONGO_USER}
-      MONGO_PASS: ${MONGO_PASS}
+      MONGO_USER: ${MONGO_USER:-valhalla}
+      MONGO_PASS: ${MONGO_PASS:-changeme}
       MONGO_DATABASE: ${MONGO_DATABASE}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       FLASK_HOST: ${FLASK_HOST}
@@ -94,8 +94,8 @@ services:
       MONGODB_HOST: ${MONGODB_HOST:-mongodb}
       MONGODB_PORT: ${MONGODB_PORT:-27017}
       MONGO_URI: ${MONGO_URI}
-      MONGO_USER: ${MONGO_USER}
-      MONGO_PASS: ${MONGO_PASS}
+      MONGO_USER: ${MONGO_USER:-valhalla}
+      MONGO_PASS: ${MONGO_PASS:-changeme}
       MONGO_DATABASE: ${MONGO_DATABASE}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       USAGE_SYNC_INTERVAL: ${USAGE_SYNC_INTERVAL}
@@ -119,8 +119,8 @@ services:
       MONGODB_HOST: ${MONGODB_HOST:-mongodb}
       MONGODB_PORT: ${MONGODB_PORT:-27017}
       MONGO_URI: ${MONGO_URI}
-      MONGO_USER: ${MONGO_USER}
-      MONGO_PASS: ${MONGO_PASS}
+      MONGO_USER: ${MONGO_USER:-valhalla}
+      MONGO_PASS: ${MONGO_PASS:-changeme}
       MONGO_DATABASE: ${MONGO_DATABASE}
       USAGE_SYNC_INTERVAL: ${USAGE_SYNC_INTERVAL}
       SERVICE: scripts.usage_sync

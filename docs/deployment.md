@@ -40,8 +40,10 @@ podman compose --profile mongo-express up -d mongo-express
 
 ## MongoDB services
 
-- Define `MONGO_USER` and `MONGO_PASS` in your `.env` file before launching the
-  compose stack so the MongoDB container can create the admin account.
+- If `MONGO_USER`/`MONGO_PASS` are left blank the compose file falls back to the
+  default `valhalla`/`changeme` credentials when provisioning the MongoDB
+  container. Change them in `.env` (and rotate existing users) for production
+  deployments.
 - Override `MONGODB_PORT` when you need to expose MongoDB on a non-default host
   port. The compose file publishes the selected port to `27017` inside the
   container.
