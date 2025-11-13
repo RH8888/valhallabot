@@ -14,6 +14,7 @@ import logging
 import re
 from pathlib import Path
 from urllib.parse import urljoin, unquote, quote
+from typing import Any
 
 import base64
 import requests
@@ -24,10 +25,9 @@ from flask import Flask, Response, abort, request, render_template_string
 from types import SimpleNamespace
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from services import init_mysql_pool, with_mysql_cursor, load_database_settings
-from services.database import errorcode, mysql_errors
+from services.subscription_storage import get_subscription_storage
 from apis import sanaei, pasarguard
-from .ownership import admin_ids, expand_owner_ids, canonical_owner_id
+from .ownership import canonical_owner_id
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | flask_agg | %(message)s",
@@ -41,15 +41,7 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 with (BASE_DIR / "templates" / "index.html").open(encoding="utf-8") as f:
     HTML_TEMPLATE = f.read()
 
-# Load environment variables and initialize the MySQL pool on import so that
-# the application is ready for WSGI servers like Gunicorn.
-_db_settings = load_database_settings(force_refresh=True)
-if _db_settings.backend != "mysql":
-    raise RuntimeError(
-        "The subscription aggregator requires the MySQL backend; configured backend=%s"
-        % _db_settings.backend
-    )
-init_mysql_pool()
+_storage = get_subscription_storage()
 
 FETCH_CACHE_TTL = int(os.getenv("FETCH_CACHE_TTL", "300"))
 _fetch_user_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
@@ -57,54 +49,27 @@ _fetch_user_lock = RLock()
 _fetch_links_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
 _fetch_links_lock = RLock()
 
-_settings_table_missing_logged = False
+
+def _panel_lookup(mapping: dict[Any, Any], panel_id: Any):
+    if panel_id in mapping:
+        return mapping[panel_id]
+    if isinstance(panel_id, int):
+        return mapping.get(str(panel_id))
+    if isinstance(panel_id, str) and panel_id.isdigit():
+        return mapping.get(int(panel_id)) or mapping.get(panel_id)
+    return mapping.get(panel_id)
 
 
 def get_setting(owner_id: int, key: str):
     oid = canonical_owner_id(owner_id)
-    with with_mysql_cursor() as cur:
-        try:
-            cur.execute(
-                "SELECT value FROM settings WHERE owner_id=%s AND `key`=%s LIMIT 1",
-                (oid, key),
-            )
-        except mysql_errors.ProgrammingError as exc:
-            if getattr(exc, "errno", None) == errorcode.ER_NO_SUCH_TABLE:
-                global _settings_table_missing_logged
-                if not _settings_table_missing_logged:
-                    log.warning(
-                        "settings table missing; returning no setting values until it is created"
-                    )
-                    _settings_table_missing_logged = True
-                return None
-            raise
-        row = cur.fetchone()
-        return row["value"] if row else None
+    return _storage.get_setting(oid, key)
 
 # ---------- queries ----------
 def get_owner_id(app_username, app_key):
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            "SELECT telegram_user_id FROM app_users WHERE username=%s AND app_key=%s LIMIT 1",
-            (app_username, app_key),
-        )
-        row = cur.fetchone()
-        return int(row["telegram_user_id"]) if row else None
+    return _storage.get_owner_id(app_username, app_key)
 
 def get_local_user(owner_id, local_username):
-    ids = expand_owner_ids(owner_id)
-    placeholders = ",".join(["%s"] * len(ids))
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT owner_id, username, plan_limit_bytes, used_bytes, expire_at, disabled_pushed, service_id
-            FROM local_users
-            WHERE owner_id IN ({placeholders}) AND username=%s
-            LIMIT 1
-        """,
-            tuple(ids) + (local_username,),
-        )
-        return cur.fetchone()
+    return _storage.get_local_user(owner_id, local_username)
 
 def list_mapped_links(owner_id, local_username):
     """Return panel link mappings for a local user.
@@ -112,20 +77,7 @@ def list_mapped_links(owner_id, local_username):
     Only the data required for API-based subscription fetching is selected; any
     panel-level subscription URL configured for name filtering is ignored here.
     """
-    ids = expand_owner_ids(owner_id)
-    placeholders = ",".join(["%s"] * len(ids))
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT lup.panel_id, lup.remote_username,
-                   p.panel_url, p.access_token, p.panel_type
-            FROM local_user_panel_links lup
-            JOIN panels p ON p.id = lup.panel_id
-            WHERE lup.owner_id IN ({placeholders}) AND lup.local_username=%s
-            """,
-            tuple(ids) + (local_username,),
-        )
-        return cur.fetchall()
+    return _storage.list_mapped_links(owner_id, local_username)
 
 def list_all_panels(owner_id):
     """List all panels for an owner for fallback resolution.
@@ -134,27 +86,10 @@ def list_all_panels(owner_id):
     returned as the unified subscription now fetches configs directly via the
     panel API.
     """
-    ids = expand_owner_ids(owner_id)
-    placeholders = ",".join(["%s"] * len(ids))
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"SELECT id, panel_url, access_token, panel_type FROM panels WHERE telegram_user_id IN ({placeholders})",
-            tuple(ids),
-        )
-        return cur.fetchall()
+    return _storage.list_all_panels(owner_id)
 
 def mark_user_disabled(owner_id, local_username):
-    ids = expand_owner_ids(owner_id)
-    placeholders = ",".join(["%s"] * len(ids))
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"""
-            UPDATE local_users
-            SET disabled_pushed=1, disabled_pushed_at=NOW()
-            WHERE owner_id IN ({placeholders}) AND username=%s
-        """,
-            tuple(ids) + (local_username,),
-        )
+    _storage.mark_user_disabled(owner_id, local_username)
 
 def disable_remote(panel_type, panel_url, token, remote_username):
     try:
@@ -286,8 +221,8 @@ def collect_links(mapped, local_username: str, want_html: bool):
     disabled_name_map, disabled_num_map = load_disabled_filters(panel_ids)
 
     def worker(l, dn_map, di_map):
-        disabled_names = dn_map.get(l["panel_id"], set())
-        disabled_nums = di_map.get(l["panel_id"], set())
+        disabled_names = _panel_lookup(dn_map, l.get("panel_id")) or set()
+        disabled_nums = _panel_lookup(di_map, l.get("panel_id")) or set()
         links, errs, rinfo = [], [], None
         if l.get("panel_type") == "sanaei":
             remotes = [r.strip() for r in l["remote_username"].split(",") if r.strip()]
@@ -399,84 +334,28 @@ def extract_name(link: str) -> str:
 
 def load_disabled_filters(panel_ids: list[int]):
     """Return disabled config names and numbers for panels in bulk."""
-    if not panel_ids:
-        return {}, {}
-    placeholders = ",".join(["%s"] * len(panel_ids))
-    names: dict[int, set[str]] = {}
-    nums: dict[int, set[int]] = {}
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"SELECT panel_id, config_name FROM panel_disabled_configs WHERE panel_id IN ({placeholders})",
-            tuple(panel_ids),
-        )
-        for r in cur.fetchall():
-            cn = canonicalize_name(r.get("config_name"))
-            if cn:
-                names.setdefault(int(r["panel_id"]), set()).add(cn)
-        cur.execute(
-            f"SELECT panel_id, config_index FROM panel_disabled_numbers WHERE panel_id IN ({placeholders})",
-            tuple(panel_ids),
-        )
-        for r in cur.fetchall():
-            idx = r.get("config_index")
-            if isinstance(idx, (int,)) and int(idx) > 0:
-                nums.setdefault(int(r["panel_id"]), set()).add(int(idx))
-    return names, nums
+
+    raw_names, raw_nums = _storage.load_disabled_filters(panel_ids)
+    names: dict[Any, set[str]] = {}
+    for pid, values in raw_names.items():
+        clean = {canonicalize_name(v) for v in values}
+        clean = {v for v in clean if v}
+        if clean:
+            names[pid] = clean
+    return names, raw_nums
 
 # ---- agent-level ----
 def get_agent(owner_id: int):
-    ids = expand_owner_ids(owner_id)
-    placeholders = ",".join(["%s"] * len(ids))
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT telegram_user_id, plan_limit_bytes, expire_at, disabled_pushed
-            FROM agents
-            WHERE telegram_user_id IN ({placeholders}) AND active=1
-            LIMIT 1
-        """,
-            tuple(ids),
-        )
-        return cur.fetchone()
+    return _storage.get_agent(owner_id)
 
 def get_agent_total_used(owner_id: int) -> int:
-    ids = expand_owner_ids(owner_id)
-    placeholders = ",".join(["%s"] * len(ids))
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"SELECT total_used_bytes AS su FROM agents WHERE telegram_user_id IN ({placeholders}) AND active=1 LIMIT 1",
-            tuple(ids),
-        )
-        row = cur.fetchone()
-        return int(row.get("su") or 0) if row else 0
+    return _storage.get_agent_total_used(owner_id)
 
 def list_all_agent_links(owner_id: int):
-    ids = expand_owner_ids(owner_id)
-    placeholders = ",".join(["%s"] * len(ids))
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT lup.local_username, lup.remote_username, p.panel_url, p.access_token, p.panel_type
-            FROM local_user_panel_links lup
-            JOIN panels p ON p.id = lup.panel_id
-            WHERE lup.owner_id IN ({placeholders})
-        """,
-            tuple(ids),
-        )
-        return cur.fetchall()
+    return _storage.list_all_agent_links(owner_id)
 
 def mark_agent_disabled(owner_id: int):
-    ids = expand_owner_ids(owner_id)
-    placeholders = ",".join(["%s"] * len(ids))
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"""
-            UPDATE agents
-            SET disabled_pushed=1, disabled_pushed_at=NOW()
-            WHERE telegram_user_id IN ({placeholders})
-        """,
-            tuple(ids),
-        )
+    _storage.mark_agent_disabled(owner_id)
 
 # ---------- app ----------
 app = Flask(__name__)
