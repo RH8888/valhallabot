@@ -83,6 +83,33 @@ ask_db_blank_random () {
   set_kv "$var" "$input"
 }
 
+ask_db_backend () {
+  local current choice=""
+  current="$(get_kv DATABASE_BACKEND)"
+  if [ -z "$current" ]; then
+    current="mysql"
+  fi
+
+  while true; do
+    printf "Which database backend should be used? [mysql/mongodb] [%s]: " "$current"
+    IFS= read -r choice || true
+    if [ -z "$choice" ]; then
+      choice="$current"
+    fi
+    choice="${choice,,}"
+    case "$choice" in
+      mysql|mongodb|mongo)
+        if [ "$choice" = "mongo" ]; then choice="mongodb"; fi
+        set_kv "DATABASE_BACKEND" "$choice"
+        break
+        ;;
+      *)
+        echo "Please choose either 'mysql' or 'mongodb'."
+        ;;
+    esac
+  done
+}
+
 validate_admins () {
   local val
   val="$(get_kv ADMIN_IDS | tr -d ' ')"
@@ -235,9 +262,12 @@ fi
 
 # ---------- defaults ----------
 [ -n "$(get_kv AGENT_TOKEN_ENCRYPTION_KEY)" ] || ensure_agent_token_key
+[ -n "$(get_kv DATABASE_BACKEND)" ] || set_kv "DATABASE_BACKEND" "mysql"
 [ -n "$(get_kv MYSQL_HOST)" ] || set_kv "MYSQL_HOST" "mysql"
 [ -n "$(get_kv MYSQL_PORT)" ] || set_kv "MYSQL_PORT" "3306"
 [ -n "$(get_kv MYSQL_DATABASE)" ] || set_kv "MYSQL_DATABASE" "valhalla"
+[ -n "$(get_kv MONGODB_HOST)" ] || set_kv "MONGODB_HOST" "mongodb"
+[ -n "$(get_kv MONGODB_PORT)" ] || set_kv "MONGODB_PORT" "27017"
 [ -n "$(get_kv FLASK_HOST)" ] || set_kv "FLASK_HOST" "0.0.0.0"
 [ -n "$(get_kv FLASK_PORT)" ] || set_kv "FLASK_PORT" "5000"
 [ -n "$(get_kv WORKERS)" ] || set_kv "WORKERS" "$((2 * $(nproc 2>/dev/null || echo 1) + 1))"
@@ -267,10 +297,19 @@ if [ "$(get_kv FLASK_PORT)" = "443" ]; then
   set_kv "SSL_KEY_PATH" "/app/certs/live/$domain/privkey.pem"
 fi
 
-echo "---- MySQL (blank = random) ----"
-ask_db_blank_random "MYSQL_USER" "MySQL app username" "user"
-ask_db_blank_random "MYSQL_PASSWORD" "MySQL app password" "pass"
-ask_db_blank_random "MYSQL_ROOT_PASSWORD" "MySQL ROOT password" "root"
+echo "---- Database Backend ----"
+ask_db_backend
+db_backend="$(get_kv DATABASE_BACKEND)"
+echo "Selected database backend: $db_backend"
+
+if [ "$db_backend" = "mysql" ]; then
+  echo "---- MySQL (blank = random) ----"
+  ask_db_blank_random "MYSQL_USER" "MySQL app username" "user"
+  ask_db_blank_random "MYSQL_PASSWORD" "MySQL app password" "pass"
+  ask_db_blank_random "MYSQL_ROOT_PASSWORD" "MySQL ROOT password" "root"
+else
+  echo "MongoDB selected. Update MONGODB_HOST and MONGODB_PORT in $ENV_FILE if different from defaults."
+fi
 
 echo "✓ Saved to $ENV_FILE."
 

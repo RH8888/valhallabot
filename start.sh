@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 set -e
 
-/app/wait-for-mysql.sh
+db_backend="${DATABASE_BACKEND:-${DB_BACKEND:-mysql}}"
+
+case "${db_backend,,}" in
+  mongo|mongodb)
+    if [ -x /app/wait-for-mongo.sh ]; then
+      /app/wait-for-mongo.sh
+    fi
+    ;;
+  mysql|*)
+    /app/wait-for-mysql.sh
+    ;;
+esac
 
 service="${SERVICE:-app}"
 

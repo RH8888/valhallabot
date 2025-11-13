@@ -10,6 +10,6 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-RUN chmod +x /app/wait-for-mysql.sh /app/start.sh
+RUN chmod +x /app/wait-for-mysql.sh /app/wait-for-mongo.sh /app/start.sh
 
 CMD ["/bin/bash", "-lc", "/app/start.sh"]
