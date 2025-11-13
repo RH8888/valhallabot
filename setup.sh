@@ -332,8 +332,8 @@ if [ "$db_backend" = "mysql" ]; then
 else
   echo "---- MongoDB ----"
   ask_optional "MONGO_URI" "MongoDB connection URI (- to clear)"
-  ask_optional "MONGO_USER" "MongoDB username (- to clear)"
-  ask_optional "MONGO_PASS" "MongoDB password (- to clear)"
+  ask_optional "MONGO_USER" "MongoDB username (- to clear, blank = valhalla)"
+  ask_optional "MONGO_PASS" "MongoDB password (- to clear, blank = changeme)"
   ask_optional "MONGODB_HOST" "MongoDB host (- to clear)"
   ask_optional "MONGODB_PORT" "MongoDB port (- to clear)"
 fi

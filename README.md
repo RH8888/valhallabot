@@ -106,9 +106,9 @@ The API becomes available at `http://<host>:<FLASK_PORT>/api/v1/health` once
   `docker compose -f docker-compose.mongo.yml up -d` (or `podman compose -f ...`)
   when managing services manually without the setup script.
 - Set `DATABASE_BACKEND=mongodb` when you want the application to use the bundled
-  MongoDB service. The container provisions the admin account using
-  `MONGO_USER` and `MONGO_PASS`, so ensure both variables are defined before
-  running `docker compose up`.
+  MongoDB service. If `MONGO_USER`/`MONGO_PASS` are left empty the stack falls
+  back to the default `valhalla`/`changeme` credentials. Update these values in
+  your `.env` file when deploying to a shared environment.
 - The MongoDB port exposed to the host is controlled by `MONGODB_PORT`
   (defaults to `27017`). Open this port in your firewall if remote management or
   replica sets require it.
