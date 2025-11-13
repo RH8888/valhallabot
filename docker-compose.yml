@@ -27,11 +27,14 @@ services:
       mysql:
         condition: service_healthy
     environment:
+      DATABASE_BACKEND: ${DATABASE_BACKEND:-mysql}
       MYSQL_HOST: ${MYSQL_HOST}
       MYSQL_PORT: ${MYSQL_PORT}
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MONGODB_HOST: ${MONGODB_HOST:-mongodb}
+      MONGODB_PORT: ${MONGODB_PORT:-27017}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       FLASK_HOST: ${FLASK_HOST}
       FLASK_PORT: ${FLASK_PORT}
@@ -55,11 +58,14 @@ services:
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
       ADMIN_IDS: ${ADMIN_IDS}
+      DATABASE_BACKEND: ${DATABASE_BACKEND:-mysql}
       MYSQL_HOST: ${MYSQL_HOST}
       MYSQL_PORT: ${MYSQL_PORT}
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MONGODB_HOST: ${MONGODB_HOST:-mongodb}
+      MONGODB_PORT: ${MONGODB_PORT:-27017}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       USAGE_SYNC_INTERVAL: ${USAGE_SYNC_INTERVAL}
       SERVICE: bot
@@ -73,11 +79,14 @@ services:
       mysql:
         condition: service_healthy
     environment:
+      DATABASE_BACKEND: ${DATABASE_BACKEND:-mysql}
       MYSQL_HOST: ${MYSQL_HOST}
       MYSQL_PORT: ${MYSQL_PORT}
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MONGODB_HOST: ${MONGODB_HOST:-mongodb}
+      MONGODB_PORT: ${MONGODB_PORT:-27017}
       USAGE_SYNC_INTERVAL: ${USAGE_SYNC_INTERVAL}
       SERVICE: scripts.usage_sync
 
