@@ -8,7 +8,7 @@ from urllib.parse import urljoin
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
-from services import init_mysql_pool, with_mysql_cursor
+from services import init_mysql_pool, with_mysql_cursor, load_database_settings
 from services.database import mysql_errors
 
 from apis import marzneshin, marzban, rebecca, sanaei, pasarguard
@@ -462,6 +462,13 @@ def loop():
 
 def main():
     load_dotenv()
+    settings = load_database_settings(force_refresh=True)
+    if settings.backend != "mysql":
+        log.error(
+            "scripts.usage_sync requires the MySQL backend; configured backend=%s",
+            settings.backend,
+        )
+        return
     init_mysql_pool()
     loop()
 

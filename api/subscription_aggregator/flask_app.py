@@ -24,7 +24,7 @@ from flask import Flask, Response, abort, request, render_template_string
 from types import SimpleNamespace
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from services import init_mysql_pool, with_mysql_cursor
+from services import init_mysql_pool, with_mysql_cursor, load_database_settings
 from services.database import errorcode, mysql_errors
 from apis import sanaei, pasarguard
 from .ownership import admin_ids, expand_owner_ids, canonical_owner_id
@@ -43,6 +43,12 @@ with (BASE_DIR / "templates" / "index.html").open(encoding="utf-8") as f:
 
 # Load environment variables and initialize the MySQL pool on import so that
 # the application is ready for WSGI servers like Gunicorn.
+_db_settings = load_database_settings(force_refresh=True)
+if _db_settings.backend != "mysql":
+    raise RuntimeError(
+        "The subscription aggregator requires the MySQL backend; configured backend=%s"
+        % _db_settings.backend
+    )
 init_mysql_pool()
 
 FETCH_CACHE_TTL = int(os.getenv("FETCH_CACHE_TTL", "300"))
