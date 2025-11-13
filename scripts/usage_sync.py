@@ -8,8 +8,7 @@ from urllib.parse import urljoin
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
-from services import init_mysql_pool, with_mysql_cursor, load_database_settings
-from services.database import mysql_errors
+from services.subscription_storage import get_subscription_storage
 
 from apis import marzneshin, marzban, rebecca, sanaei, pasarguard
 
@@ -28,59 +27,16 @@ API_MODULES = {
 }
 
 
+_storage = get_subscription_storage()
+
+
 def get_api(panel_type: str):
     """Return API module for the given panel type."""
     return API_MODULES.get(panel_type or "marzneshin", marzneshin)
 
 # ---------------- existing per-link / per-user logic ----------------
-
-def ensure_links_table():
-    """Create local_user_panel_links table if missing."""
-    with with_mysql_cursor(dict_=False) as cur:
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS local_user_panel_links(
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                owner_id BIGINT NOT NULL,
-                local_username VARCHAR(64) NOT NULL,
-                panel_id BIGINT NOT NULL,
-                remote_username VARCHAR(128) NOT NULL,
-                last_used_traffic BIGINT NOT NULL DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                UNIQUE KEY uq_link(owner_id, local_username, panel_id),
-                FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-            """
-        )
-
-
 def fetch_all_links():
-    try:
-        with with_mysql_cursor() as cur:
-            cur.execute(
-                """
-                SELECT lup.id AS link_id,
-                       lup.owner_id,
-                       lup.local_username,
-                       lup.panel_id,
-                       lup.remote_username,
-                       lup.last_used_traffic,
-                       p.panel_url,
-                       p.access_token,
-                       p.panel_type
-                FROM local_user_panel_links lup
-                JOIN panels p ON p.id = lup.panel_id
-                ORDER BY lup.id ASC
-                """
-            )
-            return cur.fetchall()
-    except mysql_errors.ProgrammingError as e:
-        if getattr(e, "errno", None) == 1146:  # table doesn't exist
-            log.warning("local_user_panel_links table missing; creating")
-            ensure_links_table()
-            return []
-        raise
+    return _storage.fetch_all_links()
 
 def fetch_used_traffic(panel_type, panel_url, bearer, remote_username):
     """Return used traffic for a remote user via appropriate panel API."""
@@ -102,60 +58,19 @@ def fetch_used_traffic(panel_type, panel_url, bearer, remote_username):
         return None, str(e)
 
 def add_usage(owner_id, local_username, delta):
-    if delta <= 0:
-        return
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            """
-            UPDATE local_users
-            SET used_bytes = LEAST(used_bytes + %s, 18446744073709551615)
-            WHERE owner_id = %s AND username = %s
-        """,
-            (int(delta), int(owner_id), local_username),
-        )
-        cur.execute(
-            """
-            UPDATE agents
-            SET total_used_bytes = LEAST(total_used_bytes + %s, 18446744073709551615)
-            WHERE telegram_user_id = %s
-        """,
-            (int(delta), int(owner_id)),
-        )
+    _storage.add_usage(owner_id, local_username, delta)
 
 def update_last(link_id, new_used):
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            "UPDATE local_user_panel_links SET last_used_traffic=%s WHERE id=%s",
-            (int(new_used), int(link_id)),
-        )
+    _storage.update_link_last_used(link_id, new_used)
 
 def get_local_user(owner_id, local_username):
-    with with_mysql_cursor() as cur:
-        cur.execute("""
-            SELECT plan_limit_bytes, used_bytes, disabled_pushed
-            FROM local_users
-            WHERE owner_id=%s AND username=%s
-            LIMIT 1
-        """, (owner_id, local_username))
-        return cur.fetchone()
+    return _storage.get_local_user(owner_id, local_username)
 
 def list_links_of_local_user(owner_id, local_username):
-    with with_mysql_cursor() as cur:
-        cur.execute("""
-            SELECT lup.panel_id, lup.remote_username, p.panel_url, p.access_token, p.panel_type
-            FROM local_user_panel_links lup
-            JOIN panels p ON p.id = lup.panel_id
-            WHERE lup.owner_id=%s AND lup.local_username=%s
-        """, (owner_id, local_username))
-        return cur.fetchall()
+    return _storage.list_links_of_local_user(owner_id, local_username)
 
 def mark_user_disabled(owner_id, local_username):
-    with with_mysql_cursor() as cur:
-        cur.execute("""
-            UPDATE local_users
-            SET disabled_pushed=1, disabled_pushed_at=NOW()
-            WHERE owner_id=%s AND username=%s
-        """, (owner_id, local_username))
+    _storage.mark_user_disabled(owner_id, local_username)
 
 def disable_remote(panel_type, panel_url, token, remote_username):
     api = get_api(panel_type)
@@ -181,12 +96,7 @@ def enable_remote(panel_type, panel_url, token, remote_username):
     return (200 if all_ok else None), last_msg
 
 def mark_user_enabled(owner_id, local_username):
-    with with_mysql_cursor() as cur:
-        cur.execute("""
-            UPDATE local_users
-            SET disabled_pushed=0, disabled_pushed_at=NULL
-            WHERE owner_id=%s AND username=%s
-        """, (owner_id, local_username))
+    _storage.mark_user_enabled(owner_id, local_username)
 
 def try_disable_if_user_exceeded(owner_id, local_username):
     lu = get_local_user(owner_id, local_username)
@@ -228,54 +138,23 @@ def try_enable_if_user_ok(owner_id, local_username):
 
 def get_agent(owner_id: int):
     """owner_id همان Telegram User ID نماینده/ادمین است."""
-    with with_mysql_cursor() as cur:
-        cur.execute("""
-            SELECT telegram_user_id, name, plan_limit_bytes, expire_at, active, disabled_pushed
-            FROM agents
-            WHERE telegram_user_id=%s
-            LIMIT 1
-        """, (owner_id,))
-        return cur.fetchone()
+    return _storage.get_agent(owner_id)
 
 def total_used_by_owner(owner_id: int) -> int:
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            "SELECT total_used_bytes AS tot FROM agents WHERE telegram_user_id=%s", (owner_id,)
-        )
-        row = cur.fetchone()
-        return int(row.get("tot") or 0) if row else 0
+    return _storage.get_agent_total_used(owner_id)
 
 def list_all_local_usernames(owner_id: int):
-    with with_mysql_cursor() as cur:
-        cur.execute("SELECT username FROM local_users WHERE owner_id=%s", (owner_id,))
-        return [r["username"] for r in cur.fetchall()]
+    return _storage.list_all_local_usernames(owner_id)
 
 def list_agent_assigned_panels(owner_id: int):
     """پنل‌هایی که به نماینده assign شده‌اند (agent_panels)."""
-    with with_mysql_cursor() as cur:
-        cur.execute("""
-            SELECT p.id, p.panel_url, p.access_token, p.panel_type
-            FROM agent_panels ap
-            JOIN panels p ON p.id = ap.panel_id
-            WHERE ap.agent_tg_id=%s
-        """, (owner_id,))
-        return cur.fetchall()
+    return _storage.list_agent_assigned_panels(owner_id)
 
 def mark_agent_disabled(owner_id: int):
-    with with_mysql_cursor() as cur:
-        cur.execute("""
-            UPDATE agents
-            SET disabled_pushed=1, disabled_pushed_at=NOW()
-            WHERE telegram_user_id=%s
-        """, (owner_id,))
+    _storage.mark_agent_disabled(owner_id)
 
 def mark_all_users_disabled(owner_id: int):
-    with with_mysql_cursor() as cur:
-        cur.execute("""
-            UPDATE local_users
-            SET disabled_pushed=1, disabled_pushed_at=NOW()
-            WHERE owner_id=%s
-        """, (owner_id,))
+    _storage.mark_all_users_disabled(owner_id)
 
 def disable_user_on_assigned_panels(owner_id: int, username: str):
     """اگر مپ مستقیمی نبود، روی پنل‌های assign‌شده هم با همان username دیزیبل کن."""
@@ -298,20 +177,10 @@ def enable_user_on_assigned_panels(owner_id: int, username: str):
             log.info("(assigned) enabled %s on %s", username, p["panel_url"])
 
 def mark_agent_enabled(owner_id: int):
-    with with_mysql_cursor() as cur:
-        cur.execute("""
-            UPDATE agents
-            SET disabled_pushed=0, disabled_pushed_at=NULL
-            WHERE telegram_user_id=%s
-        """, (owner_id,))
+    _storage.mark_agent_enabled(owner_id)
 
 def mark_all_users_enabled(owner_id: int):
-    with with_mysql_cursor() as cur:
-        cur.execute("""
-            UPDATE local_users
-            SET disabled_pushed=0, disabled_pushed_at=NULL
-            WHERE owner_id=%s
-        """, (owner_id,))
+    _storage.mark_all_users_enabled(owner_id)
 
 def try_disable_agent_if_exceeded(owner_id: int):
     """
@@ -407,7 +276,6 @@ def try_enable_agent_if_ok(owner_id: int):
 
 def sync_agent_now(owner_id: int):
     """Public helper for bot to immediately re-check agent status."""
-    init_mysql_pool()
     try:
         try_disable_agent_if_exceeded(owner_id)
         try_enable_agent_if_ok(owner_id)
@@ -449,7 +317,12 @@ def loop():
                 try_enable_if_user_ok(row["owner_id"], row["local_username"])
 
                 # برای بهینگی، در پایان هر owner یک‌بار چک agent quota انجام می‌دهیم
-                seen_owners.add(int(row["owner_id"]))
+                owner_key = row.get("owner_id")
+                try:
+                    owner_key = int(owner_key)
+                except (TypeError, ValueError):
+                    pass
+                seen_owners.add(owner_key)
 
             # پس از پردازش همه لینک‌ها، وضعیت نماینده‌ها را چک کن
             for owner_id in seen_owners:
@@ -462,14 +335,8 @@ def loop():
 
 def main():
     load_dotenv()
-    settings = load_database_settings(force_refresh=True)
-    if settings.backend != "mysql":
-        log.error(
-            "scripts.usage_sync requires the MySQL backend; configured backend=%s",
-            settings.backend,
-        )
-        return
-    init_mysql_pool()
+    storage = get_subscription_storage()
+    storage.ensure_links_structure()
     loop()
 
 if __name__ == "__main__":
