@@ -6,14 +6,13 @@ from typing import Optional
 from models.admins import get_admin_token as _get_admin_token, rotate_admin_token as _rotate_admin_token
 from models.agents import get_api_token, rotate_api_token
 
-from .database import with_mysql_cursor
+from .repository import get_repository
 
 
 def get_agent_record(tg_id: int) -> Optional[dict]:
     """Return the agent database record by Telegram ID."""
-    with with_mysql_cursor() as cur:
-        cur.execute("SELECT * FROM agents WHERE telegram_user_id=%s", (tg_id,))
-        return cur.fetchone()
+    repository = get_repository()
+    return repository.get_agent_by_telegram_id(tg_id)
 
 
 def get_agent_token_value(agent_db_id: int) -> str:

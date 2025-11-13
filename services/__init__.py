@@ -6,6 +6,7 @@ from .database import (
     load_database_settings,
     get_database_backend,
     get_mongo_settings,
+    get_mongo_client,
 )
 from .tokens import (
     get_admin_token,
@@ -21,6 +22,7 @@ from .quotas import (
     renew_agent_days,
     set_agent_active,
 )
+from .repository import get_repository
 
 __all__ = [
     "init_mysql_pool",
@@ -29,6 +31,8 @@ __all__ = [
     "load_database_settings",
     "get_database_backend",
     "get_mongo_settings",
+    "get_mongo_client",
+    "get_repository",
     "get_admin_token",
     "rotate_admin_token",
     "get_agent_record",

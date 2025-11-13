@@ -11,6 +11,7 @@ from urllib.parse import quote_plus
 from dotenv import load_dotenv
 from mysql.connector import Error as MySQLError
 from mysql.connector import errorcode, errors as mysql_errors, pooling
+from pymongo import MongoClient
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class DatabaseSettings:
 
 
 MYSQL_POOL: pooling.MySQLConnectionPool | None = None
+MONGO_CLIENT: MongoClient | None = None
 DATABASE_SETTINGS: DatabaseSettings | None = None
 PoolError = pooling.PoolError
 
@@ -128,6 +130,54 @@ def load_database_settings(force_refresh: bool = False) -> DatabaseSettings:
         DATABASE_SETTINGS = DatabaseSettings(backend="mongodb", mongo=mongo_settings)
 
     return DATABASE_SETTINGS
+
+
+def init_mongo_client(**overrides: Any) -> MongoClient | None:
+    """Initialise and cache the MongoDB client for the configured backend."""
+
+    settings = load_database_settings()
+    if settings.backend != "mongodb":
+        log.info("Skipping MongoDB client initialisation for backend=%s", settings.backend)
+        return None
+
+    global MONGO_CLIENT
+    if MONGO_CLIENT is not None:
+        return MONGO_CLIENT
+
+    mongo_settings = settings.mongo
+    if mongo_settings is None:
+        raise RuntimeError("MongoDB backend selected but settings.mongo is missing")
+
+    config: Dict[str, Any] = {}
+    config.update(overrides)
+    uri = mongo_settings.uri
+    MONGO_CLIENT = MongoClient(uri, **config)
+    return MONGO_CLIENT
+
+
+def get_mongo_client() -> MongoClient:
+    """Return the active MongoDB client, initialising it on demand."""
+
+    client = init_mongo_client()
+    if client is None:
+        raise RuntimeError("MongoDB backend is not configured; cannot provide a client")
+    return client
+
+
+def get_mongo_database():
+    """Return the database handle for the configured MongoDB backend."""
+
+    settings = load_database_settings()
+    mongo_settings = settings.mongo
+    if settings.backend != "mongodb" or mongo_settings is None:
+        raise RuntimeError("MongoDB backend is not configured")
+
+    database_name = mongo_settings.database or os.getenv("MONGO_DATABASE") or os.getenv("MONGO_DB")
+    if not database_name:
+        database_name = "valhalla"
+
+    client = get_mongo_client()
+    return client[database_name]
 
 
 def get_database_backend() -> str:
@@ -451,9 +501,13 @@ __all__ = [
     "load_database_settings",
     "get_database_backend",
     "get_mongo_settings",
+    "init_mongo_client",
+    "get_mongo_client",
+    "get_mongo_database",
     "DatabaseSettings",
     "MongoSettings",
     "MYSQL_POOL",
+    "MONGO_CLIENT",
     "MySQLError",
     "mysql_errors",
     "PoolError",

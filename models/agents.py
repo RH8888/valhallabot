@@ -1,6 +1,8 @@
 import hashlib
 import logging
 
+from services.repository import get_repository
+
 from .token_crypto import (
     TokenEncryptionError,
     decrypt_token as _base_decrypt,
@@ -42,24 +44,12 @@ def rotate_api_token(agent_id: int) -> str:
     Raises ValueError if the agent does not exist.
     """
     token, token_hash = generate_api_token()
-    # Import here to avoid circular import with bot.py
-    from services import with_mysql_cursor
-
     encrypted = _encrypt_token(token)
 
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            """
-            UPDATE agents
-            SET api_token=%s,
-                api_token_encrypted=%s,
-                api_token_raw=NULL
-            WHERE id=%s
-            """,
-            (token_hash, encrypted, agent_id),
-        )
-        if cur.rowcount == 0:
-            raise ValueError("agent not found")
+    repository = get_repository()
+    updated = repository.update_agent_token_fields(agent_id, token_hash, encrypted)
+    if not updated:
+        raise ValueError("agent not found")
     return token
 
 
@@ -71,67 +61,35 @@ def get_api_token(agent_id: int) -> str:
 
     Raises ValueError if the agent does not exist.
     """
-    from services import with_mysql_cursor
+    repository = get_repository()
+    row = repository.get_agent_token_fields(agent_id)
+    if not row:
+        raise ValueError("agent not found")
 
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            """
-            SELECT api_token_encrypted, api_token_raw
-            FROM agents
-            WHERE id=%s
-            """,
-            (agent_id,),
-        )
-        row = cur.fetchone()
-        if not row:
-            raise ValueError("agent not found")
-        encrypted = row.get("api_token_encrypted")
-        if encrypted:
-            return _decrypt_token(encrypted)
+    encrypted = row.get("api_token_encrypted")
+    if encrypted:
+        return _decrypt_token(encrypted)
 
-        legacy_token = row.get("api_token_raw")
-        if legacy_token:
-            log.info("Migrating legacy plaintext token for agent %s", agent_id)
-            token_hash = hashlib.sha256(legacy_token.encode()).hexdigest()
-            encrypted_token = _encrypt_token(legacy_token)
-            cur.execute(
-                """
-                UPDATE agents
-                SET api_token=%s,
-                    api_token_encrypted=%s,
-                    api_token_raw=NULL
-                WHERE id=%s
-                """,
-                (token_hash, encrypted_token, agent_id),
-            )
-            return legacy_token
+    legacy_token = row.get("api_token_raw")
+    if legacy_token:
+        log.info("Migrating legacy plaintext token for agent %s", agent_id)
+        token_hash = hashlib.sha256(legacy_token.encode()).hexdigest()
+        encrypted_token = _encrypt_token(legacy_token)
+        repository.update_agent_token_fields(agent_id, token_hash, encrypted_token)
+        return legacy_token
 
-        # Token missing entirely; create a new one.
-        token, token_hash = generate_api_token()
-        encrypted_token = _encrypt_token(token)
-        cur.execute(
-            """
-            UPDATE agents
-            SET api_token=%s,
-                api_token_encrypted=%s,
-                api_token_raw=NULL
-            WHERE id=%s
-            """,
-            (token_hash, encrypted_token, agent_id),
-        )
-        return token
+    # Token missing entirely; create a new one.
+    token, token_hash = generate_api_token()
+    encrypted_token = _encrypt_token(token)
+    repository.update_agent_token_fields(agent_id, token_hash, encrypted_token)
+    return token
 
 
 def migrate_agent_tokens_to_encrypted():
     """Encrypt legacy plaintext agent tokens stored in the database."""
 
-    from services import with_mysql_cursor
-
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            "SELECT id, api_token_raw FROM agents WHERE api_token_raw IS NOT NULL"
-        )
-        rows = cur.fetchall()
+    repository = get_repository()
+    rows = repository.get_agents_with_legacy_tokens()
 
     if not rows:
         return
@@ -151,14 +109,4 @@ def migrate_agent_tokens_to_encrypted():
     if not updates:
         return
 
-    with with_mysql_cursor() as cur:
-        cur.executemany(
-            """
-            UPDATE agents
-            SET api_token=%s,
-                api_token_encrypted=%s,
-                api_token_raw=NULL
-            WHERE id=%s
-            """,
-            updates,
-        )
+    repository.bulk_update_agent_tokens(updates)
