@@ -1,6 +1,46 @@
 version: "3.9"
 
 services:
+  mongodb:
+    image: docker.io/library/mongo:7.0
+    container_name: valhalla-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh 'mongodb://$${MONGO_INITDB_ROOT_USERNAME}:$${MONGO_INITDB_ROOT_PASSWORD}@localhost:27017/admin' --quiet --eval 'db.runCommand({ ping: 1 })'"
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+    ports:
+      - "${MONGODB_PORT:-27017}:27017"
+    volumes:
+      - valhalla-mongo-data:/data/db
+
+  mongo-express:
+    image: docker.io/library/mongo-express:1.0.2
+    container_name: valhalla-mongo-express
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_USER}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_PASS}
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USER:-admin}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASS:-changeme}
+    ports:
+      - "${MONGO_EXPRESS_PORT:-8081}:8081"
+    profiles:
+      - mongo-express
+
   mysql:
     image: docker.io/library/mysql:8.0
     container_name: valhalla-mysql
@@ -25,6 +65,8 @@ services:
     restart: unless-stopped
     depends_on:
       mysql:
+        condition: service_healthy
+      mongodb:
         condition: service_healthy
     environment:
       DATABASE_BACKEND: ${DATABASE_BACKEND:-mysql}
@@ -59,6 +101,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      mongodb:
+        condition: service_healthy
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
       ADMIN_IDS: ${ADMIN_IDS}
@@ -86,6 +130,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      mongodb:
+        condition: service_healthy
     environment:
       DATABASE_BACKEND: ${DATABASE_BACKEND:-mysql}
       MYSQL_HOST: ${MYSQL_HOST}
@@ -104,3 +150,4 @@ services:
 
 volumes:
   valhalla-mysql-data:
+  valhalla-mongo-data:

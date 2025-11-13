@@ -10,6 +10,9 @@ This project uses [Uvicorn](https://www.uvicorn.org/) as its ASGI server.
 docker build -t valhalla .
 docker run --rm -p ${FLASK_PORT:-5000}:${FLASK_PORT:-5000} valhalla
 docker compose up -d
+
+# Start the optional Mongo Express dashboard on demand
+docker compose --profile mongo-express up -d mongo-express
 ```
 
 ### Podman
@@ -18,6 +21,9 @@ docker compose up -d
 podman build -t valhalla .
 podman run --rm -p ${FLASK_PORT:-5000}:${FLASK_PORT:-5000} valhalla
 podman compose up -d
+
+# Start the optional Mongo Express dashboard on demand
+podman compose --profile mongo-express up -d mongo-express
 ```
 
 **Podman prerequisites**
@@ -31,6 +37,17 @@ podman compose up -d
 - Volume permissions: use `--userns keep-id` or adjust host ownership.
 - SELinux denials: add `:Z` to volume mounts or disable labels with
   `--security-opt label=disable`.
+
+## MongoDB services
+
+- Define `MONGO_USER` and `MONGO_PASS` in your `.env` file before launching the
+  compose stack so the MongoDB container can create the admin account.
+- Override `MONGODB_PORT` when you need to expose MongoDB on a non-default host
+  port. The compose file publishes the selected port to `27017` inside the
+  container.
+- Mongo Express is shipped but disabled by default. Use the commands above to
+  start it with the `mongo-express` profile and secure the dashboard with
+  `MONGO_EXPRESS_USER`/`MONGO_EXPRESS_PASS`.
 
 ## Running with Uvicorn
 
