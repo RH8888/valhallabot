@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from contextlib import AbstractContextManager
 from typing import Any, Dict
+from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 from mysql.connector import Error as MySQLError
@@ -13,7 +15,29 @@ from mysql.connector import errorcode, errors as mysql_errors, pooling
 log = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class MongoSettings:
+    """Runtime configuration for the MongoDB backend."""
+
+    uri: str
+    host: str
+    port: int
+    username: str | None
+    password: str | None
+    database: str | None
+
+
+@dataclass(frozen=True)
+class DatabaseSettings:
+    """Combined database configuration derived from the environment."""
+
+    backend: str
+    mysql: Dict[str, Any] | None = None
+    mongo: MongoSettings | None = None
+
+
 MYSQL_POOL: pooling.MySQLConnectionPool | None = None
+DATABASE_SETTINGS: DatabaseSettings | None = None
 PoolError = pooling.PoolError
 
 
@@ -29,7 +53,6 @@ def _int_from_env(key: str, default: int) -> int:
 
 
 def _build_pool_config(overrides: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    load_dotenv()
     default_pool_size = (os.cpu_count() or 1) * 5
     config: Dict[str, Any] = {
         "pool_name": os.getenv("MYSQL_POOL_NAME", "bot_pool"),
@@ -47,11 +70,91 @@ def _build_pool_config(overrides: Dict[str, Any] | None = None) -> Dict[str, Any
     return config
 
 
+def _normalise_backend(value: str | None) -> str:
+    if not value:
+        return "mysql"
+    value = value.strip().lower()
+    if value in {"mongo", "mongodb"}:
+        return "mongodb"
+    return "mysql"
+
+
+def _build_mongo_settings() -> MongoSettings:
+    host = os.getenv("MONGODB_HOST", "mongodb")
+    port = _int_from_env("MONGODB_PORT", 27017)
+    username = (os.getenv("MONGO_USER") or "").strip() or None
+    password = (os.getenv("MONGO_PASS") or "").strip() or None
+    database = (os.getenv("MONGO_DATABASE") or os.getenv("MONGO_DB"))
+    if database:
+        database = database.strip() or None
+
+    uri = (os.getenv("MONGO_URI") or "").strip()
+    if not uri:
+        auth = ""
+        if username:
+            user_enc = quote_plus(username)
+            if password:
+                auth = f"{user_enc}:{quote_plus(password)}@"
+            else:
+                auth = f"{user_enc}@"
+        uri = f"mongodb://{auth}{host}:{port}"
+        if database:
+            uri = f"{uri}/{database}"
+
+    return MongoSettings(
+        uri=uri,
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        database=database,
+    )
+
+
+def load_database_settings(force_refresh: bool = False) -> DatabaseSettings:
+    """Load and cache database configuration from environment variables."""
+
+    global DATABASE_SETTINGS
+    if DATABASE_SETTINGS is not None and not force_refresh:
+        return DATABASE_SETTINGS
+
+    load_dotenv()
+    backend = _normalise_backend(os.getenv("DATABASE_BACKEND"))
+    if backend == "mysql":
+        mysql_config = _build_pool_config()
+        DATABASE_SETTINGS = DatabaseSettings(backend="mysql", mysql=mysql_config)
+    else:
+        mongo_settings = _build_mongo_settings()
+        DATABASE_SETTINGS = DatabaseSettings(backend="mongodb", mongo=mongo_settings)
+
+    return DATABASE_SETTINGS
+
+
+def get_database_backend() -> str:
+    """Return the configured database backend."""
+
+    return load_database_settings().backend
+
+
+def get_mongo_settings() -> MongoSettings:
+    """Return MongoDB configuration, raising if MongoDB is not selected."""
+
+    settings = load_database_settings()
+    if settings.backend != "mongodb" or settings.mongo is None:
+        raise RuntimeError("MongoDB backend is not configured")
+    return settings.mongo
+
+
 def init_mysql_pool(**overrides: Any) -> None:
     """Initialise the global MySQL connection pool if needed."""
+    settings = load_database_settings()
+    if settings.backend != "mysql":
+        log.info("Skipping MySQL pool initialisation for backend=%s", settings.backend)
+        return
     global MYSQL_POOL
     if MYSQL_POOL is not None:
         return
+    load_dotenv()
     config = _build_pool_config(overrides)
     MYSQL_POOL = pooling.MySQLConnectionPool(**config)
 
@@ -61,6 +164,8 @@ def get_mysql_pool() -> pooling.MySQLConnectionPool:
     global MYSQL_POOL
     if MYSQL_POOL is None:
         init_mysql_pool()
+    if MYSQL_POOL is None:
+        raise RuntimeError("MySQL backend is not configured; cannot provide a connection pool")
     return MYSQL_POOL
 
 
@@ -103,6 +208,11 @@ def with_mysql_cursor(dict_: bool = True):
 
 def ensure_schema() -> None:
     """Create database tables required by the application if they do not exist."""
+    settings = load_database_settings()
+    if settings.backend != "mysql":
+        log.info("Skipping schema creation for backend=%s", settings.backend)
+        return
+
     with with_mysql_cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS admins(
@@ -338,6 +448,11 @@ __all__ = [
     "get_mysql_pool",
     "with_mysql_cursor",
     "ensure_schema",
+    "load_database_settings",
+    "get_database_backend",
+    "get_mongo_settings",
+    "DatabaseSettings",
+    "MongoSettings",
     "MYSQL_POOL",
     "MySQLError",
     "mysql_errors",

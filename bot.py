@@ -54,6 +54,7 @@ from services import (
     init_mysql_pool,
     with_mysql_cursor,
     ensure_schema,
+    load_database_settings,
     get_agent_record,
     get_agent_token_value,
     rotate_agent_token_value,
@@ -2953,6 +2954,12 @@ def build_app():
     tok = os.getenv("BOT_TOKEN", "").strip()
     if not tok:
         raise RuntimeError("BOT_TOKEN missing in .env")
+    settings = load_database_settings(force_refresh=True)
+    if settings.backend != "mysql":
+        raise RuntimeError(
+            "The Telegram bot requires the MySQL backend; configured backend=%s"
+            % settings.backend
+        )
     init_mysql_pool()
     ensure_schema()
     app = Application.builder().token(tok).build()

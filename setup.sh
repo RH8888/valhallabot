@@ -83,6 +83,25 @@ ask_db_blank_random () {
   set_kv "$var" "$input"
 }
 
+ask_optional () {
+  local var="$1"; local question="$2"
+  local current input=""
+  current="$(get_kv "$var")"
+  if [ -n "$current" ]; then
+    printf "%s [%s]: " "$question" "$current"
+  else
+    printf "%s: " "$question"
+  fi
+  IFS= read -r input || true
+  if [ -z "$input" ] && [ -n "$current" ]; then
+    input="$current"
+  fi
+  if [ "$input" = "-" ]; then
+    input=""
+  fi
+  set_kv "$var" "$input"
+}
+
 ask_db_backend () {
   local current choice=""
   current="$(get_kv DATABASE_BACKEND)"
@@ -268,6 +287,9 @@ fi
 [ -n "$(get_kv MYSQL_DATABASE)" ] || set_kv "MYSQL_DATABASE" "valhalla"
 [ -n "$(get_kv MONGODB_HOST)" ] || set_kv "MONGODB_HOST" "mongodb"
 [ -n "$(get_kv MONGODB_PORT)" ] || set_kv "MONGODB_PORT" "27017"
+[ -n "$(get_kv MONGO_URI)" ] || set_kv "MONGO_URI" "mongodb://mongodb:27017/valhalla"
+[ -n "$(get_kv MONGO_USER)" ] || set_kv "MONGO_USER" ""
+[ -n "$(get_kv MONGO_PASS)" ] || set_kv "MONGO_PASS" ""
 [ -n "$(get_kv FLASK_HOST)" ] || set_kv "FLASK_HOST" "0.0.0.0"
 [ -n "$(get_kv FLASK_PORT)" ] || set_kv "FLASK_PORT" "5000"
 [ -n "$(get_kv WORKERS)" ] || set_kv "WORKERS" "$((2 * $(nproc 2>/dev/null || echo 1) + 1))"
@@ -308,7 +330,12 @@ if [ "$db_backend" = "mysql" ]; then
   ask_db_blank_random "MYSQL_PASSWORD" "MySQL app password" "pass"
   ask_db_blank_random "MYSQL_ROOT_PASSWORD" "MySQL ROOT password" "root"
 else
-  echo "MongoDB selected. Update MONGODB_HOST and MONGODB_PORT in $ENV_FILE if different from defaults."
+  echo "---- MongoDB ----"
+  ask_optional "MONGO_URI" "MongoDB connection URI (- to clear)"
+  ask_optional "MONGO_USER" "MongoDB username (- to clear)"
+  ask_optional "MONGO_PASS" "MongoDB password (- to clear)"
+  ask_optional "MONGODB_HOST" "MongoDB host (- to clear)"
+  ask_optional "MONGODB_PORT" "MongoDB port (- to clear)"
 fi
 
 echo "✓ Saved to $ENV_FILE."
