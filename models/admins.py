@@ -1,4 +1,5 @@
 """Helpers for managing admin API tokens."""
+"New Update"
 from __future__ import annotations
 
 import hashlib
