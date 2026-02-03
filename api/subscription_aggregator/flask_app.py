@@ -40,6 +40,10 @@ ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
 BASE_DIR = Path(__file__).resolve().parents[2]
 with (BASE_DIR / "templates" / "index.html").open(encoding="utf-8") as f:
     HTML_TEMPLATE = f.read()
+with (BASE_DIR / "templates" / "error.html").open(encoding="utf-8") as f:
+    ERROR_TEMPLATE = f.read()
+with (BASE_DIR / "templates" / "landing.html").open(encoding="utf-8") as f:
+    LANDING_TEMPLATE = f.read()
 
 # Load environment variables and initialize the MySQL pool on import so that
 # the application is ready for WSGI servers like Gunicorn.
@@ -559,6 +563,17 @@ def build_user(local_username, app_key, lu, remote=None):
 def unified_links(local_username, app_key):
     owner_id = get_owner_id(local_username, app_key)
     if not owner_id:
+        want_html = "text/html" in request.headers.get("Accept", "")
+        if want_html:
+            return (
+                render_template_string(
+                    ERROR_TEMPLATE,
+                    title="لینک نامعتبر",
+                    message="کلید اپلیکیشن یا لینک اشتباه است.",
+                    detail="لطفاً لینک اشتراک را بررسی کنید یا از پشتیبانی بخواهید لینک صحیح را ارسال کند.",
+                ),
+                404,
+            )
         abort(404)
 
     want_html = "text/html" in request.headers.get("Accept", "")
@@ -566,8 +581,15 @@ def unified_links(local_username, app_key):
     lu = get_local_user(owner_id, local_username)
     if not lu:
         if want_html:
-            user = build_user(local_username, app_key, {})
-            return render_template_string(HTML_TEMPLATE, user=user)
+            return (
+                render_template_string(
+                    ERROR_TEMPLATE,
+                    title="کاربر یافت نشد",
+                    message="این نام کاربری در سیستم ثبت نشده است.",
+                    detail="اگر تازه حساب ساخته‌اید، چند دقیقه بعد دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.",
+                ),
+                404,
+            )
         return Response("", mimetype="text/plain")
 
     # ---- Agent-level quota/expiry enforcement (global gate) ----
@@ -681,6 +703,27 @@ def unified_links(local_username, app_key):
     resp.headers["X-Remaining-Bytes"] = str(max(0, remaining)) if remaining >= 0 else "unlimited"
     resp.headers["X-Disabled-Pushed"] = str(pushed)
     return resp
+
+
+@app.route("/", methods=["GET"])
+def landing_page():
+    return render_template_string(LANDING_TEMPLATE)
+
+
+@app.errorhandler(404)
+def not_found(_error):
+    want_html = "text/html" in request.headers.get("Accept", "")
+    if want_html:
+        return (
+            render_template_string(
+                ERROR_TEMPLATE,
+                title="یافت نشد",
+                message="صفحه مورد نظر وجود ندارد.",
+                detail="آدرس را بررسی کنید یا به صفحه اصلی بازگردید.",
+            ),
+            404,
+        )
+    return Response("Not found", status=404)
 
 def main():
     host = os.getenv("FLASK_HOST", "0.0.0.0")
