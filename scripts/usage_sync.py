@@ -444,7 +444,9 @@ def loop():
                         multiplier = float(row.get("usage_multiplier") or 1.0)
                     except (TypeError, ValueError):
                         multiplier = 1.0
-                    weighted_delta = int(delta * multiplier)
+                    if multiplier < 0:
+                        multiplier = 1.0
+                    weighted_delta = int(round(delta * multiplier))
                     add_usage(row["owner_id"], row["local_username"], weighted_delta)
                     update_last(row["link_id"], used)
                     log.info("owner=%s local=%s +%s bytes (panel_id=%s)",
