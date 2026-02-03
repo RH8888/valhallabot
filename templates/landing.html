@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>خوش آمدید</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet"/>
+  <script>
+    tailwind.config = { theme: { extend: { fontFamily: { sans: ['Vazirmatn','ui-sans-serif','system-ui'] } } } }
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;600;700;800&display=swap');
+
+    :root{
+      --bg-top:#3a4048; --bg-mid:#2d3239; --bg-btm:#1d2026;
+      --surface:linear-gradient(to bottom,#3C3F48,#1C1F24);
+      --surface2:rgba(255,255,255,.06);
+      --text:#f1f1f2; --muted:#94969a;
+      --g1:#71F466; --g2:#08AC4B;
+    }
+
+    body{
+      font-family:'Vazirmatn',sans-serif; color:var(--text);
+      background:linear-gradient(180deg,var(--bg-top) 0%,var(--bg-mid) 38%,var(--bg-btm) 100%);
+      min-height:100vh; display:flex; align-items:center; justify-content:center;
+    }
+
+    .card{ background:var(--surface); border-radius:1.25rem; }
+    .pill{
+      background:linear-gradient(90deg,rgba(113,244,102,.15),rgba(8,172,75,.15));
+      color:#86f5a5; border:1px solid rgba(113,244,102,.25);
+      display:inline-flex; align-items:center; gap:.45rem; padding:.45rem .9rem;
+      border-radius:999px; font-weight:700;
+    }
+    .btn{
+      background:linear-gradient(90deg,var(--g1),var(--g2));
+      color:#0b1a12; font-weight:800; border-radius:999px;
+      box-shadow:0 12px 26px -12px rgba(113,244,102,.55);
+      transition:filter .2s;
+    }
+    .btn:hover{ filter:brightness(1.06); }
+  </style>
+</head>
+<body>
+  <section class="card w-[92%] max-w-xl p-6 text-center shadow-2xl">
+    <div class="mb-4">
+      <span class="pill"><i class="fa-solid fa-sparkles"></i> خوش آمدید</span>
+    </div>
+    <h1 class="text-2xl font-extrabold mb-2">این دامنه برای اشتراک شماست</h1>
+    <p class="text-sm" style="color:var(--muted)">
+      برای مشاهده وضعیت سرویس یا دریافت لینک اشتراک، لطفاً لینک کامل خود را از ادمین دریافت کنید.
+    </p>
+    <div class="mt-6 flex flex-col gap-3 text-sm" style="color:var(--muted)">
+      <div class="flex items-center justify-center gap-2">
+        <i class="fa-solid fa-link"></i>
+        مسیر نمونه: <span class="font-semibold text-white">/sub/&lt;username&gt;/&lt;app-key&gt;/links</span>
+      </div>
+      <div class="flex items-center justify-center gap-2">
+        <i class="fa-solid fa-shield"></i>
+        اگر لینک اشتباه است، با پشتیبانی تماس بگیرید.
+      </div>
+    </div>
+    <div class="mt-6">
+      <a href="https://t.me/" class="btn inline-flex items-center gap-2 px-6 py-3" target="_blank" rel="noopener">
+        <i class="fa-brands fa-telegram"></i>
+        ارتباط با پشتیبانی
+      </a>
+    </div>
+  </section>
+</body>
+</html>
