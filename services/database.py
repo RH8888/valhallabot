@@ -312,6 +312,15 @@ def ensure_schema() -> None:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS settings(
+                owner_id BIGINT NOT NULL,
+                `key` VARCHAR(255) NOT NULL,
+                `value` TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (owner_id, `key`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS agent_access_tokens(
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
                 agent_id BIGINT NOT NULL,
