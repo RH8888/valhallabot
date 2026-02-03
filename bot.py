@@ -125,6 +125,7 @@ def is_admin(tg_id: int) -> bool:
     ASK_EDIT_PANEL_NAME, ASK_EDIT_PANEL_USER, ASK_EDIT_PANEL_PASS,
     ASK_SELECT_SERVICE,
     ASK_PANEL_SUB_URL,
+    ASK_PANEL_MULTIPLIER,
 
     # agent mgmt
     ASK_AGENT_NAME, ASK_AGENT_TGID,
@@ -142,7 +143,7 @@ def is_admin(tg_id: int) -> bool:
     # settings
     ASK_LIMIT_MSG,
     ASK_SERVICE_EMERGENCY_CFG,
-) = range(33)
+) = range(34)
 
 # ---------- helpers ----------
 UNIT = 1024
@@ -1239,6 +1240,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "p_change_creds":
         if not is_admin(uid): return ConversationHandler.END
         await q.edit_message_text("یوزرنیم ادمین جدید را بفرست:") ; return ASK_EDIT_PANEL_USER
+    if data == "p_set_multiplier":
+        if not is_admin(uid): return ConversationHandler.END
+        await q.edit_message_text("نسبت مصرف را بفرست (مثلا 1 یا 0.5). برای ریست، '-':")
+        return ASK_PANEL_MULTIPLIER
     if data == "p_set_sub":
         if not is_admin(uid): return ConversationHandler.END
         pid = context.user_data.get("edit_panel_id")
@@ -1778,6 +1783,7 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         f"🌐 URL: <code>{p['panel_url']}</code>",
         f"👤 Admin: <code>{p['admin_username']}</code>",
         f"🧬 {label}: <b>{p.get('template_username') or '-'}</b>",
+        f"⚖️ Ratio: <b>{float(p.get('usage_multiplier') or 1.0):.2f}x</b>",
     ]
     if not is_sanaei:
         lines.append(f"🔗 Sub URL: <code>{p.get('sub_url') or '-'}</code>")
@@ -1789,6 +1795,7 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         [InlineKeyboardButton(f"🧬 Set/Clear {label}", callback_data="p_set_template")],
         [InlineKeyboardButton("🔑 Change Admin Credentials", callback_data="p_change_creds")],
         [InlineKeyboardButton("✏️ Rename Panel", callback_data="p_rename")],
+        [InlineKeyboardButton("⚖️ Set Usage Ratio", callback_data="p_set_multiplier")],
     ]
     if not is_sanaei:
         kb.append([InlineKeyboardButton("🔗 Set/Clear Sub URL", callback_data="p_set_sub")])
@@ -2310,6 +2317,41 @@ async def got_panel_sub_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ASK_PANEL_SUB_URL
     try:
         set_panel_sub_url(update.effective_user.id, pid, val)
+        class FakeCQ:
+            async def edit_message_text(self, *args, **kwargs):
+                await update.message.reply_text(*args, **kwargs)
+        return await show_panel_card(FakeCQ(), context, update.effective_user.id, pid)
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطا: {e}")
+        return ConversationHandler.END
+
+async def got_panel_multiplier(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    pid = context.user_data.get("edit_panel_id")
+    if not pid:
+        await update.message.reply_text("❌ پنل انتخاب نشده.")
+        return ConversationHandler.END
+    txt = (update.message.text or "").strip()
+    if txt == "-":
+        multiplier = 1.0
+    else:
+        try:
+            multiplier = float(txt)
+        except ValueError:
+            await update.message.reply_text("❌ عدد معتبر بفرست (مثلا 1 یا 0.5) یا '-' برای ریست:")
+            return ASK_PANEL_MULTIPLIER
+        if multiplier < 0:
+            await update.message.reply_text("❌ مقدار منفی مجاز نیست. دوباره بفرست:")
+            return ASK_PANEL_MULTIPLIER
+    try:
+        ids = expand_owner_ids(update.effective_user.id)
+        placeholders = ",".join(["%s"] * len(ids))
+        with with_mysql_cursor() as cur:
+            cur.execute(
+                f"UPDATE panels SET usage_multiplier=%s WHERE id=%s AND telegram_user_id IN ({placeholders})",
+                tuple([multiplier, pid] + ids),
+            )
         class FakeCQ:
             async def edit_message_text(self, *args, **kwargs):
                 await update.message.reply_text(*args, **kwargs)
@@ -2954,6 +2996,7 @@ def build_app():
             ASK_EDIT_PANEL_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_edit_panel_user)],
             ASK_EDIT_PANEL_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_edit_panel_pass)],
             ASK_PANEL_SUB_URL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_sub_url)],
+            ASK_PANEL_MULTIPLIER: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_multiplier)],
             ASK_PANEL_REMOVE_CONFIRM: [CallbackQueryHandler(on_button)],
 
             # agent mgmt (admin)
