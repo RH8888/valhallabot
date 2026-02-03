@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from api.subscription_aggregator.ownership import canonical_owner_id, expand_owner_ids
 from services.database import errorcode, mysql_errors, with_mysql_cursor
 
 log = logging.getLogger(__name__)
@@ -12,6 +11,8 @@ _settings_table_missing_logged = False
 
 
 def get_setting(owner_id: int, key: str) -> Optional[str]:
+    from api.subscription_aggregator.ownership import expand_owner_ids
+
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
     with with_mysql_cursor() as cur:
@@ -40,6 +41,8 @@ def get_setting(owner_id: int, key: str) -> Optional[str]:
 
 
 def set_setting(owner_id: int, key: str, value: str) -> None:
+    from api.subscription_aggregator.ownership import canonical_owner_id
+
     oid = canonical_owner_id(owner_id)
     with with_mysql_cursor(dict_=False) as cur:
         cur.execute(
@@ -49,6 +52,8 @@ def set_setting(owner_id: int, key: str, value: str) -> None:
 
 
 def delete_setting(owner_id: int, key: str) -> bool:
+    from api.subscription_aggregator.ownership import canonical_owner_id
+
     oid = canonical_owner_id(owner_id)
     with with_mysql_cursor(dict_=False) as cur:
         cur.execute(
