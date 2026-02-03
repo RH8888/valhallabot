@@ -68,7 +68,8 @@ def fetch_all_links():
                        lup.last_used_traffic,
                        p.panel_url,
                        p.access_token,
-                       p.panel_type
+                       p.panel_type,
+                       p.usage_multiplier
                 FROM local_user_panel_links lup
                 JOIN panels p ON p.id = lup.panel_id
                 ORDER BY lup.id ASC
@@ -439,10 +440,15 @@ def loop():
 
                 delta = used - last
                 if delta > 0:
-                    add_usage(row["owner_id"], row["local_username"], delta)
+                    try:
+                        multiplier = float(row.get("usage_multiplier") or 1.0)
+                    except (TypeError, ValueError):
+                        multiplier = 1.0
+                    weighted_delta = int(delta * multiplier)
+                    add_usage(row["owner_id"], row["local_username"], weighted_delta)
                     update_last(row["link_id"], used)
                     log.info("owner=%s local=%s +%s bytes (panel_id=%s)",
-                             row["owner_id"], row["local_username"], delta, row["panel_id"])
+                             row["owner_id"], row["local_username"], weighted_delta, row["panel_id"])
 
                 # بعد از هر آپدیت، وضعیت کاربر را بررسی کن (disable/enable)
                 try_disable_if_user_exceeded(row["owner_id"], row["local_username"])
