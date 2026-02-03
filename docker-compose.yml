@@ -20,7 +20,7 @@ services:
 
   app:
     build: .
-    image: ${IMAGE:-ghcr.io/rh8888/valhallabot:v1.0.0}
+    image: ${IMAGE:-ghcr.io/rh8888/valhallabot:latest}
     container_name: valhalla-app
     restart: unless-stopped
     depends_on:
@@ -66,7 +66,7 @@ services:
 
   usage:
     build: .
-    image: ${IMAGE:-ghcr.io/rh8888/valhallabot:v1.0.0}
+    image: ${IMAGE:-ghcr.io/rh8888/valhallabot:latest}
     container_name: valhalla-usage
     restart: unless-stopped
     depends_on:
