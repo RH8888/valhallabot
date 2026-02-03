@@ -42,6 +42,7 @@ class PanelBase(BaseModel):
     panel_url: str = Field(..., description="Base URL of the panel")
     name: str = Field(..., description="Display name for the panel")
     panel_type: str = Field("marzneshin", description="Panel type")
+    usage_multiplier: float = Field(1.0, description="Usage multiplier for quota deductions")
     admin_username: str = Field(..., description="Administrator username")
     access_token: str = Field(..., description="Access token for API calls")
     template_username: str | None = Field(None, description="Template user on the panel")
@@ -54,6 +55,7 @@ class PanelCreate(PanelBase):
             "panel_url": "https://panel.example.com",
             "name": "Main Panel",
             "panel_type": "marzneshin",
+            "usage_multiplier": 1.0,
             "admin_username": "admin",
             "access_token": "token",
             "template_username": "template",
@@ -66,6 +68,7 @@ class PanelUpdate(BaseModel):
     panel_url: str | None = None
     name: str | None = None
     panel_type: str | None = None
+    usage_multiplier: float | None = None
     admin_username: str | None = None
     access_token: str | None = None
     template_username: str | None = None
@@ -100,15 +103,16 @@ def create_panel(data: PanelCreate):
         cur.execute(
             """
             INSERT INTO panels (
-                telegram_user_id, panel_url, name, panel_type,
+                telegram_user_id, panel_url, name, panel_type, usage_multiplier,
                 admin_username, access_token, template_username, sub_url
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 _owner_id(),
                 data.panel_url,
                 data.name,
                 data.panel_type,
+                data.usage_multiplier,
                 data.admin_username,
                 data.access_token,
                 data.template_username,
