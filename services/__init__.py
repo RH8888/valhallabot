@@ -14,6 +14,7 @@ from .quotas import (
     renew_agent_days,
     set_agent_active,
 )
+from .settings import get_setting, set_setting, delete_setting
 
 __all__ = [
     "init_mysql_pool",
@@ -29,4 +30,7 @@ __all__ = [
     "set_agent_max_user_bytes",
     "renew_agent_days",
     "set_agent_active",
+    "get_setting",
+    "set_setting",
+    "delete_setting",
 ]
