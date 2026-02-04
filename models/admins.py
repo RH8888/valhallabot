@@ -23,7 +23,11 @@ def _persist_token(cur, admin_id: int, token: str) -> None:
             api_token_raw=NULL
         WHERE id=%s
         """,
-        (token_hash, encrypted, admin_id),
+        (
+            token_hash,
+            encrypted,
+            admin_id,
+        ),
     )
 
 
@@ -43,7 +47,7 @@ def get_admin_token() -> Optional[str]:
         )
         row = cur.fetchone()
         if not row:
-            return None
+            return rotate_admin_token()
 
         encrypted = row.get("api_token_encrypted")
         if encrypted:
@@ -60,6 +64,10 @@ def get_admin_token() -> Optional[str]:
             log.info("Migrating plaintext admin token for admin %s", row["id"])
             _persist_token(cur, row["id"], plaintext)
             return plaintext
+
+        token, _ = generate_token()
+        _persist_token(cur, row["id"], token)
+        return token
 
     return None
 
