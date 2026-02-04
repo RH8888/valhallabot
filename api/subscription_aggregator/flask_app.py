@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Flask subscription aggregator for Marzneshin/Marzban/Rebecca/Sanaei/Pasarguard panels
+Flask subscription aggregator for Marzneshin/Marzban/Rebecca/Sanaei/Pasarguard/Guardcore panels
 - GET /sub/<local_username>/<app_key>/links
 - Returns only configs (ss://, vless://, vmess://, trojan://), one per line (text/plain)
 - Enforces local quota. If user quota exceeded -> empty body + DISABLE remote (once).
@@ -26,7 +26,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from services import init_mysql_pool, with_mysql_cursor
 from services.database import errorcode, mysql_errors
-from apis import sanaei, pasarguard, rebecca
+from apis import sanaei, pasarguard, rebecca, guardcore
 from .ownership import admin_ids, expand_owner_ids, canonical_owner_id
 
 logging.basicConfig(
@@ -165,6 +165,9 @@ def disable_remote(panel_type, panel_url, token, remote_username):
                     all_ok = False
                     last_msg = msg
             return (200 if all_ok else None), last_msg
+        if panel_type == "guardcore":
+            ok, msg = guardcore.disable_remote_user(panel_url, token, remote_username)
+            return (200 if ok else None), msg
         # Try Marzneshin style first
         url = urljoin(panel_url.rstrip("/") + "/", f"api/users/{remote_username}/disable")
         r = SESSION.post(url, headers={"Authorization": f"Bearer {token}"}, timeout=20)
@@ -345,6 +348,18 @@ def collect_links(mapped, local_username: str, want_html: bool):
                     ls = pasarguard.fetch_links_from_panel(l["panel_url"], l["remote_username"], key)
                     if not ls:
                         errs.append(f"{l['remote_username']}@{l['panel_url']}: pasarguard links empty")
+                    links.extend(ls)
+            elif panel_type == "guardcore":
+                u, uerr = guardcore.get_user(l["panel_url"], l["access_token"], l["remote_username"])
+                if uerr:
+                    errs.append(f"{l['remote_username']}@{l['panel_url']}: {uerr}")
+                if want_html and rinfo is None and u:
+                    rinfo = u
+                key = u.get("key") if isinstance(u, dict) else None
+                if key:
+                    ls = guardcore.fetch_links_from_panel(l["panel_url"], l["remote_username"], key)
+                    if not ls:
+                        errs.append(f"{l['remote_username']}@{l['panel_url']}: guardcore links empty")
                     links.extend(ls)
             else:
                 u = fetch_user(l["panel_url"], l["access_token"], l["remote_username"])
