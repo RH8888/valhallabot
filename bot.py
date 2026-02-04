@@ -2692,6 +2692,8 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 "proxies": obj.get("proxies") or {},
                 "inbounds": obj.get("inbounds") or {},
             }
+            if r.get("panel_type") == "rebecca":
+                tmpl_info["service_id"] = obj.get("service_id")
             if r.get("panel_type") == "pasarguard":
                 groups = obj.get("group_ids")
                 if groups is not None:
@@ -2766,6 +2768,10 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 "proxies": clone_proxy_settings(tmpl_info.get("proxies", {})),
                 "inbounds": tmpl_info.get("inbounds", {}),
             }
+            if r.get("panel_type") == "rebecca":
+                service_id = tmpl_info.get("service_id")
+                if service_id is not None:
+                    payload["service_id"] = service_id
             if r.get("panel_type") == "pasarguard":
                 groups = tmpl_info.get("group_ids")
                 if groups is not None:
@@ -2984,6 +2990,10 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                             "proxies": clone_proxy_settings(tmpl_obj.get("proxies") or {}),
                             "inbounds": tmpl_obj.get("inbounds") or {},
                         }
+                        if p.get("panel_type") == "rebecca":
+                            service_id = tmpl_obj.get("service_id")
+                            if service_id is not None:
+                                payload["service_id"] = service_id
                         if p.get("panel_type") == "pasarguard":
                             groups = tmpl_obj.get("group_ids")
                             if groups is not None:
