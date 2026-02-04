@@ -192,13 +192,28 @@ def _username_candidates(remote_username: str):
 
 
 @cached(cache=_fetch_user_cache, lock=_fetch_user_lock)
+def _ensure_user_key(obj: dict) -> dict:
+    if not obj:
+        return obj
+    if obj.get("key"):
+        return obj
+    credential_key = obj.get("credential_key")
+    if credential_key:
+        obj["key"] = credential_key
+        return obj
+    key_url = (obj.get("key_subscription_url") or "").rstrip("/")
+    if key_url:
+        obj["key"] = key_url.split("/")[-1]
+    return obj
+
+
 def fetch_user(panel_url: str, token: str, remote_username: str):
     try:
         for candidate in _username_candidates(remote_username):
             url = urljoin(panel_url.rstrip("/") + "/", f"api/users/{candidate}")
             r = SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
             if r.status_code == 200:
-                return r.json()
+                return _ensure_user_key(r.json())
         # Fallback to Marzban endpoint
         for candidate in _username_candidates(remote_username):
             url = urljoin(panel_url.rstrip("/") + "/", f"api/user/{candidate}")
@@ -212,13 +227,39 @@ def fetch_user(panel_url: str, token: str, remote_username: str):
             token_part = sub_url.rstrip("/").split("/")[-1]
             if token_part:
                 obj.setdefault("key", token_part)
-            return obj
+            return _ensure_user_key(obj)
         return None
     except:
         return None
 
 @cached(cache=_fetch_links_cache, lock=_fetch_links_lock)
-def fetch_links_from_panel(panel_url: str, remote_username: str, key: str):
+def _parse_subscription_response(response):
+    if response.status_code != 200:
+        return []
+    if response.headers.get("content-type", "").startswith("application/json"):
+        try:
+            data = response.json()
+            if isinstance(data, list):
+                return [str(item) for item in data]
+            if isinstance(data, dict) and "links" in data:
+                return [str(item) for item in data["links"]]
+        except Exception:
+            return []
+    text = (response.text or "").strip()
+    if text:
+        try:
+            decoded = base64.b64decode(text + "===").decode(errors="ignore")
+            text = decoded
+        except Exception:
+            pass
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and line.strip().lower().startswith(ALLOWED_SCHEMES)
+    ]
+
+
+def fetch_links_from_panel(panel_url: str, remote_username: str, key: str, panel_type: str | None = None):
     """Return links and an optional error message for debugging."""
     errors = []
     try:
@@ -226,19 +267,22 @@ def fetch_links_from_panel(panel_url: str, remote_username: str, key: str):
         url = urljoin(panel_url.rstrip("/") + "/", f"sub/{key}/v2ray")
         r = SESSION.get(url, headers={"accept": "text/plain"}, timeout=20)
         if r.status_code == 200:
-            txt = (r.text or "").strip()
-            if txt:
-                try:
-                    decoded = base64.b64decode(txt + "===")
-                    txt = decoded.decode(errors="ignore")
-                except Exception as e:
-                    errors.append(f"v2ray b64 {e}")
-                lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
-                if any(ln.lower().startswith(ALLOWED_SCHEMES) for ln in lines):
-                    return lines, None
-                errors.append("v2ray empty")
+            lines = _parse_subscription_response(r)
+            if lines:
+                return lines, None
+            errors.append("v2ray empty")
         else:
             errors.append(f"v2ray HTTP {r.status_code}")
+
+        panel_type_lower = (panel_type or "").lower()
+        if panel_type_lower == "rebecca":
+            for path in (f"sub/{remote_username}/{key}/v2ray", f"sub/{remote_username}/{key}/"):
+                url = urljoin(panel_url.rstrip("/") + "/", path)
+                r = SESSION.get(url, headers={"accept": "text/plain,application/json"}, timeout=20)
+                lines = _parse_subscription_response(r)
+                if lines:
+                    return lines, None
+                errors.append(f"rebecca empty ({path})")
 
         # Fallback to Marzneshin style (supports lowercase usernames only)
         for candidate in _username_candidates(remote_username):
@@ -247,20 +291,7 @@ def fetch_links_from_panel(panel_url: str, remote_username: str, key: str):
             if r.status_code != 200:
                 errors.append(f"links HTTP {r.status_code} ({candidate})")
                 continue
-            try:
-                if r.headers.get("content-type", "").startswith("application/json"):
-                    data = r.json()
-                    if isinstance(data, list):
-                        return [str(x) for x in data], None
-                    if isinstance(data, dict) and "links" in data:
-                        return [str(x) for x in data["links"]], None
-            except Exception as e:
-                errors.append(f"json {e} ({candidate})")
-            lines = [
-                ln.strip()
-                for ln in (r.text or "").splitlines()
-                if ln.strip() and ln.strip().lower().startswith(ALLOWED_SCHEMES)
-            ]
+            lines = _parse_subscription_response(r)
             if lines:
                 return lines, None
             errors.append(f"links empty ({candidate})")
@@ -339,7 +370,12 @@ def collect_links(mapped, local_username: str, want_html: bool):
                 if want_html and rinfo is None:
                     rinfo = u
                 if u and u.get("key"):
-                    ls, err = fetch_links_from_panel(l["panel_url"], l["remote_username"], u["key"])
+                    ls, err = fetch_links_from_panel(
+                        l["panel_url"],
+                        l["remote_username"],
+                        u["key"],
+                        l.get("panel_type"),
+                    )
                     if err:
                         errs.append(f"{l['remote_username']}@{l['panel_url']}: {err}")
                     links.extend(ls)
