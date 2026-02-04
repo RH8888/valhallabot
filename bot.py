@@ -37,7 +37,7 @@ import asyncio
 from dotenv import load_dotenv
 from mysql.connector import Error as MySQLError
 
-from apis import marzneshin, marzban, rebecca, sanaei, pasarguard
+from apis import marzneshin, marzban, rebecca, sanaei, pasarguard, guardcore
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -83,6 +83,7 @@ API_MODULES = {
     "rebecca": rebecca,
     "sanaei": sanaei,
     "pasarguard": pasarguard,
+    "guardcore": guardcore,
 }
 
 def get_api(panel_type: str):
@@ -2221,15 +2222,19 @@ async def got_panel_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ اسم معتبر بفرست:")
         return ASK_PANEL_NAME
     context.user_data["panel_name"] = name
-    await update.message.reply_text("نوع پنل را مشخص کن (marzneshin/marzban/rebecca/sanaei/pasarguard):")
+    await update.message.reply_text(
+        "نوع پنل را مشخص کن (marzneshin/marzban/rebecca/sanaei/pasarguard/guardcore):"
+    )
     return ASK_PANEL_TYPE
 
 async def got_panel_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
     t = (update.message.text or "").strip().lower()
-    if t not in ("marzneshin", "marzban", "rebecca", "sanaei", "pasarguard"):
-        await update.message.reply_text("❌ نوع پنل نامعتبر. یکی از marzneshin/marzban/rebecca/sanaei/pasarguard بفرست:")
+    if t not in ("marzneshin", "marzban", "rebecca", "sanaei", "pasarguard", "guardcore"):
+        await update.message.reply_text(
+            "❌ نوع پنل نامعتبر. یکی از marzneshin/marzban/rebecca/sanaei/pasarguard/guardcore بفرست:"
+        )
         return ASK_PANEL_TYPE
     context.user_data["panel_type"] = t
     await update.message.reply_text("🌐 URL پنل (مثال https://panel.example.com):")
@@ -2652,7 +2657,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
     missing = [
         f"{r['name']}"
         for r in rows
-        if (r.get("panel_type") in ("marzneshin", "sanaei")) and not r.get("template_username")
+        if (r.get("panel_type") in ("marzneshin", "sanaei", "guardcore")) and not r.get("template_username")
     ]
     if missing:
         await q.edit_message_text(
@@ -2663,7 +2668,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
     per_panel, errs = {}, []
     for r in rows:
         api = get_api(r.get("panel_type"))
-        if r.get("panel_type") == "marzneshin":
+        if r.get("panel_type") in ("marzneshin", "guardcore"):
             svc, e = api.fetch_user_services(
                 r["panel_url"], r["access_token"], r.get("template_username")
             )
@@ -2717,6 +2722,14 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 "usage_duration": usage_sec,
                 "data_limit": limit_bytes,
                 "data_limit_reset_strategy": "no_reset",
+                "note": "created_by_bot",
+                "service_ids": per_panel.get(r["id"], {}).get("service_ids", []),
+            }
+        elif r.get("panel_type") == "guardcore":
+            payload = {
+                "username": app_username,
+                "limit_usage": limit_bytes,
+                "limit_expire": usage_sec,
                 "note": "created_by_bot",
                 "service_ids": per_panel.get(r["id"], {}).get("service_ids", []),
             }
@@ -2911,6 +2924,58 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                     "usage_duration": usage_duration_default,
                     "data_limit": limit_bytes_default,
                     "data_limit_reset_strategy": "no_reset",
+                    "note": "user_edit_add_panel",
+                    "service_ids": svc or [],
+                }
+                obj, e2 = api.create_user(p["panel_url"], p["access_token"], payload)
+                if not obj:
+                    obj, g = api.get_user(p["panel_url"], p["access_token"], username)
+                    if not obj:
+                        added_errs.append(f"{p['panel_url']}: {e2 or g or 'unknown error'}")
+                        continue
+
+                if not obj.get("enabled", True):
+                    ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], username)
+                    if not ok_en:
+                        added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
+
+                save_link(owner_id, username, int(pid), username)
+                links_map[int(pid)] = username
+                added_ok += 1
+            elif p.get("panel_type") == "guardcore":
+                if not tmpl:
+                    obj, g = api.get_user(p["panel_url"], p["access_token"], username)
+                    if obj:
+                        if not obj.get("enabled", True):
+                            ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], username)
+                            if not ok_en:
+                                added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
+                        save_link(owner_id, username, int(pid), username)
+                        links_map[int(pid)] = username
+                        added_ok += 1
+                    else:
+                        added_errs.append(f"{p['panel_url']}: no template & user not found")
+                    continue
+
+                svc, e = api.fetch_user_services(p["panel_url"], p["access_token"], tmpl)
+                if e:
+                    obj, g = api.get_user(p["panel_url"], p["access_token"], username)
+                    if obj:
+                        if not obj.get("enabled", True):
+                            ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], username)
+                            if not ok_en:
+                                added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
+                        save_link(owner_id, username, int(pid), username)
+                        links_map[int(pid)] = username
+                        added_ok += 1
+                    else:
+                        added_errs.append(f"{p['panel_url']}: {e}")
+                    continue
+
+                payload = {
+                    "username": username,
+                    "limit_usage": limit_bytes_default,
+                    "limit_expire": usage_duration_default,
                     "note": "user_edit_add_panel",
                     "service_ids": svc or [],
                 }
