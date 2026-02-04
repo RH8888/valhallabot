@@ -41,6 +41,9 @@ class UserCreate(BaseModel):
     limit_bytes: int = Field(0, description="Byte limit for the user")
     duration_days: int = Field(0, description="Validity period in days")
     service_id: int | None = Field(None, description="Assigned service ID")
+    template_username: str | None = Field(
+        None, description="Template user to copy the service assignment from"
+    )
     owner_id: int | None = Field(None, description="Target agent ID (admin only)")
 
 
@@ -183,9 +186,15 @@ async def create_user(
     )
     if real_owner is None:
         raise HTTPException(status_code=400, detail="owner_id required")
+    service_id = data.service_id
+    if service_id is None and data.template_username:
+        template_row = _fetch_user(real_owner, data.template_username)
+        if not template_row:
+            raise HTTPException(status_code=404, detail="template user not found")
+        service_id = template_row.get("service_id")
     upsert_local_user(real_owner, data.username, data.limit_bytes, data.duration_days)
-    if data.service_id is not None:
-        await set_local_user_service(real_owner, data.username, data.service_id)
+    if service_id is not None:
+        await set_local_user_service(real_owner, data.username, service_id)
     row = _fetch_user(real_owner, data.username)
     if not row:
         raise HTTPException(status_code=500, detail="user not found after create")
