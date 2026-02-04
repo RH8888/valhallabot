@@ -26,7 +26,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from services import init_mysql_pool, with_mysql_cursor
 from services.database import errorcode, mysql_errors
-from apis import sanaei, pasarguard
+from apis import sanaei, pasarguard, rebecca
 from .ownership import admin_ids, expand_owner_ids, canonical_owner_id
 
 logging.basicConfig(
@@ -322,7 +322,19 @@ def collect_links(mapped, local_username: str, want_html: bool):
                         rinfo = info
         else:
             panel_type = (l.get("panel_type") or "").lower()
-            if panel_type == "pasarguard":
+            if panel_type == "rebecca":
+                u, uerr = rebecca.get_user(l["panel_url"], l["access_token"], l["remote_username"])
+                if uerr:
+                    errs.append(f"{l['remote_username']}@{l['panel_url']}: {uerr}")
+                if want_html and rinfo is None and u:
+                    rinfo = u
+                key = u.get("key") if isinstance(u, dict) else None
+                if key:
+                    ls = rebecca.fetch_links_from_panel(l["panel_url"], l["remote_username"], key)
+                    if not ls:
+                        errs.append(f"{l['remote_username']}@{l['panel_url']}: rebecca links empty")
+                    links.extend(ls)
+            elif panel_type == "pasarguard":
                 u, uerr = pasarguard.get_user(l["panel_url"], l["access_token"], l["remote_username"])
                 if uerr:
                     errs.append(f"{l['remote_username']}@{l['panel_url']}: {uerr}")
