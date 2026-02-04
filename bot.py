@@ -143,7 +143,8 @@ def is_admin(tg_id: int) -> bool:
     # settings
     ASK_LIMIT_MSG,
     ASK_SERVICE_EMERGENCY_CFG,
-) = range(34)
+    ASK_EXTRA_SUB_DOMAINS,
+) = range(35)
 
 # ---------- helpers ----------
 UNIT = 1024
@@ -198,6 +199,65 @@ def make_panel_name(url, u):
         h = urlparse(url).hostname or url
     except Exception:
         h = url
+
+def normalize_domain_entry(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if value.startswith(("http://", "https://")):
+        parsed = urlparse(value)
+        host = parsed.netloc or parsed.path
+    else:
+        host = value
+    host = host.split("/", 1)[0].strip()
+    return host.lower()
+
+def parse_extra_domains(raw: str) -> list[str]:
+    if not raw:
+        return []
+    entries = []
+    seen = set()
+    for part in re.split(r"[,\n]+", raw):
+        host = normalize_domain_entry(part)
+        if not host or host in seen:
+            continue
+        entries.append(host)
+        seen.add(host)
+    return entries
+
+def get_extra_domains(owner_id: int) -> list[str]:
+    raw = get_setting(owner_id, "extra_sub_domains") or ""
+    return parse_extra_domains(raw)
+
+def build_sub_links(owner_id: int, username: str, app_key: str) -> list[str]:
+    public_base = os.getenv("PUBLIC_BASE_URL", "http://localhost:5000").rstrip("/")
+    parsed = urlparse(public_base)
+    scheme = parsed.scheme or "https"
+    base_host = (parsed.netloc or parsed.path).lower()
+    links = [f"{public_base}/sub/{username}/{app_key}/links"]
+    for host in get_extra_domains(owner_id):
+        if host == base_host:
+            continue
+        links.append(f"{scheme}://{host}/sub/{username}/{app_key}/links")
+    return links
+
+def format_sub_links_html(links: list[str]) -> str:
+    if not links:
+        return "🔗 Sub: —"
+    if len(links) == 1:
+        return f"🔗 Sub: <code>{links[0]}</code>"
+    lines = ["🔗 Sub Links:"]
+    lines.extend([f"• <code>{link}</code>" for link in links])
+    return "\n".join(lines)
+
+def format_sub_links_text(links: list[str]) -> str:
+    if not links:
+        return "🔗 Sub: —"
+    if len(links) == 1:
+        return f"🔗 {links[0]}"
+    lines = ["🔗 Links:"]
+    lines.extend([f"• {link}" for link in links])
+    return "\n".join(lines)
     h = str(h).replace("www.", "")
     base = f"{h}-{u}".strip("-")
     return (base[:120] if len(base) > 120 else base) or "panel"
@@ -1037,6 +1097,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🧰 Manage Services", callback_data="manage_services")],
             [InlineKeyboardButton("👑 Manage Agents", callback_data="manage_agents")],
             [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
+            [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
             [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
             [InlineKeyboardButton("⬅️ Back", callback_data="back_home")],
         ]
@@ -1050,6 +1111,20 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur = get_setting(uid, "limit_message") or "—"
         await q.edit_message_text(f"پیام فعلی:\n{cur}\n\nپیام جدید را بفرست:")
         return ASK_LIMIT_MSG
+
+    if data == "extra_sub_domains":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        cur_domains = get_extra_domains(uid)
+        cur = "\n".join(cur_domains) if cur_domains else "—"
+        await q.edit_message_text(
+            "دامنه‌های اضافه فعلی:\n"
+            f"{cur}\n\n"
+            "دامنه‌های جدید را با کاما یا خط جدید بفرست.\n"
+            "برای حذف: clear"
+        )
+        return ASK_EXTRA_SUB_DOMAINS
 
 
     # --- admin/agent shared
@@ -1846,15 +1921,14 @@ async def show_user_card(q, owner_id: int, uname: str, notice: str = None):
     pushed  = int(row.get("disabled_pushed", 0) or 0)
 
     app_key = get_app_key(owner_id, uname)
-    public_base = os.getenv("PUBLIC_BASE_URL", "http://localhost:5000").rstrip("/")
-    unified_link = f"{public_base}/sub/{uname}/{app_key}/links"
+    sub_links = build_sub_links(owner_id, uname, app_key)
 
     lines = []
     if notice:
         lines.append(notice)
     lines += [
         f"👤 <b>{uname}</b>",
-        f"🔗 Sub: <code>{unified_link}</code>",
+        format_sub_links_html(sub_links),
         f"📦 Limit: <b>{'Unlimited' if limit_b==0 else fmt_bytes_short(limit_b)}</b>",
         f"📊 Used: <b>{fmt_bytes_short(used_b)}</b>",
         f"🧮 Remaining: <b>{'Unlimited' if limit_b==0 else fmt_bytes_short(max(0, limit_b-used_b))}</b>",
@@ -2116,6 +2190,25 @@ async def got_service_emerg_cfg(update: Update, context: ContextTypes.DEFAULT_TY
         return ASK_SERVICE_EMERGENCY_CFG
     set_setting(update.effective_user.id, key, msg)
     await update.message.reply_text("✅ کانفیگ سرویس ذخیره شد.")
+    return ConversationHandler.END
+
+async def got_extra_sub_domains(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    msg = (update.message.text or "").strip()
+    if not msg:
+        await update.message.reply_text("❌ لیست خالیه. دوباره بفرست:")
+        return ASK_EXTRA_SUB_DOMAINS
+    if msg.lower() in {"off", "none", "clear", "delete"}:
+        set_setting(update.effective_user.id, "extra_sub_domains", "")
+        await update.message.reply_text("✅ دامنه‌های اضافه پاک شد.")
+        return ConversationHandler.END
+    domains = parse_extra_domains(msg)
+    if not domains:
+        await update.message.reply_text("❌ دامنه معتبر پیدا نشد. دوباره بفرست:")
+        return ASK_EXTRA_SUB_DOMAINS
+    set_setting(update.effective_user.id, "extra_sub_domains", "\n".join(domains))
+    await update.message.reply_text("✅ دامنه‌های اضافه ذخیره شد.")
     return ConversationHandler.END
 
 # ---------- add/edit panels (admin only) ----------
@@ -2690,9 +2783,11 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
         save_link(owner_id, app_username, r["id"], remote_name)
         ok += 1
 
-    base = os.getenv("PUBLIC_BASE_URL", "http://localhost:5000").rstrip("/")
-    link = f"{base}/sub/{app_username}/{app_key}/links"
-    txt = f"✅ یوزر '{app_username}' روی {ok}/{len(rows)} پنل انتخابی ساخته/فعال شد.\n🔗 {link}"
+    links = build_sub_links(owner_id, app_username, app_key)
+    txt = (
+        f"✅ یوزر '{app_username}' روی {ok}/{len(rows)} پنل انتخابی ساخته/فعال شد.\n"
+        f"{format_sub_links_text(links)}"
+    )
     if failed:
         txt += "\n⚠️ خطاها:\n" + "\n".join(f"• {e}" for e in failed[:8])
     await q.edit_message_text(txt)
@@ -3015,6 +3110,7 @@ def build_app():
             # settings
             ASK_LIMIT_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_limit_msg)],
             ASK_SERVICE_EMERGENCY_CFG: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_service_emerg_cfg)],
+            ASK_EXTRA_SUB_DOMAINS: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_extra_sub_domains)],
 
             # preset mgmt
             ASK_PRESET_GB:   [MessageHandler(filters.TEXT & ~filters.COMMAND, got_preset_gb)],
