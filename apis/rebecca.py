@@ -5,6 +5,9 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import urljoin
+
+import base64
 
 from . import marzban as _marzban
 
@@ -38,13 +41,61 @@ def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dic
 def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict], Optional[str]]:
     """Fetch user details from the Rebecca panel."""
 
-    return _marzban.get_user(panel_url, token, username)
+    obj, err = _marzban.get_user(panel_url, token, username)
+    if not obj:
+        return None, err
+    if not obj.get("key"):
+        credential_key = obj.get("credential_key")
+        if credential_key:
+            obj["key"] = credential_key
+        else:
+            key_url = (obj.get("key_subscription_url") or "").rstrip("/")
+            if key_url:
+                obj["key"] = key_url.split("/")[-1]
+    return obj, None
+
+
+def _parse_subscription_response(response) -> List[str]:
+    if response.status_code != 200:
+        return []
+    if response.headers.get("content-type", "").startswith("application/json"):
+        try:
+            data = response.json()
+            if isinstance(data, list):
+                return [str(item) for item in data]
+            if isinstance(data, dict) and "links" in data:
+                return [str(item) for item in data["links"]]
+        except Exception:  # pragma: no cover - parsing errors
+            pass
+    text = response.text or ""
+    try:
+        decoded = base64.b64decode(text.strip() + "===")
+        text = decoded.decode(errors="ignore")
+    except Exception:
+        pass
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and line.strip().lower().startswith(ALLOWED_SCHEMES)
+    ]
 
 
 @_marzban.cached(cache=_marzban._links_cache, lock=_marzban._links_lock)
 def fetch_links_from_panel(panel_url: str, username: str, key: str) -> List[str]:
     """Return subscription links for the given user key."""
 
+    if not key:
+        return []
+    try:
+        base = panel_url.rstrip("/") + "/"
+        for path in (f"sub/{username}/{key}/v2ray", f"sub/{username}/{key}/"):
+            url = urljoin(base, path)
+            response = SESSION.get(url, headers={"accept": "text/plain,application/json"}, timeout=20)
+            links = _parse_subscription_response(response)
+            if links:
+                return links
+    except Exception:  # pragma: no cover - network errors
+        pass
     return _marzban.fetch_links_from_panel(panel_url, username, key)
 
 
