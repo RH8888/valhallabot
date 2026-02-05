@@ -195,8 +195,19 @@ def _username_candidates(remote_username: str):
 
 
 @cached(cache=_fetch_user_cache, lock=_fetch_user_lock)
-def fetch_user(panel_url: str, token: str, remote_username: str):
+def fetch_user(panel_url: str, token: str, remote_username: str, panel_type: str = ""):
+    panel_type = (panel_type or "").lower()
     try:
+        if panel_type == "guardcore":
+            user, err = guardcore.get_user(panel_url, token, remote_username)
+            if err:
+                return None
+            if isinstance(user, dict):
+                sub_link = user.get("link") or user.get("subscription_url")
+                if sub_link:
+                    user.setdefault("subscription_url", sub_link)
+                    user.setdefault("key", sub_link)
+            return user
         for candidate in _username_candidates(remote_username):
             url = urljoin(panel_url.rstrip("/") + "/", f"api/users/{candidate}")
             r = SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
@@ -221,10 +232,23 @@ def fetch_user(panel_url: str, token: str, remote_username: str):
         return None
 
 @cached(cache=_fetch_links_cache, lock=_fetch_links_lock)
-def fetch_links_from_panel(panel_url: str, remote_username: str, key: str):
+def fetch_links_from_panel(
+    panel_url: str,
+    remote_username: str,
+    key: str,
+    panel_type: str = "",
+):
     """Return links and an optional error message for debugging."""
     errors = []
+    panel_type = (panel_type or "").lower()
     try:
+        if panel_type == "guardcore":
+            links = guardcore.fetch_links_from_panel(panel_url, remote_username, key)
+            if links:
+                return links, None
+            errors.append("guardcore links empty")
+            return [], "; ".join(errors)
+
         # Try Marzban style first (/v2ray base64)
         url = urljoin(panel_url.rstrip("/") + "/", f"sub/{key}/v2ray")
         r = SESSION.get(url, headers={"accept": "text/plain"}, timeout=20)
@@ -362,11 +386,21 @@ def collect_links(mapped, local_username: str, want_html: bool):
                         errs.append(f"{l['remote_username']}@{l['panel_url']}: guardcore links empty")
                     links.extend(ls)
             else:
-                u = fetch_user(l["panel_url"], l["access_token"], l["remote_username"])
+                u = fetch_user(
+                    l["panel_url"],
+                    l["access_token"],
+                    l["remote_username"],
+                    panel_type,
+                )
                 if want_html and rinfo is None:
                     rinfo = u
                 if u and u.get("key"):
-                    ls, err = fetch_links_from_panel(l["panel_url"], l["remote_username"], u["key"])
+                    ls, err = fetch_links_from_panel(
+                        l["panel_url"],
+                        l["remote_username"],
+                        u["key"],
+                        panel_type,
+                    )
                     if err:
                         errs.append(f"{l['remote_username']}@{l['panel_url']}: {err}")
                     links.extend(ls)
