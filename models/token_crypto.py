@@ -6,12 +6,13 @@ import logging
 import os
 from pathlib import Path
 import secrets
-from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken
+from dotenv import load_dotenv
 
 
 log = logging.getLogger(__name__)
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 
 class TokenEncryptionError(RuntimeError):
@@ -19,10 +20,9 @@ class TokenEncryptionError(RuntimeError):
 
 
 def _persist_key(key: str) -> None:
-    env_path = Path(__file__).resolve().parents[1] / ".env"
     try:
-        if env_path.exists():
-            lines = env_path.read_text().splitlines()
+        if ENV_PATH.exists():
+            lines = ENV_PATH.read_text().splitlines()
         else:
             lines = []
         updated = False
@@ -33,15 +33,54 @@ def _persist_key(key: str) -> None:
                 break
         if not updated:
             lines.append(f"AGENT_TOKEN_ENCRYPTION_KEY={key}")
-        env_path.write_text("\n".join(lines) + "\n")
+        ENV_PATH.write_text("\n".join(lines) + "\n")
     except OSError as exc:
         log.warning("Unable to persist AGENT_TOKEN_ENCRYPTION_KEY to .env: %s", exc)
 
 
+def _normalize_key(raw: str | None) -> str:
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    if (
+        len(value) >= 2
+        and value[0] == value[-1]
+        and value[0] in {"\"", "'"}
+    ):
+        return value[1:-1].strip()
+    return value
+
+
+def _load_key_from_env_file() -> str:
+    try:
+        if not ENV_PATH.exists():
+            return ""
+        for line in ENV_PATH.read_text().splitlines():
+            if line.startswith("AGENT_TOKEN_ENCRYPTION_KEY="):
+                _, _, raw = line.partition("=")
+                return _normalize_key(raw)
+    except OSError as exc:
+        log.warning("Unable to read AGENT_TOKEN_ENCRYPTION_KEY from .env: %s", exc)
+    return ""
+
+
 def _get_or_create_key() -> str:
-    key = os.environ.get("AGENT_TOKEN_ENCRYPTION_KEY")
+    key = _normalize_key(os.environ.get("AGENT_TOKEN_ENCRYPTION_KEY"))
     if key:
+        os.environ["AGENT_TOKEN_ENCRYPTION_KEY"] = key
         return key
+
+    load_dotenv(dotenv_path=ENV_PATH)
+    key = _normalize_key(os.environ.get("AGENT_TOKEN_ENCRYPTION_KEY"))
+    if key:
+        os.environ["AGENT_TOKEN_ENCRYPTION_KEY"] = key
+        return key
+
+    key = _load_key_from_env_file()
+    if key:
+        os.environ["AGENT_TOKEN_ENCRYPTION_KEY"] = key
+        return key
+
     generated = Fernet.generate_key().decode()
     os.environ["AGENT_TOKEN_ENCRYPTION_KEY"] = generated
     _persist_key(generated)
