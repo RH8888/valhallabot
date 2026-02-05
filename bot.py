@@ -516,7 +516,9 @@ def upsert_local_user(owner_id: int, username: str, limit_bytes: int, duration_d
                ON DUPLICATE KEY UPDATE
                    plan_limit_bytes=VALUES(plan_limit_bytes),
                    expire_at=VALUES(expire_at),
-                   disabled_pushed=0""",
+                   disabled_pushed=0,
+                   usage_limit_notified=0,
+                   expire_limit_notified=0""",
             (canonical_owner, username, int(limit_bytes), exp)
         )
         cur.execute(
@@ -612,7 +614,10 @@ def update_limit(owner_id: int, username: str, new_limit_bytes: int):
     params = [int(new_limit_bytes)] + ids + [username]
     with with_mysql_cursor() as cur:
         cur.execute(
-            f"UPDATE local_users SET plan_limit_bytes=%s WHERE owner_id IN ({placeholders}) AND username=%s",
+            f"""UPDATE local_users
+                SET plan_limit_bytes=%s,
+                    usage_limit_notified=0
+                WHERE owner_id IN ({placeholders}) AND username=%s""",
             params
         )
     for row in list_user_links(owner_id, username):
@@ -642,7 +647,10 @@ def reset_used(owner_id: int, username: str):
         prev_used = int(row["used_bytes"] or 0) if row else 0
         owner_real = int(row["owner_id"]) if row else None
         cur.execute(
-            f"UPDATE local_users SET used_bytes=0 WHERE owner_id IN ({placeholders}) AND username=%s",
+            f"""UPDATE local_users
+                SET used_bytes=0,
+                    usage_limit_notified=0
+                WHERE owner_id IN ({placeholders}) AND username=%s""",
             params,
         )
         if prev_used > 0 and owner_real is not None:
@@ -672,7 +680,8 @@ def renew_user(owner_id: int, username: str, add_days: int):
         cur.execute(
             f"""UPDATE local_users
                SET expire_at = IF(expire_at IS NULL, UTC_TIMESTAMP() + INTERVAL %s DAY,
-                                    expire_at + INTERVAL %s DAY)
+                                    expire_at + INTERVAL %s DAY),
+                   expire_limit_notified=0
                WHERE owner_id IN ({placeholders}) AND username=%s""",
             params
         )
@@ -1145,7 +1154,28 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(uid):
             await q.edit_message_text("دسترسی ندارید.")
             return ConversationHandler.END
+        notif_enabled = (get_setting(uid, "limit_event_notifications_enabled") or "1") != "0"
+        notif_label = "🟢 Limit Event Notifications: ON" if notif_enabled else "🔴 Limit Event Notifications: OFF"
         kb = [
+            [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
+            [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
+            [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
+            [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
+        ]
+        await q.edit_message_text("Technical:", reply_markup=InlineKeyboardMarkup(kb))
+        return ConversationHandler.END
+
+    if data == "toggle_limit_event_notifications":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        current = (get_setting(uid, "limit_event_notifications_enabled") or "1") != "0"
+        set_setting(uid, "limit_event_notifications_enabled", "0" if current else "1")
+        notif_enabled = not current
+        notif_label = "🟢 Limit Event Notifications: ON" if notif_enabled else "🔴 Limit Event Notifications: OFF"
+        kb = [
+            [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
             [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
             [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
             [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
