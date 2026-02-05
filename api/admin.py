@@ -223,6 +223,20 @@ class AgentOut(AgentBase):
     created_at: datetime
 
 
+class PanelUsageOut(BaseModel):
+    panel_id: int
+    panel_name: str
+    panel_type: str
+    panel_url: str
+    used_bytes: int
+
+
+class AgentPanelUsageOut(BaseModel):
+    agent_id: int
+    total_used_bytes: int
+    panels: List[PanelUsageOut]
+
+
 @router.get("/agents", response_model=List[AgentOut], summary="List agents")
 def list_agents():
     with with_mysql_cursor() as cur:
@@ -265,6 +279,75 @@ def get_agent(agent_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="Agent not found")
     return AgentOut(**row)
+
+
+@router.get(
+    "/agents/{agent_id}/usage-by-panel",
+    response_model=AgentPanelUsageOut,
+    summary="Get agent usage grouped by panel",
+    dependencies=[Depends(require_super_admin)],
+)
+def get_agent_usage_by_panel(agent_id: int):
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            "SELECT telegram_user_id FROM agents WHERE telegram_user_id=%s LIMIT 1",
+            (agent_id,),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+        cur.execute(
+            """
+            SELECT DISTINCT p.id, p.name, p.panel_type, p.panel_url
+            FROM agent_services ags
+            JOIN service_panels sp ON sp.service_id = ags.service_id
+            JOIN panels p ON p.id = sp.panel_id
+            WHERE ags.agent_tg_id = %s
+            ORDER BY p.id ASC
+            """,
+            (agent_id,),
+        )
+        panel_rows = cur.fetchall()
+
+        cur.execute(
+            """
+            SELECT
+                lup.panel_id,
+                COALESCE(SUM(ROUND(lup.last_used_traffic * COALESCE(p.usage_multiplier, 1.0))), 0) AS used_bytes
+            FROM local_user_panel_links lup
+            JOIN local_users lu
+              ON lu.owner_id = lup.owner_id
+             AND lu.username = lup.local_username
+            JOIN agent_services ags
+              ON ags.agent_tg_id = lu.owner_id
+             AND ags.service_id = lu.service_id
+            JOIN service_panels sp
+              ON sp.service_id = lu.service_id
+             AND sp.panel_id = lup.panel_id
+            JOIN panels p ON p.id = lup.panel_id
+            WHERE lu.owner_id = %s
+            GROUP BY lup.panel_id
+            """,
+            (agent_id,),
+        )
+        usage_rows = cur.fetchall()
+
+    usage_map = {int(r["panel_id"]): int(r["used_bytes"] or 0) for r in usage_rows}
+    panels = [
+        PanelUsageOut(
+            panel_id=int(r["id"]),
+            panel_name=r["name"],
+            panel_type=r["panel_type"],
+            panel_url=r["panel_url"],
+            used_bytes=usage_map.get(int(r["id"]), 0),
+        )
+        for r in panel_rows
+    ]
+    return AgentPanelUsageOut(
+        agent_id=agent_id,
+        total_used_bytes=sum(p.used_bytes for p in panels),
+        panels=panels,
+    )
 
 
 @router.put("/agents/{agent_id}", response_model=AgentOut, summary="Update an agent")
