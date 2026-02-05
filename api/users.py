@@ -96,6 +96,22 @@ def _fetch_user(owner_id: int, username: str) -> dict | None:
         return cur.fetchone()
 
 
+def _agent_service_ids(agent_tg_id: int) -> set[int]:
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            "SELECT service_id FROM agent_services WHERE agent_tg_id=%s",
+            (agent_tg_id,),
+        )
+        return {int(row["service_id"]) for row in cur.fetchall()}
+
+
+def _assert_agent_service_allowed(identity: Identity, service_id: int | None) -> None:
+    if identity.role != "agent" or service_id is None:
+        return
+    if service_id not in _agent_service_ids(identity.agent_id):
+        raise HTTPException(status_code=403, detail="service not assigned to agent")
+
+
 def _list_users(
     owner_id: int,
     search: str | None,
@@ -192,6 +208,7 @@ async def create_user(
         if not template_row:
             raise HTTPException(status_code=404, detail="template user not found")
         service_id = template_row.get("service_id")
+    _assert_agent_service_allowed(identity, service_id)
     upsert_local_user(real_owner, data.username, data.limit_bytes, data.duration_days)
     if service_id is not None:
         await set_local_user_service(real_owner, data.username, service_id)
@@ -230,6 +247,7 @@ def list_users(
     )
     if real_owner is None:
         raise HTTPException(status_code=400, detail="owner_id required")
+    _assert_agent_service_allowed(identity, data.service_id)
     rows, total = _list_users(
         real_owner,
         data.search,
@@ -262,6 +280,7 @@ async def edit_user(
     owner_id = identity.agent_id if identity.role == "agent" else data.owner_id
     if owner_id is None:
         raise HTTPException(status_code=400, detail="owner_id required")
+    _assert_agent_service_allowed(identity, data.service_id)
     if data.limit_bytes is not None:
         update_limit(owner_id, username, data.limit_bytes)
     if data.reset_used:

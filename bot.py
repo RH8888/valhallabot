@@ -316,6 +316,24 @@ def list_services():
         cur.execute("SELECT * FROM services ORDER BY created_at DESC")
         return cur.fetchall()
 
+
+def list_services_for_owner(owner_id: int):
+    if is_admin(owner_id):
+        return list_services()
+
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.*
+            FROM agent_services ags
+            JOIN services s ON s.id = ags.service_id
+            WHERE ags.agent_tg_id=%s
+            ORDER BY s.created_at DESC
+            """,
+            (owner_id,),
+        )
+        return cur.fetchall()
+
 def get_service(sid: int):
     with with_mysql_cursor() as cur:
         cur.execute("SELECT * FROM services WHERE id=%s", (sid,))
@@ -1100,9 +1118,9 @@ async def show_service_panel_select(q, context, service_id: int):
     return ASK_ASSIGN_SERVICE_PANELS
 
 async def show_service_select(update_or_q, context, owner_id: int):
-    services = list_services()
+    services = list_services_for_owner(owner_id)
     if not services:
-        msg = "❌ هیچ سرویسی ثبت نشده. از Admin Panel ایجاد کن."
+        msg = "❌ هیچ سرویس مجازی برای شما فعال نشده است."
         if hasattr(update_or_q, "edit_message_text"):
             await update_or_q.edit_message_text(msg)
         else:
@@ -1737,6 +1755,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
         sid = int(cmd)
         uid = update.effective_user.id
+        if not is_admin(uid):
+            allowed = list_agent_service_ids(uid)
+            if sid not in allowed:
+                await q.edit_message_text("❌ این سرویس برای شما فعال نیست.")
+                return ConversationHandler.END
         selected_ids = list_service_panel_ids(sid)
         if not selected_ids:
             await q.edit_message_text("این سرویس هیچ پنلی ندارد.")
