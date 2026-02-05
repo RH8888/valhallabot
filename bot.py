@@ -575,7 +575,7 @@ def search_local_users(owner_id: int, q: str):
     placeholders = ",".join(["%s"] * len(ids))
     with with_mysql_cursor() as cur:
         cur.execute(
-            f"SELECT username FROM local_users WHERE owner_id IN ({placeholders}) AND username LIKE %s ORDER BY username ASC LIMIT 50",
+            f"SELECT username FROM local_users WHERE owner_id IN ({placeholders}) AND LOWER(username) LIKE LOWER(%s) ORDER BY username ASC LIMIT 50",
             tuple(ids) + (f"%{q}%",)
         )
         return cur.fetchall()
@@ -965,7 +965,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_sudo:
         kb = [
             [InlineKeyboardButton("🧬 New Local User", callback_data="new_user")],
-            [InlineKeyboardButton("🔍 Search User", callback_data="search_user")],
             [InlineKeyboardButton("👥 List Users", callback_data="list_users:0")],
             [InlineKeyboardButton("🧩 Presets", callback_data="manage_presets")],
             [InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin_panel")],
@@ -973,7 +972,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         kb = [
             [InlineKeyboardButton("🧬 New Local User", callback_data="new_user")],
-            [InlineKeyboardButton("🔍 Search User", callback_data="search_user")],
             [InlineKeyboardButton("👥 List Users", callback_data="list_users:0")],
             [InlineKeyboardButton("🧩 Presets", callback_data="manage_presets")],
             [InlineKeyboardButton("🔑 API Token", callback_data="agent_token")],
@@ -1392,7 +1390,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not rows and page > 0:
             page = 0 ; off = 0
             rows = list_all_local_users(uid, offset=0, limit=per)
-        kb = [[InlineKeyboardButton(r["username"], callback_data=f"user_sel:{r['username']}")] for r in rows]
+        kb = [[InlineKeyboardButton("🔍 Search Users", callback_data="search_user")]]
+        kb.extend([[InlineKeyboardButton(r["username"], callback_data=f"user_sel:{r['username']}")] for r in rows])
         nav = []
         if page > 0: nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"list_users:{page-1}"))
         if off + per < total: nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"list_users:{page+1}"))
@@ -2605,7 +2604,7 @@ async def got_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("کاربری یافت نشد.")
         return ConversationHandler.END
     kb = [[InlineKeyboardButton(r["username"], callback_data=f"user_sel:{r['username']}")] for r in rows[:25]]
-    kb.append([InlineKeyboardButton("⬅️ Back", callback_data="back_home")])
+    kb.append([InlineKeyboardButton("⬅️ Back", callback_data="list_users:0")])
     await update.message.reply_text("نتایج:", reply_markup=InlineKeyboardMarkup(kb))
     return ConversationHandler.END
 
