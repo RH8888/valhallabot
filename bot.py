@@ -7,7 +7,7 @@ Admin:
 - Manage panels (add/edit creds/template/sub url, per-panel config filter)
 - Remove panel (disables all mapped users on that panel first)
 - Manage agents: add/edit (name), set agent quota (bytes), renew expiry by **days**, activate/deactivate
-- Assign panels to agents (checkbox)
+- Assign services to agents (independent toggles)
 - Manage services (group panels under a service)
 Agent:
 - New local user (assign a service)
@@ -243,7 +243,12 @@ def _back_kb(callback_data: str) -> InlineKeyboardMarkup:
     )
 
 def get_extra_domains(owner_id: int) -> list[str]:
-    raw = get_setting(owner_id, "extra_sub_domains") or ""
+    settings_owner = owner_id
+    if not is_admin(owner_id):
+        admins = sorted(admin_ids())
+        if admins:
+            settings_owner = admins[0]
+    raw = get_setting(settings_owner, "extra_sub_domains") or ""
     return parse_extra_domains(raw)
 
 def build_sub_links(owner_id: int, username: str, app_key: str) -> list[str]:
@@ -332,8 +337,33 @@ def set_service_panels(service_id: int, panel_ids: set[int]):
 
 def list_agents_by_service(service_id: int):
     with with_mysql_cursor() as cur:
-        cur.execute("SELECT telegram_user_id FROM agents WHERE service_id=%s", (service_id,))
-        return [int(r["telegram_user_id"]) for r in cur.fetchall()]
+        cur.execute("SELECT agent_tg_id FROM agent_services WHERE service_id=%s", (service_id,))
+        return [int(r["agent_tg_id"]) for r in cur.fetchall()]
+
+
+def list_agent_service_ids(agent_tg_id: int) -> set[int]:
+    with with_mysql_cursor() as cur:
+        cur.execute("SELECT service_id FROM agent_services WHERE agent_tg_id=%s", (agent_tg_id,))
+        return {int(r["service_id"]) for r in cur.fetchall()}
+
+
+def _service_panel_union(service_ids: set[int]) -> set[int]:
+    panel_ids: set[int] = set()
+    for sid in service_ids:
+        panel_ids.update(list_service_panel_ids(int(sid)))
+    return panel_ids
+
+
+def set_agent_services(agent_tg_id: int, service_ids: set[int]):
+    clean_ids = {int(sid) for sid in service_ids}
+    with with_mysql_cursor(dict_=False) as cur:
+        cur.execute("DELETE FROM agent_services WHERE agent_tg_id=%s", (agent_tg_id,))
+        if clean_ids:
+            cur.executemany(
+                "INSERT INTO agent_services(agent_tg_id,service_id) VALUES(%s,%s)",
+                [(agent_tg_id, sid) for sid in sorted(clean_ids)],
+            )
+    set_agent_panels(agent_tg_id, _service_panel_union(clean_ids))
 
 def list_local_users_by_service(service_id: int):
     with with_mysql_cursor() as cur:
@@ -341,11 +371,8 @@ def list_local_users_by_service(service_id: int):
         return cur.fetchall()
 
 def set_agent_service(agent_tg_id: int, service_id: int | None):
-    with with_mysql_cursor(dict_=False) as cur:
-        cur.execute("UPDATE agents SET service_id=%s WHERE telegram_user_id=%s", (service_id, agent_tg_id))
-    # sync agent panels to service
-    pids = list_service_panel_ids(service_id) if service_id else set()
-    set_agent_panels(agent_tg_id, pids)
+    # Backward-compatible shim: single service assignment means replacing all assignments.
+    set_agent_services(agent_tg_id, ({int(service_id)} if service_id else set()))
 
 def resolve_local_user_owner(owner_id: int, username: str) -> int | None:
     """Return the concrete owner ID for a given local user accessible to ``owner_id``."""
@@ -1025,6 +1052,22 @@ def _panel_select_kb(panels, selected: set):
     ])
     return InlineKeyboardMarkup(rows)
 
+def _agent_service_select_kb(services, selected: set):
+    rows = []
+    for s in services:
+        sid = int(s["id"])
+        mark = "✅" if sid in selected else "⬜"
+        rows.append([InlineKeyboardButton(f"{mark} {s['name']}"[:64], callback_data=f"as:toggle:{sid}")])
+    rows.append([
+        InlineKeyboardButton("☑️ All", callback_data="as:all"),
+        InlineKeyboardButton("🔲 None", callback_data="as:none"),
+    ])
+    rows.append([
+        InlineKeyboardButton("✅ Apply", callback_data="as:apply"),
+        InlineKeyboardButton("❌ Cancel", callback_data="as:cancel"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
 def _service_panel_select_kb(panels, selected: set):
     rows = []
     for p in panels:
@@ -1603,21 +1646,17 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         set_agent_active(a, not bool(info and info.get("active")))
         return await show_agent_card(q, context, a)
 
-    if data == "agent_assign_panels":
-        if not is_admin(uid): return ConversationHandler.END
-        a = context.user_data.get("agent_tg_id")
-        return await show_assign_panels(q, context, a)
-
-    if data == "agent_assign_service":
+    if data == "agent_assign_services":
         if not is_admin(uid): return ConversationHandler.END
         a = context.user_data.get("agent_tg_id")
         rows = list_services()
         if not rows:
             await q.edit_message_text("هیچ سرویسی ثبت نشده.")
             return ConversationHandler.END
-        kb = [[InlineKeyboardButton(r['name'], callback_data=f"agent_service:{r['id']}")] for r in rows]
-        kb.append([InlineKeyboardButton("⬅️ Back", callback_data="agent_sel_back")])
-        await q.edit_message_text("یک سرویس را انتخاب کن:", reply_markup=InlineKeyboardMarkup(kb))
+        selected = set(list_agent_service_ids(a))
+        context.user_data["as_selected"] = selected
+        kb = _agent_service_select_kb(rows, selected)
+        await q.edit_message_text("سرویس‌های این نماینده:", reply_markup=kb)
         return ConversationHandler.END
 
     if data == "admin_show_agent_token":
@@ -1628,12 +1667,29 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(uid): return ConversationHandler.END
         return await admin_rotate_agent_token(update, context)
 
-    if data.startswith("agent_service:"):
+    if data.startswith("as:"):
         if not is_admin(uid): return ConversationHandler.END
         a = context.user_data.get("agent_tg_id")
-        sid = int(data.split(":",1)[1])
-        set_agent_service(a, sid)
-        return await show_agent_card(q, context, a, notice="✅ سرویس نماینده ذخیره شد.")
+        cmd = data.split(":",1)[1]
+        services = list_services()
+        selected = context.user_data.get("as_selected") or set(list_agent_service_ids(a))
+        if cmd == "all":
+            selected = {int(s["id"]) for s in services}
+        elif cmd == "none":
+            selected = set()
+        elif cmd.startswith("toggle:"):
+            sid = int(cmd.split(":",1)[1])
+            if sid in selected: selected.remove(sid)
+            else: selected.add(sid)
+        elif cmd == "apply":
+            set_agent_services(a, selected)
+            return await show_agent_card(q, context, a, notice="✅ سرویس‌های نماینده ذخیره شد.")
+        elif cmd == "cancel":
+            return await show_agent_card(q, context, a)
+        context.user_data["as_selected"] = selected
+        kb = _agent_service_select_kb(services, selected)
+        await q.edit_message_text("سرویس‌های این نماینده:", reply_markup=kb)
+        return ConversationHandler.END
 
     if data == "agent_sel_back":
         a = context.user_data.get("agent_tg_id")
@@ -1642,26 +1698,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("ap:"):
         if not is_admin(uid): return ConversationHandler.END
         a = context.user_data.get("agent_tg_id")
-        cmd = data.split(":",1)[1]
-        panels = list_my_panels_admin(uid)
-        selected = context.user_data.get("ap_selected") or set(list_agent_panel_ids(a))
-        if cmd == "all":
-            selected = {int(p["id"]) for p in panels}
-        elif cmd == "none":
-            selected = set()
-        elif cmd.startswith("toggle:"):
-            pid = int(cmd.split(":",1)[1])
-            if pid in selected: selected.remove(pid)
-            else: selected.add(pid)
-        elif cmd == "apply":
-            set_agent_panels(a, selected)
-            return await show_agent_card(q, context, a, notice="✅ پنل‌های نماینده ذخیره شد.")
-        elif cmd == "cancel":
-            return await show_agent_card(q, context, a)
-        context.user_data["ap_selected"] = selected
-        kb = _panel_select_kb(panels, selected)
-        await q.edit_message_text("پنل‌های این نماینده:", reply_markup=kb)
-        return ConversationHandler.END
+        return await show_agent_card(q, context, a, notice="⚠️ تخصیص پنل برای نماینده غیرفعال شده است.")
 
     if data.startswith("sp:"):
         if not is_admin(uid): return ConversationHandler.END
@@ -2054,6 +2091,7 @@ async def show_agent_card(q, context: ContextTypes.DEFAULT_TYPE, agent_tg_id: in
     max_users = int(a.get("user_limit") or 0)
     max_user_b = int(a.get("max_user_bytes") or 0)
     user_cnt = count_local_users(agent_tg_id)
+    service_ids = sorted(list_agent_service_ids(agent_tg_id))
     lines = []
     if notice: lines.append(notice)
     lines += [
@@ -2063,6 +2101,7 @@ async def show_agent_card(q, context: ContextTypes.DEFAULT_TYPE, agent_tg_id: in
         f"📛 Max/User: <b>{'Unlimited' if max_user_b==0 else fmt_bytes_short(max_user_b)}</b>",
         f"⏳ Agent Expire: <b>{(exp.strftime('%Y-%m-%d %H:%M:%S UTC') if exp else '—')}</b>",
         f"✅ Active: <b>{'Yes' if active else 'No'}</b>",
+        f"🧰 Services: <b>{len(service_ids)}</b>" + (f" — <code>{', '.join(map(str, service_ids))}</code>" if service_ids else ""),
         "",
         "Choose:",
     ]
@@ -2071,8 +2110,7 @@ async def show_agent_card(q, context: ContextTypes.DEFAULT_TYPE, agent_tg_id: in
         [InlineKeyboardButton("👥 Set User Limit", callback_data="agent_set_user_limit")],
         [InlineKeyboardButton("📛 Set Max/User", callback_data="agent_set_max_user")],
         [InlineKeyboardButton("🔁 Renew (days)", callback_data="agent_renew_days")],
-        [InlineKeyboardButton("🧩 Assign Panels", callback_data="agent_assign_panels")],
-        [InlineKeyboardButton("🧰 Assign Service", callback_data="agent_assign_service")],
+        [InlineKeyboardButton("🧰 Assign Services", callback_data="agent_assign_services")],
         [InlineKeyboardButton("🔘 Toggle Active", callback_data="agent_toggle_active")],
         [InlineKeyboardButton("Show token", callback_data="admin_show_agent_token")],
         [InlineKeyboardButton("Rotate token", callback_data="admin_rotate_agent_token")],
@@ -2193,12 +2231,8 @@ async def admin_rotate_agent_token(update: Update, context: ContextTypes.DEFAULT
     return await show_agent_card(q, context, atg, notice="✅ Token rotated.")
 
 async def show_assign_panels(q, context: ContextTypes.DEFAULT_TYPE, agent_tg_id: int):
-    panels = list_my_panels_admin(q.from_user.id)
-    selected = set(list_agent_panel_ids(agent_tg_id))
-    context.user_data["agent_tg_id"] = agent_tg_id
-    context.user_data["ap_selected"] = selected
-    kb = _panel_select_kb(panels, selected)
-    await q.edit_message_text("پنل‌های این نماینده:", reply_markup=kb)
+    # Deprecated: agent panel assignment is intentionally disabled.
+    await q.edit_message_text("این بخش غیرفعال شده است. از Assign Services استفاده کنید.")
     return ConversationHandler.END
 
 # ---------- service mgmt (admin only) ----------

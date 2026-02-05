@@ -321,10 +321,27 @@ def ensure_schema() -> None:
                 FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS agent_services(
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                agent_tg_id BIGINT NOT NULL,
+                service_id BIGINT NOT NULL,
+                UNIQUE KEY uq_agent_service(agent_tg_id, service_id),
+                FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
         try:
             cur.execute("ALTER TABLE agents ADD COLUMN service_id BIGINT NULL")
         except MySQLError:
             pass
+        cur.execute(
+            """
+            INSERT IGNORE INTO agent_services(agent_tg_id, service_id)
+            SELECT telegram_user_id, service_id
+            FROM agents
+            WHERE service_id IS NOT NULL
+            """
+        )
         try:
             cur.execute("ALTER TABLE local_users ADD COLUMN service_id BIGINT NULL")
         except MySQLError:
