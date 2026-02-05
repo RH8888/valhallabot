@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from services import init_mysql_pool, with_mysql_cursor
 from services.database import mysql_errors
 
-from apis import marzneshin, marzban, rebecca, sanaei, pasarguard
+from apis import marzneshin, marzban, rebecca, sanaei, pasarguard, guardcore
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | usage_sync | %(message)s",
@@ -25,6 +25,7 @@ API_MODULES = {
     "rebecca": rebecca,
     "sanaei": sanaei,
     "pasarguard": pasarguard,
+    "guardcore": guardcore,
 }
 
 
