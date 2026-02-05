@@ -90,6 +90,15 @@ API_MODULES = {
 def get_api(panel_type: str):
     return API_MODULES.get(panel_type or "marzneshin", marzneshin)
 
+
+def panel_username(panel_type: str, username: str) -> str:
+    """Return panel-specific username representation."""
+
+    value = str(username or "").strip()
+    if (panel_type or "").lower() == "guardcore":
+        return value.lower()
+    return value
+
 # ---------- proxy helpers ----------
 def clone_proxy_settings(proxies: dict) -> dict:
     """Copy proxy settings and regenerate credentials.
@@ -2799,10 +2808,10 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
     ok, failed = 0, []
     for r in rows:
         api = get_api(r.get("panel_type"))
-        remote_name = app_username
+        remote_name = panel_username(r.get("panel_type"), app_username)
         if r.get("panel_type") == "marzneshin":
             payload = {
-                "username": app_username,
+                "username": remote_name,
                 "expire_strategy": "start_on_first_use",
                 "usage_duration": usage_sec,
                 "data_limit": limit_bytes,
@@ -2812,7 +2821,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
             }
         elif r.get("panel_type") == "guardcore":
             payload = {
-                "username": app_username,
+                "username": remote_name,
                 "limit_usage": limit_bytes,
                 "limit_expire": usage_sec,
                 "note": "created_by_bot",
@@ -2858,7 +2867,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
             expire_ts = 0 if usage_sec <= 0 else int(datetime.now(timezone.utc).timestamp()) + usage_sec
             tmpl_info = per_panel.get(r["id"], {})
             payload = {
-                "username": app_username,
+                "username": remote_name,
                 "expire": expire_ts,
                 "data_limit": limit_bytes,
                 "data_limit_reset_strategy": "no_reset",
@@ -3028,15 +3037,16 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                 links_map[int(pid)] = username
                 added_ok += 1
             elif p.get("panel_type") == "guardcore":
+                remote_username = panel_username(p.get("panel_type"), username)
                 if not tmpl:
-                    obj, g = api.get_user(p["panel_url"], p["access_token"], username)
+                    obj, g = api.get_user(p["panel_url"], p["access_token"], remote_username)
                     if obj:
                         if not obj.get("enabled", True):
-                            ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], username)
+                            ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], remote_username)
                             if not ok_en:
                                 added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
-                        save_link(owner_id, username, int(pid), username)
-                        links_map[int(pid)] = username
+                        save_link(owner_id, username, int(pid), remote_username)
+                        links_map[int(pid)] = remote_username
                         added_ok += 1
                     else:
                         added_errs.append(f"{p['panel_url']}: no template & user not found")
@@ -3044,21 +3054,21 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
 
                 svc, e = api.fetch_user_services(p["panel_url"], p["access_token"], tmpl)
                 if e:
-                    obj, g = api.get_user(p["panel_url"], p["access_token"], username)
+                    obj, g = api.get_user(p["panel_url"], p["access_token"], remote_username)
                     if obj:
                         if not obj.get("enabled", True):
-                            ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], username)
+                            ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], remote_username)
                             if not ok_en:
                                 added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
-                        save_link(owner_id, username, int(pid), username)
-                        links_map[int(pid)] = username
+                        save_link(owner_id, username, int(pid), remote_username)
+                        links_map[int(pid)] = remote_username
                         added_ok += 1
                     else:
                         added_errs.append(f"{p['panel_url']}: {e}")
                     continue
 
                 payload = {
-                    "username": username,
+                    "username": remote_username,
                     "limit_usage": limit_bytes_default,
                     "limit_expire": usage_duration_default,
                     "note": "user_edit_add_panel",
@@ -3066,18 +3076,18 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                 }
                 obj, e2 = api.create_user(p["panel_url"], p["access_token"], payload)
                 if not obj:
-                    obj, g = api.get_user(p["panel_url"], p["access_token"], username)
+                    obj, g = api.get_user(p["panel_url"], p["access_token"], remote_username)
                     if not obj:
                         added_errs.append(f"{p['panel_url']}: {e2 or g or 'unknown error'}")
                         continue
 
                 if not obj.get("enabled", True):
-                    ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], username)
+                    ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], remote_username)
                     if not ok_en:
                         added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
 
-                save_link(owner_id, username, int(pid), username)
-                links_map[int(pid)] = username
+                save_link(owner_id, username, int(pid), remote_username)
+                links_map[int(pid)] = remote_username
                 added_ok += 1
             elif p.get("panel_type") == "sanaei":
                 if not tmpl:
@@ -3176,7 +3186,7 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
     if to_remove:
         for pid in to_remove:
             p = panels_map.get(int(pid))
-            remote = links_map.get(int(pid), username)
+            remote = links_map.get(int(pid), panel_username(p.get("panel_type"), username) if p else username)
             remove_link(owner_id, username, int(pid))
             links_map.pop(int(pid), None)
             removed += 1
@@ -3195,7 +3205,7 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
         if not p:
             continue
         api = get_api(p.get("panel_type"))
-        remote = links_map.get(int(pid), username)
+        remote = links_map.get(int(pid), panel_username(p.get("panel_type"), username))
         remotes = remote.split(",") if p.get("panel_type") == "sanaei" else [remote]
         for rn in remotes:
             obj, g = api.get_user(p["panel_url"], p["access_token"], rn)

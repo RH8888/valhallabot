@@ -67,6 +67,16 @@ def _coerce_int(value: object) -> Optional[int]:
         return None
 
 
+def _normalise_username(username: object) -> str:
+    """Return Guardcore-compatible username.
+
+    Guardcore rejects uppercase usernames, so all Guardcore requests must use
+    lowercase identifiers.
+    """
+
+    return str(username or "").strip().lower()
+
+
 def _normalise_service_ids(value: object) -> List[int]:
     if value is None:
         return []
@@ -114,7 +124,7 @@ def _prepare_subscription_payload(payload: Mapping[str, object]) -> Dict[str, ob
     """Translate a bot payload into Guardcore's SubscriptionCreate schema."""
 
     body: Dict[str, object] = {}
-    username = payload.get("username")
+    username = _normalise_username(payload.get("username"))
     if username:
         body["username"] = username
 
@@ -259,6 +269,7 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
     """Fetch subscription details from the panel."""
 
     try:
+        username = _normalise_username(username)
         r = SESSION.get(
             _build_api_url(panel_url, "api", "subscriptions", username),
             headers=get_headers(token),
@@ -341,6 +352,7 @@ def disable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool
     """Disable a subscription on the panel."""
 
     try:
+        username = _normalise_username(username)
         r = SESSION.post(
             _build_api_url(panel_url, "api", "subscriptions", "disable"),
             json={"usernames": [username]},
@@ -358,6 +370,7 @@ def enable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
     """Enable a subscription on the panel."""
 
     try:
+        username = _normalise_username(username)
         r = SESSION.post(
             _build_api_url(panel_url, "api", "subscriptions", "enable"),
             json={"usernames": [username]},
@@ -375,6 +388,7 @@ def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
     """Delete a subscription on the panel."""
 
     try:
+        username = _normalise_username(username)
         r = SESSION.delete(
             _build_api_url(panel_url, "api", "subscriptions"),
             json={"usernames": [username]},
@@ -392,6 +406,7 @@ def reset_remote_user_usage(panel_url: str, token: str, username: str) -> Tuple[
     """Reset traffic statistics for *username* on the panel."""
 
     try:
+        username = _normalise_username(username)
         r = SESSION.post(
             _build_api_url(panel_url, "api", "subscriptions", "reset"),
             json={"usernames": [username]},
@@ -415,6 +430,7 @@ def update_remote_user(
     """Update quota or expiry for *username* on the panel."""
 
     payload: Dict[str, object] = {}
+    username = _normalise_username(username)
     if data_limit is not None:
         payload["data_limit"] = int(data_limit)
     if expire is not None:
