@@ -196,6 +196,18 @@ def _normalise_subscription(obj: Dict[str, object]) -> Dict[str, object]:
         obj.setdefault("subscription_url", link)
     if access_key and not obj.get("key"):
         obj["key"] = link or access_key
+
+    # Usage sync expects a unified "used_traffic" counter across panels.
+    # Guardcore returns usage as total_usage/current_usage, so map those
+    # fields explicitly to avoid silent 0-byte accounting.
+    used_traffic = _coerce_int(obj.get("used_traffic"))
+    if used_traffic is None:
+        used_traffic = _coerce_int(obj.get("total_usage"))
+    if used_traffic is None:
+        used_traffic = _coerce_int(obj.get("current_usage"))
+    if used_traffic is not None:
+        obj["used_traffic"] = max(used_traffic, 0)
+
     return obj
 
 
