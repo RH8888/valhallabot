@@ -50,6 +50,7 @@ from api.subscription_aggregator import (
     expand_owner_ids,
     canonical_owner_id,
 )
+from api.admin import get_agent_usage_by_panel as fetch_agent_usage_by_panel
 from services import (
     init_mysql_pool,
     with_mysql_cursor,
@@ -1677,6 +1678,14 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("سرویس‌های این نماینده:", reply_markup=kb)
         return ConversationHandler.END
 
+    if data == "agent_usage_panel":
+        if not is_admin(uid): return ConversationHandler.END
+        a = context.user_data.get("agent_tg_id")
+        if not a:
+            await q.edit_message_text("نماینده انتخاب نشده.")
+            return ConversationHandler.END
+        return await show_agent_usage_panel(q, a)
+
     if data == "admin_show_agent_token":
         if not is_admin(uid): return ConversationHandler.END
         return await admin_show_agent_token(update, context)
@@ -2134,12 +2143,38 @@ async def show_agent_card(q, context: ContextTypes.DEFAULT_TYPE, agent_tg_id: in
         [InlineKeyboardButton("📛 Set Max/User", callback_data="agent_set_max_user")],
         [InlineKeyboardButton("🔁 Renew (days)", callback_data="agent_renew_days")],
         [InlineKeyboardButton("🧰 Assign Services", callback_data="agent_assign_services")],
+        [InlineKeyboardButton("📊 Agent Usage by Panel", callback_data="agent_usage_panel")],
         [InlineKeyboardButton("🔘 Toggle Active", callback_data="agent_toggle_active")],
         [InlineKeyboardButton("Show token", callback_data="admin_show_agent_token")],
         [InlineKeyboardButton("Rotate token", callback_data="admin_rotate_agent_token")],
         [InlineKeyboardButton("⬅️ Back", callback_data="manage_agents")],
     ]
     await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+    return ConversationHandler.END
+
+async def show_agent_usage_panel(q, agent_tg_id: int):
+    usage = fetch_agent_usage_by_panel(agent_tg_id)
+    lines = [
+        f"📊 <b>Agent Usage by Panel</b>",
+        f"Agent: <code>{agent_tg_id}</code>",
+        f"Total Used: <b>{fmt_bytes_short(int(usage.total_used_bytes or 0))}</b>",
+        "",
+    ]
+
+    if not usage.panels:
+        lines.append("No panels assigned.")
+    else:
+        for idx, panel in enumerate(usage.panels, start=1):
+            used = fmt_bytes_short(int(panel.used_bytes or 0))
+            lines.append(
+                f"{idx}. <b>{panel.panel_name}</b> ({panel.panel_type})\n"
+                f"   ID: <code>{panel.panel_id}</code> — Used: <b>{used}</b>"
+            )
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"agent_sel:{agent_tg_id}")],
+    ])
+    await q.edit_message_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
     return ConversationHandler.END
 
 async def agent_show_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
