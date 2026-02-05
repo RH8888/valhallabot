@@ -23,6 +23,7 @@ from api.subscription_aggregator.flask_app import (
     send_owner_limit_notification,
     mark_usage_limit_notified,
     mark_expire_limit_notified,
+    format_usage_value,
 )
 
 router = APIRouter(prefix="/sub", tags=["Subscription"], dependencies=[Depends(get_identity)])
@@ -131,7 +132,7 @@ def get_links(
         if not usage_notified:
             send_owner_limit_notification(
                 real_owner,
-                f"📊 User {username} exceeded usage limit ({used} / {limit} bytes).",
+                f"📊 User {username} exceeded usage limit ({format_usage_value(used)} / {format_usage_value(limit)}).",
             )
             mark_usage_limit_notified(real_owner, username)
         if not pushed:

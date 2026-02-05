@@ -606,6 +606,28 @@ def bytesformat(num):
     return f"{num:.2f} PB"
 
 
+def format_usage_value(num):
+    """Format byte values for usage notifications using MB/GB/TB units."""
+    try:
+        value = float(num)
+    except (TypeError, ValueError):
+        value = 0.0
+
+    mb = 1024.0 ** 2
+    gb = 1024.0 ** 3
+    tb = 1024.0 ** 4
+
+    if abs(value) >= tb:
+        scaled, unit = value / tb, "TB"
+    elif abs(value) >= gb:
+        scaled, unit = value / gb, "GB"
+    else:
+        scaled, unit = value / mb, "MB"
+
+    precision = 1 if abs(scaled) >= 100 else 2
+    return f"{scaled:.{precision}f} {unit}"
+
+
 app.jinja_env.filters["bytesformat"] = bytesformat
 
 
@@ -761,7 +783,7 @@ def unified_links(local_username, app_key):
         if not usage_notified:
             send_owner_limit_notification(
                 owner_id,
-                f"📊 User {local_username} exceeded usage limit ({bytesformat(used)} / {bytesformat(limit)}).",
+                f"📊 User {local_username} exceeded usage limit ({format_usage_value(used)} / {format_usage_value(limit)}).",
             )
             mark_usage_limit_notified(owner_id, local_username)
         if not pushed:
@@ -786,8 +808,8 @@ def unified_links(local_username, app_key):
                 "User {username} has reached data limit ({used} / {limit})",
             )
             msg = msg_template.replace("{username}", local_username)
-            msg = msg.replace("{limit}", bytesformat(limit))
-            msg = msg.replace("{used}", bytesformat(used))
+            msg = msg.replace("{limit}", format_usage_value(limit))
+            msg = msg.replace("{used}", format_usage_value(used))
             body = limit_config + "#" + quote(msg)
             resp = Response(body, mimetype="text/plain")
 
