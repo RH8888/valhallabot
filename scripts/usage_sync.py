@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from services import init_mysql_pool, with_mysql_cursor
 from services.database import mysql_errors
+from services.settings import get_setting as get_owner_setting
 
 from apis import marzneshin, marzban, rebecca, sanaei, pasarguard, guardcore
 
@@ -144,18 +145,7 @@ def get_local_user(owner_id, local_username):
 
 
 def get_setting(owner_id, key):
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            """
-            SELECT `value`
-            FROM settings
-            WHERE telegram_user_id=%s AND `key`=%s
-            LIMIT 1
-            """,
-            (owner_id, key),
-        )
-        row = cur.fetchone()
-        return row["value"] if row else None
+    return get_owner_setting(owner_id, key)
 
 
 def mark_usage_limit_notified(owner_id, local_username):
