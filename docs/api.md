@@ -100,6 +100,17 @@ curl -X POST \
 ```
 
 
+
+### Agent usage breakdown by panel (sudo admin only)
+
+```sh
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://localhost:${FLASK_PORT}/api/v1/admin/agents/123456/usage-by-panel"
+```
+
+Returns panel-level usage totals for the specified agent, computed from the
+agent's assigned services and their panels.
+
 ### List users
 
 ```sh
