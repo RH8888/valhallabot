@@ -188,14 +188,23 @@ def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dic
         body = _prepare_subscription_payload(payload)
         if not body.get("username"):
             return None, "missing username"
+        # Guardcore expects an array of SubscriptionCreate objects, even for
+        # single-user creation.
         r = SESSION.post(
             _build_api_url(panel_url, "api", "subscriptions"),
-            json=body,
+            json=[body],
             headers={**get_headers(token), "Content-Type": "application/json"},
             timeout=20,
         )
         if r.status_code in (200, 201):
             data = r.json()
+            if isinstance(data, list):
+                if not data:
+                    return None, "empty response from panel"
+                first = data[0]
+                if isinstance(first, dict):
+                    return _normalise_subscription(first), None
+                return {"result": first}, None
             if isinstance(data, dict):
                 return _normalise_subscription(data), None
             return data, None
