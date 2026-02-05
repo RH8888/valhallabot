@@ -10,6 +10,7 @@ from urllib.parse import quote, urljoin, urlparse
 
 import base64
 import os
+import time
 from threading import RLock
 
 import requests
@@ -80,6 +81,35 @@ def _normalise_service_ids(value: object) -> List[int]:
         return []
 
 
+def _normalise_limit_expire(value: object) -> Optional[int]:
+    """Return Guardcore-compatible UNIX seconds for ``limit_expire``.
+
+    Guardcore validates ``limit_expire`` as a future UNIX timestamp (UTC).
+    Bot payloads may provide either absolute timestamps or duration seconds,
+    so this helper normalises both into a valid future timestamp.
+    """
+
+    limit_expire = _coerce_int(value)
+    if limit_expire is None:
+        return None
+
+    now_ts = int(time.time())
+
+    # Accept milliseconds as input and convert to seconds.
+    if limit_expire > 10_000_000_000:
+        limit_expire //= 1000
+
+    # If value is not already a future timestamp, treat it as duration seconds.
+    if limit_expire <= now_ts:
+        limit_expire = now_ts + limit_expire
+
+    # Guardcore requires a timestamp strictly in the future.
+    if limit_expire <= now_ts:
+        limit_expire = now_ts + 1
+
+    return limit_expire
+
+
 def _prepare_subscription_payload(payload: Mapping[str, object]) -> Dict[str, object]:
     """Translate a bot payload into Guardcore's SubscriptionCreate schema."""
 
@@ -95,10 +125,10 @@ def _prepare_subscription_payload(payload: Mapping[str, object]) -> Dict[str, ob
         limit_usage = _coerce_int(payload.get("data_limit_bytes"))
     body["limit_usage"] = limit_usage if limit_usage is not None else 0
 
-    limit_expire = _coerce_int(payload.get("limit_expire"))
+    limit_expire = _normalise_limit_expire(payload.get("limit_expire"))
     if limit_expire is None:
-        limit_expire = _coerce_int(payload.get("expire"))
-    body["limit_expire"] = limit_expire if limit_expire is not None else 0
+        limit_expire = _normalise_limit_expire(payload.get("expire"))
+    body["limit_expire"] = limit_expire if limit_expire is not None else int(time.time()) + 1
 
     service_ids = payload.get("service_ids")
     if service_ids is None and payload.get("service_id") is not None:
@@ -131,9 +161,9 @@ def _prepare_subscription_update(data: Mapping[str, object]) -> Dict[str, object
     if limit_usage is not None:
         body["limit_usage"] = limit_usage
 
-    limit_expire = _coerce_int(data.get("limit_expire"))
+    limit_expire = _normalise_limit_expire(data.get("limit_expire"))
     if limit_expire is None:
-        limit_expire = _coerce_int(data.get("expire"))
+        limit_expire = _normalise_limit_expire(data.get("expire"))
     if limit_expire is not None:
         body["limit_expire"] = limit_expire
 
