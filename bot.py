@@ -77,6 +77,7 @@ logging.basicConfig(
 log = logging.getLogger("marz_bot")
 
 # ---------- api helpers ----------
+PANEL_TYPES = ("marzneshin", "marzban", "rebecca", "sanaei", "pasarguard", "guardcore")
 API_MODULES = {
     "marzneshin": marzneshin,
     "marzban": marzban,
@@ -2223,7 +2224,7 @@ async def got_panel_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ASK_PANEL_NAME
     context.user_data["panel_name"] = name
     await update.message.reply_text(
-        "نوع پنل را مشخص کن (marzneshin/marzban/rebecca/sanaei/pasarguard/guardcore):"
+        f"نوع پنل را مشخص کن ({'/'.join(PANEL_TYPES)}):"
     )
     return ASK_PANEL_TYPE
 
@@ -2231,9 +2232,9 @@ async def got_panel_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
     t = (update.message.text or "").strip().lower()
-    if t not in ("marzneshin", "marzban", "rebecca", "sanaei", "pasarguard", "guardcore"):
+    if t not in PANEL_TYPES:
         await update.message.reply_text(
-            "❌ نوع پنل نامعتبر. یکی از marzneshin/marzban/rebecca/sanaei/pasarguard/guardcore بفرست:"
+            f"❌ نوع پنل نامعتبر. یکی از {'/'.join(PANEL_TYPES)} بفرست:"
         )
         return ASK_PANEL_TYPE
     context.user_data["panel_type"] = t
