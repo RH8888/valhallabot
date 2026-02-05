@@ -4,6 +4,7 @@
 import os
 import time
 import logging
+import requests
 from urllib.parse import urljoin
 from datetime import datetime, timezone
 
@@ -134,12 +135,58 @@ def update_last(link_id, new_used):
 def get_local_user(owner_id, local_username):
     with with_mysql_cursor() as cur:
         cur.execute("""
-            SELECT plan_limit_bytes, used_bytes, disabled_pushed
+            SELECT plan_limit_bytes, used_bytes, disabled_pushed, usage_limit_notified
             FROM local_users
             WHERE owner_id=%s AND username=%s
             LIMIT 1
         """, (owner_id, local_username))
         return cur.fetchone()
+
+
+def get_setting(owner_id, key):
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            """
+            SELECT `value`
+            FROM settings
+            WHERE telegram_user_id=%s AND `key`=%s
+            LIMIT 1
+            """,
+            (owner_id, key),
+        )
+        row = cur.fetchone()
+        return row["value"] if row else None
+
+
+def mark_usage_limit_notified(owner_id, local_username):
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE local_users
+            SET usage_limit_notified=1, usage_limit_notified_at=NOW()
+            WHERE owner_id=%s AND username=%s
+            """,
+            (owner_id, local_username),
+        )
+
+
+def send_owner_limit_notification(owner_id: int, message: str):
+    enabled = (get_setting(owner_id, "limit_event_notifications_enabled") or "1") != "0"
+    if not enabled:
+        return
+    bot_token = os.getenv("BOT_TOKEN", "").strip()
+    if not bot_token:
+        log.warning("BOT_TOKEN missing; cannot send limit event notification")
+        return
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    try:
+        requests.post(
+            url,
+            data={"chat_id": int(owner_id), "text": message},
+            timeout=8,
+        )
+    except Exception as exc:  # pragma: no cover - network errors
+        log.warning("failed sending limit event notification to %s: %s", owner_id, exc)
 
 def list_links_of_local_user(owner_id, local_username):
     with with_mysql_cursor() as cur:
@@ -197,16 +244,24 @@ def try_disable_if_user_exceeded(owner_id, local_username):
     limit = int(lu["plan_limit_bytes"])
     used  = int(lu["used_bytes"])
     pushed = int(lu.get("disabled_pushed", 0) or 0)
+    usage_notified = int(lu.get("usage_limit_notified", 0) or 0)
 
-    if limit > 0 and used >= limit and not pushed:
-        links = list_links_of_local_user(owner_id, local_username)
-        for l in links:
-            code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
-            if code and code != 200:
-                log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
-            else:
-                log.info("disabled %s on %s", l["remote_username"], l["panel_url"])
-        mark_user_disabled(owner_id, local_username)
+    if limit > 0 and used >= limit:
+        if not usage_notified:
+            send_owner_limit_notification(
+                owner_id,
+                f"📊 User {local_username} exceeded usage limit ({used} / {limit} bytes).",
+            )
+            mark_usage_limit_notified(owner_id, local_username)
+        if not pushed:
+            links = list_links_of_local_user(owner_id, local_username)
+            for l in links:
+                code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
+                if code and code != 200:
+                    log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
+                else:
+                    log.info("disabled %s on %s", l["remote_username"], l["panel_url"])
+            mark_user_disabled(owner_id, local_username)
 
 def try_enable_if_user_ok(owner_id, local_username):
     lu = get_local_user(owner_id, local_username)
