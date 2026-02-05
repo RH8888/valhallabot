@@ -95,7 +95,7 @@ def get_local_user(owner_id, local_username):
     with with_mysql_cursor() as cur:
         cur.execute(
             f"""
-            SELECT owner_id, username, plan_limit_bytes, used_bytes, expire_at, disabled_pushed, service_id
+            SELECT owner_id, username, plan_limit_bytes, used_bytes, expire_at, disabled_pushed, usage_limit_notified, expire_limit_notified, service_id
             FROM local_users
             WHERE owner_id IN ({placeholders}) AND username=%s
             LIMIT 1
@@ -153,6 +153,53 @@ def mark_user_disabled(owner_id, local_username):
         """,
             tuple(ids) + (local_username,),
         )
+
+
+def mark_usage_limit_notified(owner_id, local_username):
+    ids = expand_owner_ids(owner_id)
+    placeholders = ",".join(["%s"] * len(ids))
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE local_users
+            SET usage_limit_notified=1, usage_limit_notified_at=NOW()
+            WHERE owner_id IN ({placeholders}) AND username=%s
+        """,
+            tuple(ids) + (local_username,),
+        )
+
+
+def mark_expire_limit_notified(owner_id, local_username):
+    ids = expand_owner_ids(owner_id)
+    placeholders = ",".join(["%s"] * len(ids))
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE local_users
+            SET expire_limit_notified=1, expire_limit_notified_at=NOW()
+            WHERE owner_id IN ({placeholders}) AND username=%s
+        """,
+            tuple(ids) + (local_username,),
+        )
+
+
+def send_owner_limit_notification(owner_id: int, message: str):
+    enabled = (get_setting(owner_id, "limit_event_notifications_enabled") or "1") != "0"
+    if not enabled:
+        return
+    token = (os.getenv("BOT_TOKEN") or "").strip()
+    if not token:
+        log.warning("BOT_TOKEN missing; cannot send limit event notification")
+        return
+    try:
+        SESSION.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": int(owner_id), "text": message},
+            timeout=10,
+        )
+    except Exception as exc:
+        log.warning("failed sending limit event notification to %s: %s", owner_id, exc)
+
 
 def disable_remote(panel_type, panel_url, token, remote_username):
     try:
@@ -677,13 +724,46 @@ def unified_links(local_username, app_key):
             if not want_html:
                 return Response("", mimetype="text/plain")
 
-    # ---- User-level quota enforcement ----
+    # ---- User-level expiry/usage enforcement ----
     limit = int(lu["plan_limit_bytes"])
     used = int(lu["used_bytes"])
     pushed = int(lu.get("disabled_pushed", 0) or 0)
+    usage_notified = int(lu.get("usage_limit_notified", 0) or 0)
+    expire_notified = int(lu.get("expire_limit_notified", 0) or 0)
+
+    exp = lu.get("expire_at")
+    expired = bool(exp and exp <= datetime.utcnow())
+    if expired:
+        if not expire_notified:
+            send_owner_limit_notification(
+                owner_id,
+                f"⏰ User {local_username} reached expiration limit.",
+            )
+            mark_expire_limit_notified(owner_id, local_username)
+        if not pushed:
+            links = list_mapped_links(owner_id, local_username)
+            if not links:
+                panels = list_all_panels(owner_id)
+                links = [{"panel_id": p["id"], "remote_username": local_username,
+                          "panel_url": p["panel_url"], "access_token": p["access_token"],
+                          "panel_type": p["panel_type"]} for p in panels]
+            for l in links:
+                code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
+                if code and code != 200:
+                    log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
+            mark_user_disabled(owner_id, local_username)
+        if not want_html:
+            return Response("", mimetype="text/plain")
+
     limit_reached = False
     if limit > 0 and used >= limit:
         limit_reached = True
+        if not usage_notified:
+            send_owner_limit_notification(
+                owner_id,
+                f"📊 User {local_username} exceeded usage limit ({bytesformat(used)} / {bytesformat(limit)}).",
+            )
+            mark_usage_limit_notified(owner_id, local_username)
         if not pushed:
             links = list_mapped_links(owner_id, local_username)
             if not links:

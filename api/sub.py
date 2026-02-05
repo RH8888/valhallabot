@@ -20,6 +20,9 @@ from api.subscription_aggregator.flask_app import (
     mark_agent_disabled,
     mark_user_disabled,
     disable_remote,
+    send_owner_limit_notification,
+    mark_usage_limit_notified,
+    mark_expire_limit_notified,
 )
 
 router = APIRouter(prefix="/sub", tags=["Subscription"], dependencies=[Depends(get_identity)])
@@ -91,7 +94,46 @@ def get_links(
     limit = int(lu["plan_limit_bytes"])
     used = int(lu["used_bytes"])
     pushed = int(lu.get("disabled_pushed") or 0)
+    usage_notified = int(lu.get("usage_limit_notified") or 0)
+    expire_notified = int(lu.get("expire_limit_notified") or 0)
+
+    exp = lu.get("expire_at")
+    expired = bool(exp and exp <= datetime.utcnow())
+    if expired:
+        if not expire_notified:
+            send_owner_limit_notification(real_owner, f"⏰ User {username} reached expiration limit.")
+            mark_expire_limit_notified(real_owner, username)
+        if not pushed:
+            links = list_mapped_links(real_owner, username)
+            if not links:
+                panels = list_all_panels(real_owner)
+                links = [
+                    {
+                        "panel_id": p["id"],
+                        "remote_username": username,
+                        "panel_url": p["panel_url"],
+                        "access_token": p["access_token"],
+                        "panel_type": p["panel_type"],
+                    }
+                    for p in panels
+                ]
+            for l in links:
+                disable_remote(
+                    l["panel_type"],
+                    l["panel_url"],
+                    l["access_token"],
+                    l["remote_username"],
+                )
+            mark_user_disabled(real_owner, username)
+        return LinksOut(links=[])
+
     if limit > 0 and used >= limit:
+        if not usage_notified:
+            send_owner_limit_notification(
+                real_owner,
+                f"📊 User {username} exceeded usage limit ({used} / {limit} bytes).",
+            )
+            mark_usage_limit_notified(real_owner, username)
         if not pushed:
             links = list_mapped_links(real_owner, username)
             if not links:

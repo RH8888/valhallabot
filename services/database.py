@@ -173,9 +173,29 @@ def ensure_schema() -> None:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 disabled_pushed TINYINT(1) NOT NULL DEFAULT 0,
                 disabled_pushed_at DATETIME NULL,
+                usage_limit_notified TINYINT(1) NOT NULL DEFAULT 0,
+                usage_limit_notified_at DATETIME NULL,
+                expire_limit_notified TINYINT(1) NOT NULL DEFAULT 0,
+                expire_limit_notified_at DATETIME NULL,
                 UNIQUE KEY uq_local(owner_id, username)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+        try:
+            cur.execute("ALTER TABLE local_users ADD COLUMN usage_limit_notified TINYINT(1) NOT NULL DEFAULT 0")
+        except MySQLError:
+            pass
+        try:
+            cur.execute("ALTER TABLE local_users ADD COLUMN usage_limit_notified_at DATETIME NULL")
+        except MySQLError:
+            pass
+        try:
+            cur.execute("ALTER TABLE local_users ADD COLUMN expire_limit_notified TINYINT(1) NOT NULL DEFAULT 0")
+        except MySQLError:
+            pass
+        try:
+            cur.execute("ALTER TABLE local_users ADD COLUMN expire_limit_notified_at DATETIME NULL")
+        except MySQLError:
+            pass
         cur.execute("""
             CREATE TABLE IF NOT EXISTS local_user_keys(
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
