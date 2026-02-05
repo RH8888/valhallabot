@@ -227,6 +227,12 @@ def parse_extra_domains(raw: str) -> list[str]:
         seen.add(host)
     return entries
 
+
+def _back_kb(callback_data: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅️ Back", callback_data=callback_data)]]
+    )
+
 def get_extra_domains(owner_id: int) -> list[str]:
     raw = get_setting(owner_id, "extra_sub_domains") or ""
     return parse_extra_domains(raw)
@@ -1091,17 +1097,61 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("دسترسی ندارید.")
             return ConversationHandler.END
         kb = [
-            [InlineKeyboardButton("➕ Add Panel", callback_data="add_panel")],
-            [InlineKeyboardButton("🛠️ Manage Panels", callback_data="manage_panels")],
-            [InlineKeyboardButton("🆕 Add Service", callback_data="add_service")],
-            [InlineKeyboardButton("🧰 Manage Services", callback_data="manage_services")],
+            [InlineKeyboardButton("🗂️ Servers", callback_data="admin_servers")],
             [InlineKeyboardButton("👑 Manage Agents", callback_data="manage_agents")],
-            [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
-            [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
-            [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
+            [InlineKeyboardButton("🛠️ Technical", callback_data="admin_technical")],
             [InlineKeyboardButton("⬅️ Back", callback_data="back_home")],
         ]
         await q.edit_message_text("پنل ادمین:", reply_markup=InlineKeyboardMarkup(kb))
+        return ConversationHandler.END
+
+    if data == "admin_servers":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        kb = [
+            [InlineKeyboardButton("📦 Panels", callback_data="servers_panels")],
+            [InlineKeyboardButton("🧰 Services", callback_data="servers_services")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
+        ]
+        await q.edit_message_text("Servers:", reply_markup=InlineKeyboardMarkup(kb))
+        return ConversationHandler.END
+
+    if data == "servers_panels":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        kb = [
+            [InlineKeyboardButton("➕ Add Panel", callback_data="add_panel")],
+            [InlineKeyboardButton("🛠️ Manage Panels", callback_data="manage_panels")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="admin_servers")],
+        ]
+        await q.edit_message_text("Servers → Panels:", reply_markup=InlineKeyboardMarkup(kb))
+        return ConversationHandler.END
+
+    if data == "servers_services":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        kb = [
+            [InlineKeyboardButton("🆕 Add Service", callback_data="add_service")],
+            [InlineKeyboardButton("🧰 Manage Services", callback_data="manage_services")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="admin_servers")],
+        ]
+        await q.edit_message_text("Servers → Services:", reply_markup=InlineKeyboardMarkup(kb))
+        return ConversationHandler.END
+
+    if data == "admin_technical":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        kb = [
+            [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
+            [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
+            [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
+        ]
+        await q.edit_message_text("Technical:", reply_markup=InlineKeyboardMarkup(kb))
         return ConversationHandler.END
 
     if data == "limit_msg":
@@ -1109,7 +1159,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("دسترسی ندارید.")
             return ConversationHandler.END
         cur = get_setting(uid, "limit_message") or "—"
-        await q.edit_message_text(f"پیام فعلی:\n{cur}\n\nپیام جدید را بفرست:")
+        await q.edit_message_text(f"پیام فعلی:\n{cur}\n\nپیام جدید را بفرست:", reply_markup=_back_kb("admin_technical"))
         return ASK_LIMIT_MSG
 
     if data == "extra_sub_domains":
@@ -1122,7 +1172,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "دامنه‌های اضافه فعلی:\n"
             f"{cur}\n\n"
             "دامنه‌های جدید را با کاما یا خط جدید بفرست.\n"
-            "برای حذف: clear"
+            "برای حذف: clear",
+            reply_markup=_back_kb("admin_technical")
         )
         return ASK_EXTRA_SUB_DOMAINS
 
@@ -1216,14 +1267,14 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(uid):
             await q.edit_message_text("فقط ادمین می‌تواند پنل اضافه کند.")
             return ConversationHandler.END
-        await q.edit_message_text("🧾 اسم پنل را بفرست:")
+        await q.edit_message_text("🧾 اسم پنل را بفرست:", reply_markup=_back_kb("servers_panels"))
         return ASK_PANEL_NAME
 
     if data == "add_service":
         if not is_admin(uid):
             await q.edit_message_text("فقط ادمین می‌تواند سرویس اضافه کند.")
             return ConversationHandler.END
-        await q.edit_message_text("🧾 اسم سرویس را بفرست:")
+        await q.edit_message_text("🧾 اسم سرویس را بفرست:", reply_markup=_back_kb("servers_services"))
         return ASK_SERVICE_NAME
 
     if data == "manage_panels":
@@ -1232,11 +1283,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
         rows = list_my_panels_admin(uid)
         if not rows:
-            await q.edit_message_text("هیچ پنلی ثبت نشده. ابتدا ➕ Add Panel.")
+            await q.edit_message_text("هیچ پنلی ثبت نشده. ابتدا ➕ Add Panel.", reply_markup=_back_kb("servers_panels"))
             return ConversationHandler.END
         kb = [[InlineKeyboardButton(f"{r['name']}"[:64],
                                     callback_data=f"panel_sel:{r['id']}")] for r in rows]
-        kb.append([InlineKeyboardButton("⬅️ Back", callback_data="back_home")])
+        kb.append([InlineKeyboardButton("⬅️ Back", callback_data="servers_panels")])
         await q.edit_message_text("یک پنل را انتخاب کن:", reply_markup=InlineKeyboardMarkup(kb))
         return ConversationHandler.END
 
@@ -1246,11 +1297,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
         rows = list_services()
         if not rows:
-            await q.edit_message_text("هیچ سرویسی ثبت نشده. ابتدا ➕ Add Service.")
+            await q.edit_message_text("هیچ سرویسی ثبت نشده. ابتدا ➕ Add Service.", reply_markup=_back_kb("servers_services"))
             return ConversationHandler.END
         kb = [[InlineKeyboardButton(f"{r['name']}"[:64],
                                     callback_data=f"service_sel:{r['id']}")] for r in rows]
-        kb.append([InlineKeyboardButton("⬅️ Back", callback_data="back_home")])
+        kb.append([InlineKeyboardButton("⬅️ Back", callback_data="servers_services")])
         await q.edit_message_text("یک سرویس را انتخاب کن:", reply_markup=InlineKeyboardMarkup(kb))
         return ConversationHandler.END
 
@@ -1274,14 +1325,16 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sid = context.user_data.get("service_id")
         cur = get_setting(uid, f"emergency_config_service_{sid}") or "—"
         await q.edit_message_text(
-            f"کانفیگ فعلی:\n{cur}\n\nکانفیگ جدید را بفرست (یا off برای پاک کردن):"
+            f"کانفیگ فعلی:\n{cur}\n\nکانفیگ جدید را بفرست (یا off برای پاک کردن):",
+            reply_markup=_back_kb(f"service_sel:{sid}")
         )
         return ASK_SERVICE_EMERGENCY_CFG
 
     if data == "service_rename":
         if not is_admin(uid):
             return ConversationHandler.END
-        await q.edit_message_text("اسم جدید سرویس را بفرست:")
+        sid = context.user_data.get("service_id")
+        await q.edit_message_text("اسم جدید سرویس را بفرست:", reply_markup=_back_kb(f"service_sel:{sid}"))
         return ASK_EDIT_SERVICE_NAME
 
     if data == "service_delete":
@@ -1290,7 +1343,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sid = context.user_data.get("service_id")
         with with_mysql_cursor(dict_=False) as cur:
             cur.execute("DELETE FROM services WHERE id=%s", (sid,))
-        await q.edit_message_text("سرویس حذف شد.")
+        await q.edit_message_text("سرویس حذف شد.", reply_markup=_back_kb("servers_services"))
         return ConversationHandler.END
 
     if data.startswith("panel_sel:"):
@@ -1308,16 +1361,16 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt = (
             "ID اینباندها (با کاما جدا کن)" if info and info.get("panel_type") == "sanaei" else "نام تمپلیت"
         )
-        await q.edit_message_text(f"{prompt} را بفرست (برای حذف، '-'):") ; return ASK_PANEL_TEMPLATE
+        await q.edit_message_text(f"{prompt} را بفرست (برای حذف، '-'):", reply_markup=_back_kb(f"panel_sel:{pid}")) ; return ASK_PANEL_TEMPLATE
     if data == "p_rename":
         if not is_admin(uid): return ConversationHandler.END
-        await q.edit_message_text("اسم جدید پنل را بفرست:") ; return ASK_EDIT_PANEL_NAME
+        await q.edit_message_text("اسم جدید پنل را بفرست:", reply_markup=_back_kb(f"panel_sel:{context.user_data.get('edit_panel_id')}")) ; return ASK_EDIT_PANEL_NAME
     if data == "p_change_creds":
         if not is_admin(uid): return ConversationHandler.END
-        await q.edit_message_text("یوزرنیم ادمین جدید را بفرست:") ; return ASK_EDIT_PANEL_USER
+        await q.edit_message_text("یوزرنیم ادمین جدید را بفرست:", reply_markup=_back_kb(f"panel_sel:{context.user_data.get('edit_panel_id')}")) ; return ASK_EDIT_PANEL_USER
     if data == "p_set_multiplier":
         if not is_admin(uid): return ConversationHandler.END
-        await q.edit_message_text("نسبت مصرف را بفرست (مثلا 1 یا 0.5). برای ریست، '-':")
+        await q.edit_message_text("نسبت مصرف را بفرست (مثلا 1 یا 0.5). برای ریست، '-':", reply_markup=_back_kb(f"panel_sel:{context.user_data.get('edit_panel_id')}"))
         return ASK_PANEL_MULTIPLIER
     if data == "p_set_sub":
         if not is_admin(uid): return ConversationHandler.END
@@ -1326,7 +1379,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if info and info.get("panel_type") == "sanaei":
             await q.edit_message_text("این پنل از لینک سابسکریپشن پشتیبانی نمی‌کند.")
             return ConversationHandler.END
-        await q.edit_message_text("لینک سابسکریپشن پنل را بفرست (برای حذف، '-'):") ; return ASK_PANEL_SUB_URL
+        await q.edit_message_text("لینک سابسکریپشن پنل را بفرست (برای حذف، '-'):", reply_markup=_back_kb(f"panel_sel:{pid}")) ; return ASK_PANEL_SUB_URL
     if data == "p_filter_cfgs":
         if not is_admin(uid): return ConversationHandler.END
         pid = context.user_data.get("edit_panel_id")
@@ -1371,7 +1424,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(uid): return ConversationHandler.END
         pid = context.user_data.get("edit_panel_id")
         delete_panel_and_cleanup(uid, pid)
-        await q.edit_message_text("✅ پنل حذف شد و همهٔ کانفیگ‌های مرتبط دیزیبل شدند.")
+        await q.edit_message_text("✅ پنل حذف شد و همهٔ کانفیگ‌های مرتبط دیزیبل شدند.", reply_markup=_back_kb("servers_panels"))
         return ConversationHandler.END
 
     if data == "new_user":
@@ -2119,7 +2172,7 @@ async def got_service_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ اسم معتبر بفرست:")
         return ASK_SERVICE_NAME
     sid = create_service(name)
-    await update.message.reply_text("✅ سرویس ایجاد شد.")
+    await update.message.reply_text("✅ سرویس ایجاد شد.", reply_markup=_back_kb("servers_services"))
     return ConversationHandler.END
 
 async def got_service_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2132,7 +2185,7 @@ async def got_service_new_name(update: Update, context: ContextTypes.DEFAULT_TYP
     sid = context.user_data.get("service_id")
     with with_mysql_cursor(dict_=False) as cur:
         cur.execute("UPDATE services SET name=%s WHERE id=%s", (name, sid))
-    await update.message.reply_text("✅ نام سرویس تغییر کرد.")
+    await update.message.reply_text("✅ نام سرویس تغییر کرد.", reply_markup=_back_kb(f"service_sel:{sid}"))
     return ConversationHandler.END
 
 # ---------- preset mgmt ----------
@@ -2173,7 +2226,7 @@ async def got_limit_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ پیام خالیه. دوباره بفرست:")
         return ASK_LIMIT_MSG
     set_setting(update.effective_user.id, "limit_message", msg)
-    await update.message.reply_text("✅ پیام ذخیره شد.")
+    await update.message.reply_text("✅ پیام ذخیره شد.", reply_markup=_back_kb("admin_technical"))
     return ConversationHandler.END
 
 async def got_service_emerg_cfg(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2184,13 +2237,13 @@ async def got_service_emerg_cfg(update: Update, context: ContextTypes.DEFAULT_TY
     key = f"emergency_config_service_{sid}"
     if msg.lower() in {"off", "none", "clear"}:
         set_setting(update.effective_user.id, key, "")
-        await update.message.reply_text("✅ کانفیگ سرویس پاک شد.")
+        await update.message.reply_text("✅ کانفیگ سرویس پاک شد.", reply_markup=_back_kb(f"service_sel:{sid}"))
         return ConversationHandler.END
     if not msg:
         await update.message.reply_text("❌ کانفیگ خالیه. دوباره بفرست:")
         return ASK_SERVICE_EMERGENCY_CFG
     set_setting(update.effective_user.id, key, msg)
-    await update.message.reply_text("✅ کانفیگ سرویس ذخیره شد.")
+    await update.message.reply_text("✅ کانفیگ سرویس ذخیره شد.", reply_markup=_back_kb(f"service_sel:{sid}"))
     return ConversationHandler.END
 
 async def got_extra_sub_domains(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2202,14 +2255,14 @@ async def got_extra_sub_domains(update: Update, context: ContextTypes.DEFAULT_TY
         return ASK_EXTRA_SUB_DOMAINS
     if msg.lower() in {"off", "none", "clear", "delete"}:
         set_setting(update.effective_user.id, "extra_sub_domains", "")
-        await update.message.reply_text("✅ دامنه‌های اضافه پاک شد.")
+        await update.message.reply_text("✅ دامنه‌های اضافه پاک شد.", reply_markup=_back_kb("admin_technical"))
         return ConversationHandler.END
     domains = parse_extra_domains(msg)
     if not domains:
         await update.message.reply_text("❌ دامنه معتبر پیدا نشد. دوباره بفرست:")
         return ASK_EXTRA_SUB_DOMAINS
     set_setting(update.effective_user.id, "extra_sub_domains", "\n".join(domains))
-    await update.message.reply_text("✅ دامنه‌های اضافه ذخیره شد.")
+    await update.message.reply_text("✅ دامنه‌های اضافه ذخیره شد.", reply_markup=_back_kb("admin_technical"))
     return ConversationHandler.END
 
 # ---------- add/edit panels (admin only) ----------
@@ -2223,7 +2276,8 @@ async def got_panel_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ASK_PANEL_NAME
     context.user_data["panel_name"] = name
     await update.message.reply_text(
-        f"نوع پنل را مشخص کن ({'/'.join(PANEL_TYPES)}):"
+        f"نوع پنل را مشخص کن ({'/'.join(PANEL_TYPES)}):",
+        reply_markup=_back_kb("servers_panels")
     )
     return ASK_PANEL_TYPE
 
@@ -2233,11 +2287,12 @@ async def got_panel_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t = (update.message.text or "").strip().lower()
     if t not in PANEL_TYPES:
         await update.message.reply_text(
-            f"❌ نوع پنل نامعتبر. یکی از {'/'.join(PANEL_TYPES)} بفرست:"
+            f"❌ نوع پنل نامعتبر. یکی از {'/'.join(PANEL_TYPES)} بفرست:",
+            reply_markup=_back_kb("servers_panels")
         )
         return ASK_PANEL_TYPE
     context.user_data["panel_type"] = t
-    await update.message.reply_text("🌐 URL پنل (مثال https://panel.example.com):")
+    await update.message.reply_text("🌐 URL پنل (مثال https://panel.example.com):", reply_markup=_back_kb("servers_panels"))
     return ASK_PANEL_URL
 
 async def got_panel_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2248,7 +2303,7 @@ async def got_panel_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ URL نامعتبر. دوباره بفرست:")
         return ASK_PANEL_URL
     context.user_data["panel_url"] = url
-    await update.message.reply_text("👤 یوزرنیم ادمین:")
+    await update.message.reply_text("👤 یوزرنیم ادمین:", reply_markup=_back_kb("servers_panels"))
     return ASK_PANEL_USER
 
 async def got_panel_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2259,7 +2314,7 @@ async def got_panel_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ خالیه. دوباره بفرست:")
         return ASK_PANEL_USER
     context.user_data["panel_user"] = u
-    await update.message.reply_text("🔒 پسورد ادمین:")
+    await update.message.reply_text("🔒 پسورد ادمین:", reply_markup=_back_kb("servers_panels"))
     return ASK_PANEL_PASS
 
 async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2286,12 +2341,12 @@ async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += "\nنکته: از 🛠️ Manage Panels می‌تونی Inbound ID را ست کنی."
         else:
             msg += "\nنکته: از 🛠️ Manage Panels می‌تونی Template و Sub URL را ست کنی."
-        await update.message.reply_text(msg)
+        await update.message.reply_text(msg, reply_markup=_back_kb("servers_panels"))
     except MySQLError as e:
-        await update.message.reply_text(f"❌ خطای DB: {e}")
+        await update.message.reply_text(f"❌ خطای DB: {e}", reply_markup=_back_kb("servers_panels"))
     except Exception as e:
         log.exception("add panel")
-        await update.message.reply_text(f"❌ خطا: {e}")
+        await update.message.reply_text(f"❌ خطا: {e}", reply_markup=_back_kb("servers_panels"))
     finally:
         for k in ("panel_name", "panel_url", "panel_user", "panel_type"):
             context.user_data.pop(k, None)
@@ -2326,7 +2381,7 @@ async def got_panel_template(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await update.message.reply_text(*args, **kwargs)
         return await show_panel_card(FakeCQ(), context, update.effective_user.id, pid)
     except Exception as e:
-        await update.message.reply_text(f"❌ خطا: {e}")
+        await update.message.reply_text(f"❌ خطا: {e}", reply_markup=_back_kb("servers_panels"))
         return ConversationHandler.END
 
 async def got_edit_panel_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2350,7 +2405,7 @@ async def got_edit_panel_name(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await update.message.reply_text(*args, **kwargs)
         return await show_panel_card(FakeCQ(), context, update.effective_user.id, pid)
     except Exception as e:
-        await update.message.reply_text(f"❌ خطا: {e}")
+        await update.message.reply_text(f"❌ خطا: {e}", reply_markup=_back_kb("servers_panels"))
         return ConversationHandler.END
 
 async def got_edit_panel_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2420,7 +2475,7 @@ async def got_panel_sub_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(*args, **kwargs)
         return await show_panel_card(FakeCQ(), context, update.effective_user.id, pid)
     except Exception as e:
-        await update.message.reply_text(f"❌ خطا: {e}")
+        await update.message.reply_text(f"❌ خطا: {e}", reply_markup=_back_kb("servers_panels"))
         return ConversationHandler.END
 
 async def got_panel_multiplier(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2455,7 +2510,7 @@ async def got_panel_multiplier(update: Update, context: ContextTypes.DEFAULT_TYP
                 await update.message.reply_text(*args, **kwargs)
         return await show_panel_card(FakeCQ(), context, update.effective_user.id, pid)
     except Exception as e:
-        await update.message.reply_text(f"❌ خطا: {e}")
+        await update.message.reply_text(f"❌ خطا: {e}", reply_markup=_back_kb("servers_panels"))
         return ConversationHandler.END
 
 # ---------- agent mgmt ----------
