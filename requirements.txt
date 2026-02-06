@@ -4,6 +4,8 @@ python-dotenv==1.0.1
 cachetools==5.3.3
 mysql-connector-python==9.0.0
 python-telegram-bot>=20,<22
+qrcode==7.4.2
+pillow==10.4.0
 gunicorn==22.0.0
 gevent==24.2.1
 fastapi==0.111.0

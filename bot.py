@@ -30,12 +30,14 @@ import secrets
 import re
 import json
 import uuid
+import io
 from urllib.parse import urlparse, unquote
 from datetime import datetime, timedelta, timezone
 import asyncio
 
 from dotenv import load_dotenv
 from mysql.connector import Error as MySQLError
+import qrcode
 
 from apis import marzneshin, marzban, rebecca, sanaei, pasarguard, guardcore
 
@@ -284,6 +286,21 @@ def format_sub_links_text(links: list[str]) -> str:
     h = str(h).replace("www.", "")
     base = f"{h}-{u}".strip("-")
     return (base[:120] if len(base) > 120 else base) or "panel"
+
+def generate_qr_png(data: str) -> io.BytesIO:
+    qr = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=8,
+        border=2,
+    )
+    qr.add_data(data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    buf.name = "qr.png"
+    return buf
 
 # ---------- data access ----------
 def list_my_panels_admin(admin_tg_id: int):
@@ -1693,6 +1710,26 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reset_used(uid, uname)
         return await show_user_card(q, uid, uname, notice="✅ مصرف صفر شد.")
 
+    if data == "act_qr_code":
+        uname = context.user_data.get("manage_username")
+        if not uname:
+            await q.edit_message_text("یوزر انتخاب نشده.")
+            return ConversationHandler.END
+        app_key = get_app_key(uid, uname)
+        sub_links = build_sub_links(uid, uname, app_key)
+        if not sub_links:
+            await q.edit_message_text("لینک سابسکریپشن پیدا نشد.")
+            return ConversationHandler.END
+        await q.answer()
+        for link in sub_links:
+            qr_img = generate_qr_png(link)
+            await context.bot.send_photo(
+                chat_id=uid,
+                photo=qr_img,
+                caption=f"🔗 {link}",
+            )
+        return await show_user_card(q, uid, uname, notice="✅ QR codes sent.")
+
     if data == "act_renew":
         await q.edit_message_text("چند روز اضافه شود؟ (مثلا 30)") ; return ASK_RENEW_DAYS
 
@@ -2242,6 +2279,7 @@ async def show_user_card(q, owner_id: int, uname: str, notice: str = None):
     kb = [
         [InlineKeyboardButton("✏️ Edit Limit", callback_data="act_edit_limit")],
         [InlineKeyboardButton("🧹 Reset Used", callback_data="act_reset_used")],
+        [InlineKeyboardButton("📱 QR Code", callback_data="act_qr_code")],
         [InlineKeyboardButton("🔁 Renew (add days)", callback_data="act_renew")],
         [InlineKeyboardButton("🧰 Assign Service", callback_data="act_assign_service")],
         [InlineKeyboardButton(toggle_label, callback_data="act_toggle_user")],
