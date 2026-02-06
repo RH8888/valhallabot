@@ -571,7 +571,6 @@ def upsert_local_user(owner_id: int, username: str, limit_bytes: int, duration_d
                ON DUPLICATE KEY UPDATE
                    plan_limit_bytes=VALUES(plan_limit_bytes),
                    expire_at=VALUES(expire_at),
-                   disabled_pushed=0,
                    usage_limit_notified=0,
                    expire_limit_notified=0""",
             (canonical_owner, username, int(limit_bytes), exp)
@@ -627,7 +626,7 @@ def get_local_user(owner_id: int, username: str):
     placeholders = ",".join(["%s"] * len(ids))
     with with_mysql_cursor() as cur:
         cur.execute(
-            f"SELECT username,plan_limit_bytes,used_bytes,expire_at,disabled_pushed FROM local_users "
+            f"SELECT username,plan_limit_bytes,used_bytes,expire_at,manual_disabled,disabled_pushed FROM local_users "
             f"WHERE owner_id IN ({placeholders}) AND username=%s LIMIT 1",
             tuple(ids) + (username,)
         )
@@ -666,7 +665,27 @@ def count_local_users(owner_id: int) -> int:
 def update_limit(owner_id: int, username: str, new_limit_bytes: int):
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
-    params = [int(new_limit_bytes)] + ids + [username]
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"""SELECT plan_limit_bytes, used_bytes, expire_at, manual_disabled, disabled_pushed
+                FROM local_users
+                WHERE owner_id IN ({placeholders}) AND username=%s
+                LIMIT 1""",
+            tuple(ids) + (username,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return
+    current_limit = int(row.get("plan_limit_bytes") or 0)
+    used = int(row.get("used_bytes") or 0)
+    manual_disabled = bool(row.get("manual_disabled") or 0)
+    exp = row.get("expire_at")
+    expired = bool(exp and exp <= datetime.utcnow())
+    if current_limit <= 0:
+        effective_limit = int(new_limit_bytes)
+    else:
+        effective_limit = max(current_limit, used) + int(new_limit_bytes)
+    params = [int(effective_limit)] + ids + [username]
     with with_mysql_cursor() as cur:
         cur.execute(
             f"""UPDATE local_users
@@ -675,6 +694,14 @@ def update_limit(owner_id: int, username: str, new_limit_bytes: int):
                 WHERE owner_id IN ({placeholders}) AND username=%s""",
             params
         )
+        if not manual_disabled and not expired and (effective_limit == 0 or used < effective_limit):
+            cur.execute(
+                f"""UPDATE local_users
+                    SET disabled_pushed=0,
+                        disabled_pushed_at=NULL
+                    WHERE owner_id IN ({placeholders}) AND username=%s""",
+                tuple(ids) + (username,),
+            )
     for row in list_user_links(owner_id, username):
         api = get_api(row.get("panel_type"))
         remotes = (
@@ -684,10 +711,16 @@ def update_limit(owner_id: int, username: str, new_limit_bytes: int):
         )
         for rn in remotes:
             ok, err = api.update_remote_user(
-                row["panel_url"], row["access_token"], rn, data_limit=new_limit_bytes
+                row["panel_url"], row["access_token"], rn, data_limit=effective_limit
             )
             if not ok:
                 log.warning("remote limit update failed on %s: %s", row["panel_url"], err)
+            if not manual_disabled and not expired and (effective_limit == 0 or used < effective_limit):
+                ok_en, err_en = api.enable_remote_user(
+                    row["panel_url"], row["access_token"], rn
+                )
+                if not ok_en:
+                    log.warning("remote enable failed on %s: %s", row["panel_url"], err_en)
 
 def reset_used(owner_id: int, username: str):
     ids = expand_owner_ids(owner_id)
@@ -740,17 +773,32 @@ def renew_user(owner_id: int, username: str, add_days: int):
                WHERE owner_id IN ({placeholders}) AND username=%s""",
             params
         )
-    with with_mysql_cursor() as cur:
         cur.execute(
-            f"SELECT expire_at FROM local_users WHERE owner_id IN ({placeholders}) AND username=%s",
+            f"""SELECT expire_at, plan_limit_bytes, used_bytes, manual_disabled
+                FROM local_users
+                WHERE owner_id IN ({placeholders}) AND username=%s""",
             tuple(ids) + (username,),
         )
         row = cur.fetchone()
     expire_ts = 0
+    manual_disabled = bool(row.get("manual_disabled") or 0) if row else False
+    limit = int(row.get("plan_limit_bytes") or 0) if row else 0
+    used = int(row.get("used_bytes") or 0) if row else 0
     if row and row.get("expire_at"):
         expire_dt = row["expire_at"]
         if isinstance(expire_dt, datetime):
             expire_ts = int(expire_dt.replace(tzinfo=timezone.utc).timestamp())
+    expired = bool(row and row.get("expire_at") and row.get("expire_at") <= datetime.utcnow())
+    should_enable = bool(row) and not manual_disabled and not expired and (limit == 0 or used < limit)
+    if should_enable:
+        with with_mysql_cursor() as cur:
+            cur.execute(
+                f"""UPDATE local_users
+                    SET disabled_pushed=0,
+                        disabled_pushed_at=NULL
+                    WHERE owner_id IN ({placeholders}) AND username=%s""",
+                tuple(ids) + (username,),
+            )
     for r in list_user_links(owner_id, username):
         api = get_api(r.get("panel_type"))
         remotes = (
@@ -764,6 +812,12 @@ def renew_user(owner_id: int, username: str, add_days: int):
             )
             if not ok:
                 log.warning("remote renew failed on %s: %s", r["panel_url"], err)
+            if should_enable:
+                ok_en, err_en = api.enable_remote_user(
+                    r["panel_url"], r["access_token"], rn
+                )
+                if not ok_en:
+                    log.warning("remote enable failed on %s: %s", r["panel_url"], err_en)
 
 
 def list_user_links(owner_id: int, local_username: str):

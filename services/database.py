@@ -171,6 +171,7 @@ def ensure_schema() -> None:
                 note VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                manual_disabled TINYINT(1) NOT NULL DEFAULT 0,
                 disabled_pushed TINYINT(1) NOT NULL DEFAULT 0,
                 disabled_pushed_at DATETIME NULL,
                 usage_limit_notified TINYINT(1) NOT NULL DEFAULT 0,
@@ -180,6 +181,10 @@ def ensure_schema() -> None:
                 UNIQUE KEY uq_local(owner_id, username)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+        try:
+            cur.execute("ALTER TABLE local_users ADD COLUMN manual_disabled TINYINT(1) NOT NULL DEFAULT 0")
+        except MySQLError:
+            pass
         try:
             cur.execute("ALTER TABLE local_users ADD COLUMN usage_limit_notified TINYINT(1) NOT NULL DEFAULT 0")
         except MySQLError:
