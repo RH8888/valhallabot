@@ -727,16 +727,18 @@ def _get_admin_setting(key: str) -> str | None:
     admin_id = next(iter(ids))
     return get_setting(admin_id, key)
 
+def _get_setting_with_admin_default(owner_id: int, key: str) -> str | None:
+    value = get_setting(owner_id, key)
+    if value is None or value == "":
+        return _get_admin_setting(key)
+    return value
+
 
 def build_sub_placeholder_config(owner_id: int, local_username: str, lu) -> str | None:
-    enabled = (get_setting(owner_id, SUB_PLACEHOLDER_ENABLED_KEY) or "0") != "0"
-    if not enabled and get_agent(owner_id):
-        enabled = (_get_admin_setting(SUB_PLACEHOLDER_ENABLED_KEY) or "0") != "0"
+    enabled = (_get_setting_with_admin_default(owner_id, SUB_PLACEHOLDER_ENABLED_KEY) or "0") != "0"
     if not enabled:
         return None
-    template = (get_setting(owner_id, SUB_PLACEHOLDER_TEMPLATE_KEY) or "").strip()
-    if not template and get_agent(owner_id):
-        template = (_get_admin_setting(SUB_PLACEHOLDER_TEMPLATE_KEY) or "").strip()
+    template = (_get_setting_with_admin_default(owner_id, SUB_PLACEHOLDER_TEMPLATE_KEY) or "").strip()
     if not template:
         return None
 
