@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from services import init_mysql_pool, with_mysql_cursor
 from services.database import errorcode, mysql_errors
 from apis import sanaei, pasarguard, rebecca, guardcore
-from .ownership import admin_ids, expand_owner_ids, canonical_owner_id
+from .ownership import expand_owner_ids, canonical_owner_id
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | flask_agg | %(message)s",
@@ -720,25 +720,11 @@ def _replace_placeholders(template: str, values: dict[str, str]) -> str:
     return re.sub(r"\{([A-Z0-9_]+)\}", repl, template, flags=re.IGNORECASE)
 
 
-def _get_admin_setting(key: str) -> str | None:
-    ids = admin_ids()
-    if not ids:
-        return None
-    admin_id = next(iter(ids))
-    return get_setting(admin_id, key)
-
-def _get_setting_with_admin_default(owner_id: int, key: str) -> str | None:
-    value = get_setting(owner_id, key)
-    if value is None or value == "":
-        return _get_admin_setting(key)
-    return value
-
-
 def build_sub_placeholder_config(owner_id: int, local_username: str, lu) -> str | None:
-    enabled = (_get_setting_with_admin_default(owner_id, SUB_PLACEHOLDER_ENABLED_KEY) or "0") != "0"
+    enabled = (get_setting(owner_id, SUB_PLACEHOLDER_ENABLED_KEY) or "0") != "0"
     if not enabled:
         return None
-    template = (_get_setting_with_admin_default(owner_id, SUB_PLACEHOLDER_TEMPLATE_KEY) or "").strip()
+    template = (get_setting(owner_id, SUB_PLACEHOLDER_TEMPLATE_KEY) or "").strip()
     if not template:
         return None
 

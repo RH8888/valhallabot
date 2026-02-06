@@ -246,6 +246,18 @@ def _back_kb(callback_data: str) -> InlineKeyboardMarkup:
         [[InlineKeyboardButton("⬅️ Back", callback_data=callback_data)]]
     )
 
+def _sub_placeholder_toggle_label(owner_id: int) -> str:
+    enabled = (get_setting(owner_id, "subscription_placeholder_enabled") or "0") != "0"
+    return "🟢 Sub Placeholder: ON" if enabled else "🔴 Sub Placeholder: OFF"
+
+def _agent_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
+    kb = [
+        [InlineKeyboardButton(_sub_placeholder_toggle_label(owner_id), callback_data="toggle_sub_placeholder")],
+        [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="back_home")],
+    ]
+    return InlineKeyboardMarkup(kb)
+
 def get_extra_domains(owner_id: int) -> list[str]:
     settings_owner = owner_id
     if not is_admin(owner_id):
@@ -1186,6 +1198,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("👥 List Users", callback_data="list_users:0")],
             [InlineKeyboardButton("🧩 Presets", callback_data="manage_presets")],
             [InlineKeyboardButton("🔑 API Token", callback_data="agent_token")],
+            [InlineKeyboardButton("🛠️ Settings", callback_data="agent_technical")],
         ]
 
     text = header + "Choose an option:"
@@ -1368,15 +1381,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
         notif_enabled = (get_setting(uid, "limit_event_notifications_enabled") or "1") != "0"
         notif_label = "🟢 Limit Event Notifications: ON" if notif_enabled else "🔴 Limit Event Notifications: OFF"
-        sub_placeholder_enabled = (get_setting(uid, "subscription_placeholder_enabled") or "0") != "0"
-        sub_placeholder_label = (
-            "🟢 Sub Placeholder: ON"
-            if sub_placeholder_enabled
-            else "🔴 Sub Placeholder: OFF"
-        )
         kb = [
             [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
-            [InlineKeyboardButton(sub_placeholder_label, callback_data="toggle_sub_placeholder")],
+            [InlineKeyboardButton(_sub_placeholder_toggle_label(uid), callback_data="toggle_sub_placeholder")],
             [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
             [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
             [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
@@ -1384,6 +1391,13 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
         ]
         await q.edit_message_text("Technical:", reply_markup=InlineKeyboardMarkup(kb))
+        return ConversationHandler.END
+
+    if data == "agent_technical":
+        if is_admin(uid) or not get_agent(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        await q.edit_message_text("Settings:", reply_markup=_agent_technical_kb(uid))
         return ConversationHandler.END
 
     if data == "toggle_limit_event_notifications":
@@ -1394,15 +1408,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         set_setting(uid, "limit_event_notifications_enabled", "0" if current else "1")
         notif_enabled = not current
         notif_label = "🟢 Limit Event Notifications: ON" if notif_enabled else "🔴 Limit Event Notifications: OFF"
-        sub_placeholder_enabled = (get_setting(uid, "subscription_placeholder_enabled") or "0") != "0"
-        sub_placeholder_label = (
-            "🟢 Sub Placeholder: ON"
-            if sub_placeholder_enabled
-            else "🔴 Sub Placeholder: OFF"
-        )
         kb = [
             [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
-            [InlineKeyboardButton(sub_placeholder_label, callback_data="toggle_sub_placeholder")],
+            [InlineKeyboardButton(_sub_placeholder_toggle_label(uid), callback_data="toggle_sub_placeholder")],
             [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
             [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
             [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
@@ -1413,29 +1421,26 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     if data == "toggle_sub_placeholder":
-        if not is_admin(uid):
+        if not is_admin(uid) and not get_agent(uid):
             await q.edit_message_text("دسترسی ندارید.")
             return ConversationHandler.END
         current = (get_setting(uid, "subscription_placeholder_enabled") or "0") != "0"
         set_setting(uid, "subscription_placeholder_enabled", "0" if current else "1")
-        notif_enabled = (get_setting(uid, "limit_event_notifications_enabled") or "1") != "0"
-        notif_label = "🟢 Limit Event Notifications: ON" if notif_enabled else "🔴 Limit Event Notifications: OFF"
-        sub_placeholder_enabled = not current
-        sub_placeholder_label = (
-            "🟢 Sub Placeholder: ON"
-            if sub_placeholder_enabled
-            else "🔴 Sub Placeholder: OFF"
-        )
-        kb = [
-            [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
-            [InlineKeyboardButton(sub_placeholder_label, callback_data="toggle_sub_placeholder")],
-            [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
-            [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
-            [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
-            [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
-        ]
-        await q.edit_message_text("Technical:", reply_markup=InlineKeyboardMarkup(kb))
+        if is_admin(uid):
+            notif_enabled = (get_setting(uid, "limit_event_notifications_enabled") or "1") != "0"
+            notif_label = "🟢 Limit Event Notifications: ON" if notif_enabled else "🔴 Limit Event Notifications: OFF"
+            kb = [
+                [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
+                [InlineKeyboardButton(_sub_placeholder_toggle_label(uid), callback_data="toggle_sub_placeholder")],
+                [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
+                [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
+                [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
+                [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
+                [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
+            ]
+            await q.edit_message_text("Technical:", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await q.edit_message_text("Settings:", reply_markup=_agent_technical_kb(uid))
         return ConversationHandler.END
 
     if data == "limit_msg":
@@ -1447,16 +1452,17 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ASK_LIMIT_MSG
 
     if data == "sub_placeholder_template":
-        if not is_admin(uid):
+        if not is_admin(uid) and not get_agent(uid):
             await q.edit_message_text("دسترسی ندارید.")
             return ConversationHandler.END
         cur = get_setting(uid, "subscription_placeholder_template") or "—"
+        back_target = "admin_technical" if is_admin(uid) else "agent_technical"
         await q.edit_message_text(
             "قالب فعلی:\n"
             f"{cur}\n\n"
             "قالب جدید را بفرست.\n"
             "برای حذف: clear",
-            reply_markup=_back_kb("admin_technical"),
+            reply_markup=_back_kb(back_target),
         )
         return ASK_SUB_PLACEHOLDER_TEMPLATE
 
@@ -2597,18 +2603,20 @@ async def got_limit_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def got_sub_placeholder_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
+    uid = update.effective_user.id
+    if not is_admin(uid) and not get_agent(uid):
         return ConversationHandler.END
     msg = (update.message.text or "").strip()
     if not msg:
         await update.message.reply_text("❌ قالب خالیه. دوباره بفرست:")
         return ASK_SUB_PLACEHOLDER_TEMPLATE
+    back_target = "admin_technical" if is_admin(uid) else "agent_technical"
     if msg.lower() in {"off", "none", "clear", "delete"}:
-        set_setting(update.effective_user.id, "subscription_placeholder_template", "")
-        await update.message.reply_text("✅ قالب پاک شد.", reply_markup=_back_kb("admin_technical"))
+        set_setting(uid, "subscription_placeholder_template", "")
+        await update.message.reply_text("✅ قالب پاک شد.", reply_markup=_back_kb(back_target))
         return ConversationHandler.END
-    set_setting(update.effective_user.id, "subscription_placeholder_template", msg)
-    await update.message.reply_text("✅ قالب ذخیره شد.", reply_markup=_back_kb("admin_technical"))
+    set_setting(uid, "subscription_placeholder_template", msg)
+    await update.message.reply_text("✅ قالب ذخیره شد.", reply_markup=_back_kb(back_target))
     return ConversationHandler.END
 
 async def got_service_emerg_cfg(update: Update, context: ContextTypes.DEFAULT_TYPE):
