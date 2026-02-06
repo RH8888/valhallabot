@@ -53,6 +53,7 @@ def get_activation(access_key: str) -> ActivationResponse:
                 lu.plan_limit_bytes,
                 lu.used_bytes,
                 lu.expire_at,
+                lu.manual_disabled,
                 lu.disabled_pushed,
                 lu.owner_id
             FROM local_user_keys AS luk
@@ -88,7 +89,7 @@ def get_activation(access_key: str) -> ActivationResponse:
         plan_limit_bytes=int(row.get("plan_limit_bytes") or 0),
         used_bytes=int(row.get("used_bytes") or 0),
         expire_at=row.get("expire_at"),
-        disabled=bool(row.get("disabled_pushed")),
+        disabled=bool(row.get("manual_disabled") or row.get("disabled_pushed")),
         subscription_url=subscription_url,
         key_expires_at=expires_at,
     )

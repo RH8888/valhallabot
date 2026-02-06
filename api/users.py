@@ -30,6 +30,9 @@ class UserOut(BaseModel):
     expire_at: datetime | None
     service_id: int | None = None
     disabled: bool = Field(..., description="Whether the user is disabled")
+    manual_disabled: bool = Field(
+        False, description="Whether the user was manually disabled"
+    )
     access_key: str | None = Field(None, description="Subscription access key")
     key_expires_at: datetime | None = Field(
         None, description="Expiration timestamp for the access key"
@@ -48,7 +51,9 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    limit_bytes: int | None = Field(None, description="New byte limit")
+    limit_bytes: int | None = Field(
+        None, description="Additional bytes to add to the remaining quota"
+    )
     reset_used: bool = Field(False, description="Reset used traffic")
     renew_days: int | None = Field(None, description="Days to add to expiry")
     service_id: int | None = Field(None, description="Change service assignment")
@@ -84,6 +89,7 @@ def _fetch_user(owner_id: int, username: str) -> dict | None:
                    lu.used_bytes,
                    lu.expire_at,
                    lu.service_id,
+                   lu.manual_disabled,
                    lu.disabled_pushed,
                    luk.access_key,
                    luk.expires_at AS key_expires_at
@@ -138,6 +144,7 @@ def _list_users(
                    lu.used_bytes,
                    lu.expire_at,
                    lu.service_id,
+                   lu.manual_disabled,
                    lu.disabled_pushed,
                    luk.access_key,
                    luk.expires_at AS key_expires_at
@@ -158,6 +165,28 @@ def _list_users(
 
 
 def _set_user_disabled(owner_id: int, username: str, disabled: bool) -> None:
+    row = _fetch_user(owner_id, username)
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+    limit = int(row.get("plan_limit_bytes") or 0)
+    used = int(row.get("used_bytes") or 0)
+    exp = row.get("expire_at")
+    expired = bool(exp and exp <= datetime.utcnow())
+    over_limit = limit > 0 and used >= limit
+    should_enable = not disabled and not expired and not over_limit
+
+    def _update_status(manual: bool, pushed: bool, pushed_at: str | None) -> None:
+        ids = expand_owner_ids(owner_id)
+        placeholders = ",".join(["%s"] * len(ids))
+        sql = (
+            f"UPDATE local_users SET manual_disabled=%s, disabled_pushed=%s, "
+            f"disabled_pushed_at={pushed_at or 'NULL'} "
+            f"WHERE owner_id IN ({placeholders}) AND username=%s"
+        )
+        params = [1 if manual else 0, 1 if pushed else 0, *ids, username]
+        with with_mysql_cursor() as cur:
+            cur.execute(sql, params)
+
     for row in list_user_links(owner_id, username):
         api = get_api(row.get("panel_type"))
         remotes = (
@@ -168,18 +197,17 @@ def _set_user_disabled(owner_id: int, username: str, disabled: bool) -> None:
         for rn in remotes:
             if disabled:
                 api.disable_remote_user(row["panel_url"], row["access_token"], rn)
-            else:
+            elif should_enable:
                 api.enable_remote_user(row["panel_url"], row["access_token"], rn)
-    ids = expand_owner_ids(owner_id)
-    placeholders = ",".join(["%s"] * len(ids))
-    sql = (
-        f"UPDATE local_users SET disabled_pushed=%s, disabled_pushed_at="
-        f"{'UTC_TIMESTAMP()' if disabled else 'NULL'} "
-        f"WHERE owner_id IN ({placeholders}) AND username=%s"
-    )
-    params = [1 if disabled else 0, *ids, username]
-    with with_mysql_cursor() as cur:
-        cur.execute(sql, params)
+            else:
+                api.disable_remote_user(row["panel_url"], row["access_token"], rn)
+
+    if disabled:
+        _update_status(True, True, "UTC_TIMESTAMP()")
+    elif should_enable:
+        _update_status(False, False, None)
+    else:
+        _update_status(False, True, "UTC_TIMESTAMP()")
 
 
 # ---- endpoints ----------------------------------------------------------------
@@ -221,7 +249,8 @@ async def create_user(
         used_bytes=row.get("used_bytes", 0),
         expire_at=row.get("expire_at"),
         service_id=row.get("service_id"),
-        disabled=bool(row.get("disabled_pushed")),
+        disabled=bool(row.get("manual_disabled") or row.get("disabled_pushed")),
+        manual_disabled=bool(row.get("manual_disabled")),
         access_key=row.get("access_key"),
         key_expires_at=row.get("key_expires_at"),
     )
@@ -262,7 +291,8 @@ def list_users(
             used_bytes=r.get("used_bytes", 0),
             expire_at=r.get("expire_at"),
             service_id=r.get("service_id"),
-            disabled=bool(r.get("disabled_pushed")),
+            disabled=bool(r.get("manual_disabled") or r.get("disabled_pushed")),
+            manual_disabled=bool(r.get("manual_disabled")),
             access_key=r.get("access_key"),
             key_expires_at=r.get("key_expires_at"),
         )
@@ -298,7 +328,8 @@ async def edit_user(
         used_bytes=row.get("used_bytes", 0),
         expire_at=row.get("expire_at"),
         service_id=row.get("service_id"),
-        disabled=bool(row.get("disabled_pushed")),
+        disabled=bool(row.get("manual_disabled") or row.get("disabled_pushed")),
+        manual_disabled=bool(row.get("manual_disabled")),
         access_key=row.get("access_key"),
         key_expires_at=row.get("key_expires_at"),
     )
@@ -315,7 +346,11 @@ async def toggle_user(
     if real_owner is None:
         raise HTTPException(status_code=400, detail="owner_id required")
     _set_user_disabled(real_owner, username, disable)
-    return {"status": "disabled" if disable else "enabled"}
+    row = _fetch_user(real_owner, username)
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+    is_disabled = bool(row.get("manual_disabled") or row.get("disabled_pushed"))
+    return {"status": "disabled" if is_disabled else "enabled"}
 
 
 # POST is used because the endpoint requires a JSON body. GET requests with

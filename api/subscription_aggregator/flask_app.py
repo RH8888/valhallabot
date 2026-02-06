@@ -95,7 +95,8 @@ def get_local_user(owner_id, local_username):
     with with_mysql_cursor() as cur:
         cur.execute(
             f"""
-            SELECT owner_id, username, plan_limit_bytes, used_bytes, expire_at, disabled_pushed, usage_limit_notified, expire_limit_notified, service_id
+            SELECT owner_id, username, plan_limit_bytes, used_bytes, expire_at, manual_disabled,
+                   disabled_pushed, usage_limit_notified, expire_limit_notified, service_id
             FROM local_users
             WHERE owner_id IN ({placeholders}) AND username=%s
             LIMIT 1
@@ -636,6 +637,7 @@ def build_user(local_username, app_key, lu, remote=None):
     used = int(lu.get("used_bytes") or 0) if lu else 0
     expire_raw = ""
     enabled = True
+    manual_disabled = bool(lu.get("manual_disabled")) if lu else False
     if remote:
         enabled = remote.get("enabled", True)
         expire_raw = (
@@ -658,6 +660,8 @@ def build_user(local_username, app_key, lu, remote=None):
                 expire_raw = ""
     data_limit_reached = bool(limit > 0 and used >= limit)
     expired = False
+    if manual_disabled:
+        enabled = False
     try:
         if expire_raw:
             if isinstance(expire_raw, str) and not expire_raw.isdigit():
@@ -683,6 +687,7 @@ def build_user(local_username, app_key, lu, remote=None):
         "expire_date": expire_raw,
         "data_limit_reset_strategy": SimpleNamespace(value="no_reset"),
         "enabled": enabled,
+        "manual_disabled": manual_disabled,
         "expired": expired,
         "data_limit_reached": data_limit_reached,
     }
@@ -750,18 +755,13 @@ def unified_links(local_username, app_key):
     limit = int(lu["plan_limit_bytes"])
     used = int(lu["used_bytes"])
     pushed = int(lu.get("disabled_pushed", 0) or 0)
+    manual_disabled = int(lu.get("manual_disabled", 0) or 0)
     usage_notified = int(lu.get("usage_limit_notified", 0) or 0)
     expire_notified = int(lu.get("expire_limit_notified", 0) or 0)
 
-    exp = lu.get("expire_at")
-    expired = bool(exp and exp <= datetime.utcnow())
-    if expired:
-        if not expire_notified:
-            send_owner_limit_notification(
-                owner_id,
-                f"⏰ User {local_username} reached expiration limit.",
-            )
-            mark_expire_limit_notified(owner_id, local_username)
+    manual_blocked = False
+    if manual_disabled:
+        manual_blocked = True
         if not pushed:
             links = list_mapped_links(owner_id, local_username)
             if not links:
@@ -770,59 +770,87 @@ def unified_links(local_username, app_key):
                           "panel_url": p["panel_url"], "access_token": p["access_token"],
                           "panel_type": p["panel_type"]} for p in panels]
             for l in links:
-                code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
+                code, msg = disable_remote(
+                    l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"]
+                )
                 if code and code != 200:
                     log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
             mark_user_disabled(owner_id, local_username)
         if not want_html:
             return Response("", mimetype="text/plain")
 
-    limit_reached = False
-    if limit > 0 and used >= limit:
-        limit_reached = True
-        if not usage_notified:
-            send_owner_limit_notification(
-                owner_id,
-                f"📊 User {local_username} exceeded usage limit ({format_usage_value(used)} / {format_usage_value(limit)}).",
-            )
-            mark_usage_limit_notified(owner_id, local_username)
-        if not pushed:
-            links = list_mapped_links(owner_id, local_username)
-            if not links:
-                panels = list_all_panels(owner_id)
-                links = [{"panel_id": p["id"], "remote_username": local_username,
-                          "panel_url": p["panel_url"], "access_token": p["access_token"],
-                          "panel_type": p["panel_type"]} for p in panels]
-            for l in links:
-                code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
-                if code and code != 200:
-                    log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
-            mark_user_disabled(owner_id, local_username)
-        if not want_html:
-            limit_config = os.getenv(
-                "USER_LIMIT_REACHED_CONFIG",
-                "vless://limitreached@info.info:80?encryption=none&security=none&type=tcp&headerType=none",
-            )
-            msg_template = get_setting(owner_id, "limit_message") or os.getenv(
-                "USER_LIMIT_REACHED_MESSAGE",
-                "User {username} has reached data limit ({used} / {limit})",
-            )
-            msg = msg_template.replace("{username}", local_username)
-            msg = msg.replace("{limit}", format_usage_value(limit))
-            msg = msg.replace("{used}", format_usage_value(used))
-            body = limit_config + "#" + quote(msg)
-            resp = Response(body, mimetype="text/plain")
+    if not manual_disabled:
+        exp = lu.get("expire_at")
+        expired = bool(exp and exp <= datetime.utcnow())
+        if expired:
+            if not expire_notified:
+                send_owner_limit_notification(
+                    owner_id,
+                    f"⏰ User {local_username} reached expiration limit.",
+                )
+                mark_expire_limit_notified(owner_id, local_username)
+            if not pushed:
+                links = list_mapped_links(owner_id, local_username)
+                if not links:
+                    panels = list_all_panels(owner_id)
+                    links = [{"panel_id": p["id"], "remote_username": local_username,
+                              "panel_url": p["panel_url"], "access_token": p["access_token"],
+                              "panel_type": p["panel_type"]} for p in panels]
+                for l in links:
+                    code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
+                    if code and code != 200:
+                        log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
+                mark_user_disabled(owner_id, local_username)
+            if not want_html:
+                return Response("", mimetype="text/plain")
 
-            resp.headers["X-Plan-Limit-Bytes"] = str(limit)
-            resp.headers["X-Used-Bytes"] = str(used)
-            resp.headers["X-Remaining-Bytes"] = "0"
-            resp.headers["X-Disabled-Pushed"] = "1"
-            return resp
+    limit_reached = False
+    if not manual_disabled:
+        if limit > 0 and used >= limit:
+            limit_reached = True
+            if not usage_notified:
+                send_owner_limit_notification(
+                    owner_id,
+                    f"📊 User {local_username} exceeded usage limit ({format_usage_value(used)} / {format_usage_value(limit)}).",
+                )
+                mark_usage_limit_notified(owner_id, local_username)
+            if not pushed:
+                links = list_mapped_links(owner_id, local_username)
+                if not links:
+                    panels = list_all_panels(owner_id)
+                    links = [{"panel_id": p["id"], "remote_username": local_username,
+                              "panel_url": p["panel_url"], "access_token": p["access_token"],
+                              "panel_type": p["panel_type"]} for p in panels]
+                for l in links:
+                    code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
+                    if code and code != 200:
+                        log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
+                mark_user_disabled(owner_id, local_username)
+            if not want_html:
+                limit_config = os.getenv(
+                    "USER_LIMIT_REACHED_CONFIG",
+                    "vless://limitreached@info.info:80?encryption=none&security=none&type=tcp&headerType=none",
+                )
+                msg_template = get_setting(owner_id, "limit_message") or os.getenv(
+                    "USER_LIMIT_REACHED_MESSAGE",
+                    "User {username} has reached data limit ({used} / {limit})",
+                )
+                msg = msg_template.replace("{username}", local_username)
+                msg = msg.replace("{limit}", format_usage_value(limit))
+                msg = msg.replace("{used}", format_usage_value(used))
+                body = limit_config + "#" + quote(msg)
+                resp = Response(body, mimetype="text/plain")
+
+                resp.headers["X-Plan-Limit-Bytes"] = str(limit)
+                resp.headers["X-Used-Bytes"] = str(used)
+                resp.headers["X-Remaining-Bytes"] = "0"
+                resp.headers["X-Disabled-Pushed"] = "1"
+                return resp
 
     # ---- Aggregate & filter links (per-panel config-name filters) ----
     mapped = list_mapped_links(owner_id, local_username)
     all_links, errors, remote_info = [], [], None
-    if not agent_blocked and not limit_reached:
+    if not agent_blocked and not limit_reached and not manual_blocked:
         if mapped:
             all_links, errors, remote_info = collect_links(mapped, local_username, want_html)
         else:

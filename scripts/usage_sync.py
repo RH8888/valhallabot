@@ -136,7 +136,7 @@ def update_last(link_id, new_used):
 def get_local_user(owner_id, local_username):
     with with_mysql_cursor() as cur:
         cur.execute("""
-            SELECT plan_limit_bytes, used_bytes, disabled_pushed, usage_limit_notified
+            SELECT plan_limit_bytes, used_bytes, manual_disabled, disabled_pushed, usage_limit_notified
             FROM local_users
             WHERE owner_id=%s AND username=%s
             LIMIT 1
@@ -235,6 +235,10 @@ def try_disable_if_user_exceeded(owner_id, local_username):
     used  = int(lu["used_bytes"])
     pushed = int(lu.get("disabled_pushed", 0) or 0)
     usage_notified = int(lu.get("usage_limit_notified", 0) or 0)
+    manual_disabled = int(lu.get("manual_disabled", 0) or 0)
+
+    if manual_disabled:
+        return
 
     if limit > 0 and used >= limit:
         if not usage_notified:
@@ -260,7 +264,10 @@ def try_enable_if_user_ok(owner_id, local_username):
     limit = int(lu["plan_limit_bytes"])
     used = int(lu["used_bytes"])
     pushed = int(lu.get("disabled_pushed", 0) or 0)
+    manual_disabled = int(lu.get("manual_disabled", 0) or 0)
 
+    if manual_disabled:
+        return
     if pushed and (limit == 0 or used < limit):
         links = list_links_of_local_user(owner_id, local_username)
         for l in links:
@@ -292,10 +299,13 @@ def total_used_by_owner(owner_id: int) -> int:
         row = cur.fetchone()
         return int(row.get("tot") or 0) if row else 0
 
-def list_all_local_usernames(owner_id: int):
+def list_all_local_users(owner_id: int):
     with with_mysql_cursor() as cur:
-        cur.execute("SELECT username FROM local_users WHERE owner_id=%s", (owner_id,))
-        return [r["username"] for r in cur.fetchall()]
+        cur.execute(
+            "SELECT username, manual_disabled FROM local_users WHERE owner_id=%s",
+            (owner_id,),
+        )
+        return cur.fetchall()
 
 def list_agent_assigned_panels(owner_id: int):
     """پنل‌هایی که به نماینده assign شده‌اند (agent_panels)."""
@@ -357,7 +367,7 @@ def mark_all_users_enabled(owner_id: int):
         cur.execute("""
             UPDATE local_users
             SET disabled_pushed=0, disabled_pushed_at=NULL
-            WHERE owner_id=%s
+            WHERE owner_id=%s AND manual_disabled=0
         """, (owner_id,))
 
 def try_disable_agent_if_exceeded(owner_id: int):
@@ -393,8 +403,9 @@ def try_disable_agent_if_exceeded(owner_id: int):
         over_limit = (tot >= limit_b)
 
     if (expired or over_limit) and not already_pushed:
-        usernames = list_all_local_usernames(owner_id)
-        for uname in usernames:
+        users = list_all_local_users(owner_id)
+        for user in users:
+            uname = user["username"]
             # 1) disable روی مپ‌های مستقیم کاربر
             links = list_links_of_local_user(owner_id, uname)
             for l in links:
@@ -437,8 +448,11 @@ def try_enable_agent_if_ok(owner_id: int):
         over_limit = (tot >= limit_b)
 
     if not expired and not over_limit:
-        usernames = list_all_local_usernames(owner_id)
-        for uname in usernames:
+        users = list_all_local_users(owner_id)
+        for user in users:
+            uname = user["username"]
+            if int(user.get("manual_disabled", 0) or 0):
+                continue
             links = list_links_of_local_user(owner_id, uname)
             for l in links:
                 code, msg = enable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])

@@ -95,8 +95,34 @@ def get_links(
     limit = int(lu["plan_limit_bytes"])
     used = int(lu["used_bytes"])
     pushed = int(lu.get("disabled_pushed") or 0)
+    manual_disabled = int(lu.get("manual_disabled") or 0)
     usage_notified = int(lu.get("usage_limit_notified") or 0)
     expire_notified = int(lu.get("expire_limit_notified") or 0)
+
+    if manual_disabled:
+        if not pushed:
+            links = list_mapped_links(real_owner, username)
+            if not links:
+                panels = list_all_panels(real_owner)
+                links = [
+                    {
+                        "panel_id": p["id"],
+                        "remote_username": username,
+                        "panel_url": p["panel_url"],
+                        "access_token": p["access_token"],
+                        "panel_type": p["panel_type"],
+                    }
+                    for p in panels
+                ]
+            for l in links:
+                disable_remote(
+                    l["panel_type"],
+                    l["panel_url"],
+                    l["access_token"],
+                    l["remote_username"],
+                )
+            mark_user_disabled(real_owner, username)
+        return LinksOut(links=[])
 
     exp = lu.get("expire_at")
     expired = bool(exp and exp <= datetime.utcnow())
