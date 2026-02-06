@@ -28,6 +28,7 @@ from services import init_mysql_pool, with_mysql_cursor
 from services.database import errorcode, mysql_errors
 from apis import sanaei, pasarguard, rebecca, guardcore
 from .ownership import admin_ids, expand_owner_ids, canonical_owner_id
+from services.subscription_links import build_subscription_domain_groups
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | flask_agg | %(message)s",
@@ -632,7 +633,7 @@ def format_usage_value(num):
 app.jinja_env.filters["bytesformat"] = bytesformat
 
 
-def build_user(local_username, app_key, lu, remote=None):
+def build_user(owner_id, local_username, app_key, lu, remote=None):
     limit = int(lu.get("plan_limit_bytes") or 0) if lu else 0
     used = int(lu.get("used_bytes") or 0) if lu else 0
     expire_raw = ""
@@ -682,6 +683,9 @@ def build_user(local_username, app_key, lu, remote=None):
     user = {
         "username": local_username,
         "subscription_url": f"/sub/{local_username}/{app_key}/links",
+        "subscription_domains": build_subscription_domain_groups(
+            owner_id, local_username, app_key
+        ),
         "used_traffic": used,
         "data_limit": limit or None,
         "expire_date": expire_raw,
@@ -886,7 +890,7 @@ def unified_links(local_username, app_key):
 
     remaining = (limit - used) if limit > 0 else -1
     if want_html:
-        user = build_user(local_username, app_key, lu, remote_info)
+        user = build_user(owner_id, local_username, app_key, lu, remote_info)
         return render_template_string(HTML_TEMPLATE, user=user)
     resp = Response(body, mimetype="text/plain")
     resp.headers["X-Plan-Limit-Bytes"] = str(limit)

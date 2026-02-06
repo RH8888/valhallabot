@@ -126,6 +126,19 @@
     /* مخفی‌سازی محتوای پلتفرم‌ها هنگام سوییچ تب‌ها */
     .platform-pane{ display:none; }
     .platform-pane.active{ display:block; }
+
+    .modal{ position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; padding:1.5rem; z-index:50; }
+    .modal.active{ display:flex; }
+    .modal-card{ background:var(--surface); border-radius:1rem; width:min(540px, 100%); padding:1.25rem; box-shadow:0 20px 40px rgba(0,0,0,.35); }
+    .domain-section{ margin-top:.75rem; }
+    .domain-section-title{ font-weight:700; color:var(--muted); margin-bottom:.35rem; }
+    .domain-list{ display:grid; gap:.5rem; }
+    .domain-item{ background:var(--surface2); border-radius:.75rem; padding:.55rem .75rem; display:flex; align-items:center; justify-content:space-between; gap:.5rem; cursor:pointer; transition:background .2s ease, transform .12s ease; }
+    .domain-item:hover{ background:#3c4048; }
+    .domain-item.active{ background:linear-gradient(90deg, rgba(113,244,102,.2), rgba(8,172,75,.2)); border:1px solid rgba(113,244,102,.35); }
+    .qr-preview{ background:var(--surface2); border-radius:.9rem; padding:.9rem; margin-top:1rem; text-align:center; }
+    .qr-preview img{ width:220px; height:220px; margin:0 auto; }
+    .qr-url{ font-size:.75rem; color:var(--muted); word-break:break-all; margin-top:.4rem; }
   </style>
 </head>
 <body>
@@ -175,6 +188,9 @@
 
       <div class="mt-5">
         <button id="copySubUrl" class="gbtn w-full py-3 rounded-full pressable hover-lift"><i class="fa-solid fa-link ml-2"></i> دریافت لینک اشتراک‌گذاری</button>
+      </div>
+      <div class="mt-3">
+        <button id="openQrModal" class="btn-secondary w-full pressable hover-lift" type="button"><i class="fa-solid fa-qrcode ml-2"></i>QR Code</button>
       </div>
     </section>
 
@@ -414,8 +430,25 @@
     </section>
   </div>
 
+  <div id="qrModal" class="modal" aria-hidden="true">
+    <div class="modal-card fade-in-up">
+      <div class="flex items-center justify-between gap-2">
+        <h3 class="text-lg font-extrabold">QR Code</h3>
+        <button id="closeQrModal" class="btn-secondary pressable hover-lift" type="button">بستن</button>
+      </div>
+      <p class="text-sm mt-2" style="color:var(--muted)">دامنه موردنظر را انتخاب کنید تا QR صفحه اشتراک ساخته شود.</p>
+      <div id="qrDomainSections"></div>
+      <div id="qrPreview" class="qr-preview" style="display:none">
+        <div class="font-semibold">QR صفحه اشتراک</div>
+        <img id="qrImage" src="" alt="QR Code"/>
+        <div id="qrSelectedUrl" class="qr-url"></div>
+      </div>
+    </div>
+  </div>
+
   <script>
     const SUBSCRIPTION_URL = "{{ user.subscription_url }}";
+    const SUBSCRIPTION_DOMAINS = {{ user.subscription_domains | tojson }};
     const USED_TRAFFIC_BYTES = (v=>{ try{return parseFloat(v)||0}catch{ return 0 }})("{{ user.used_traffic }}");
     const DATA_LIMIT_BYTES = (v=>{ try{return (!v || v==='None')?Infinity:parseFloat(v)||Infinity}catch{ return Infinity }})("{{ user.data_limit }}");
     const EXPIRE_DATE_RAW = "{{ user.expire_date }}";
@@ -640,6 +673,86 @@
         }catch(_){}
       });
     }
+
+    function renderDomainSections(domains){
+      const container=document.getElementById('qrDomainSections');
+      if(!container){ return; }
+      const sections=[
+        {key:'main', title:'دامنه‌های اصلی'},
+        {key:'additional_domains', title:'دامنه‌های اضافی'},
+        {key:'additional_subdomains', title:'زیر دامنه‌های اضافی'},
+      ];
+      const hasAny=sections.some(sec=>Array.isArray(domains?.[sec.key]) && domains[sec.key].length);
+      if(!hasAny){
+        container.innerHTML=`<div class="domain-section"><div class="domain-section-title">دامنه‌ای یافت نشد</div></div>`;
+        return;
+      }
+      container.innerHTML=sections.map(sec=>{
+        const items=Array.isArray(domains?.[sec.key]) ? domains[sec.key] : [];
+        if(!items.length){ return ''; }
+        const list=items.map((item, idx)=>`
+          <div class="domain-item pressable hover-lift-soft" data-url="${escapeHtml(item.url)}" data-id="${sec.key}-${idx}">
+            <span>${escapeHtml(item.label)}</span>
+            <i class="fa-solid fa-qrcode" style="color:var(--g1)"></i>
+          </div>
+        `).join('');
+        return `<div class="domain-section">
+          <div class="domain-section-title">${sec.title}</div>
+          <div class="domain-list">${list}</div>
+        </div>`;
+      }).join('');
+    }
+
+    function initQrModal(){
+      const modal=document.getElementById('qrModal');
+      const openBtn=document.getElementById('openQrModal');
+      const closeBtn=document.getElementById('closeQrModal');
+      const preview=document.getElementById('qrPreview');
+      const qrImg=document.getElementById('qrImage');
+      const qrUrl=document.getElementById('qrSelectedUrl');
+      if(!modal || !openBtn || !closeBtn){ return; }
+
+      renderDomainSections(SUBSCRIPTION_DOMAINS);
+
+      function openModal(){
+        modal.classList.add('active');
+        modal.setAttribute('aria-hidden','false');
+      }
+      function closeModal(){
+        modal.classList.remove('active');
+        modal.setAttribute('aria-hidden','true');
+      }
+
+      function selectDomain(item){
+        const url=item.getAttribute('data-url') || '';
+        if(!url){ return; }
+        modal.querySelectorAll('.domain-item').forEach(el=>el.classList.remove('active'));
+        item.classList.add('active');
+        const qrSrc=`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(url)}`;
+        qrImg.src=qrSrc;
+        qrUrl.textContent=url;
+        preview.style.display='block';
+      }
+
+      openBtn.addEventListener('click', (e)=>{
+        addRipple(e);
+        openModal();
+      });
+      closeBtn.addEventListener('click', (e)=>{
+        addRipple(e);
+        closeModal();
+      });
+      modal.addEventListener('click', (e)=>{
+        if(e.target === modal){ closeModal(); }
+      });
+      modal.addEventListener('click', (e)=>{
+        const item=e.target.closest('.domain-item');
+        if(item){ selectDomain(item); }
+      });
+      document.addEventListener('keydown', (e)=>{
+        if(e.key === 'Escape' && modal.classList.contains('active')){ closeModal(); }
+      });
+    }
     function initRipples(){
       document.querySelectorAll('.pressable').forEach(el=>{
         el.addEventListener('click', addRipple, {passive:true});
@@ -664,7 +777,7 @@
     document.addEventListener('DOMContentLoaded', async ()=>{
       setupGauges(); setExpireJalali(); setResetText();
       const items=await fetchConfigs(SUBSCRIPTION_URL); renderConfigs(items);
-      initTabs(); initTopButtons(); initRipples(); enhanceDetailsAnimation();
+      initTabs(); initTopButtons(); initQrModal(); initRipples(); enhanceDetailsAnimation();
     });
   </script>
 </body>

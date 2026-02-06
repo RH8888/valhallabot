@@ -68,6 +68,11 @@ from services import (
     get_setting,
     set_setting,
 )
+from services.subscription_links import (
+    build_sub_links,
+    get_extra_domains,
+    parse_extra_domains,
+)
 from models.admins import TokenEncryptionError as AdminTokenEncryptionError
 
 # ---------- logging ----------
@@ -212,57 +217,10 @@ def make_panel_name(url, u):
     except Exception:
         h = url
 
-def normalize_domain_entry(value: str) -> str:
-    value = (value or "").strip()
-    if not value:
-        return ""
-    if value.startswith(("http://", "https://")):
-        parsed = urlparse(value)
-        host = parsed.netloc or parsed.path
-    else:
-        host = value
-    host = host.split("/", 1)[0].strip()
-    return host.lower()
-
-def parse_extra_domains(raw: str) -> list[str]:
-    if not raw:
-        return []
-    entries = []
-    seen = set()
-    for part in re.split(r"[,\n]+", raw):
-        host = normalize_domain_entry(part)
-        if not host or host in seen:
-            continue
-        entries.append(host)
-        seen.add(host)
-    return entries
-
-
 def _back_kb(callback_data: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("⬅️ Back", callback_data=callback_data)]]
     )
-
-def get_extra_domains(owner_id: int) -> list[str]:
-    settings_owner = owner_id
-    if not is_admin(owner_id):
-        admins = sorted(admin_ids())
-        if admins:
-            settings_owner = admins[0]
-    raw = get_setting(settings_owner, "extra_sub_domains") or ""
-    return parse_extra_domains(raw)
-
-def build_sub_links(owner_id: int, username: str, app_key: str) -> list[str]:
-    public_base = os.getenv("PUBLIC_BASE_URL", "http://localhost:5000").rstrip("/")
-    parsed = urlparse(public_base)
-    scheme = parsed.scheme or "https"
-    base_host = (parsed.netloc or parsed.path).lower()
-    links = [f"{public_base}/sub/{username}/{app_key}/links"]
-    for host in get_extra_domains(owner_id):
-        if host == base_host:
-            continue
-        links.append(f"{scheme}://{host}/sub/{username}/{app_key}/links")
-    return links
 
 def format_sub_links_html(links: list[str]) -> str:
     if not links:
