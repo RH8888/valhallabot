@@ -156,9 +156,10 @@ def is_admin(tg_id: int) -> bool:
 
     # settings
     ASK_LIMIT_MSG,
+    ASK_SUB_PLACEHOLDER_TEMPLATE,
     ASK_SERVICE_EMERGENCY_CFG,
     ASK_EXTRA_SUB_DOMAINS,
-) = range(35)
+) = range(36)
 
 # ---------- helpers ----------
 UNIT = 1024
@@ -1367,8 +1368,16 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
         notif_enabled = (get_setting(uid, "limit_event_notifications_enabled") or "1") != "0"
         notif_label = "🟢 Limit Event Notifications: ON" if notif_enabled else "🔴 Limit Event Notifications: OFF"
+        sub_placeholder_enabled = (get_setting(uid, "subscription_placeholder_enabled") or "0") != "0"
+        sub_placeholder_label = (
+            "🟢 Sub Placeholder: ON"
+            if sub_placeholder_enabled
+            else "🔴 Sub Placeholder: OFF"
+        )
         kb = [
             [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
+            [InlineKeyboardButton(sub_placeholder_label, callback_data="toggle_sub_placeholder")],
+            [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
             [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
             [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
             [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
@@ -1385,8 +1394,42 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         set_setting(uid, "limit_event_notifications_enabled", "0" if current else "1")
         notif_enabled = not current
         notif_label = "🟢 Limit Event Notifications: ON" if notif_enabled else "🔴 Limit Event Notifications: OFF"
+        sub_placeholder_enabled = (get_setting(uid, "subscription_placeholder_enabled") or "0") != "0"
+        sub_placeholder_label = (
+            "🟢 Sub Placeholder: ON"
+            if sub_placeholder_enabled
+            else "🔴 Sub Placeholder: OFF"
+        )
         kb = [
             [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
+            [InlineKeyboardButton(sub_placeholder_label, callback_data="toggle_sub_placeholder")],
+            [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
+            [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
+            [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
+            [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
+        ]
+        await q.edit_message_text("Technical:", reply_markup=InlineKeyboardMarkup(kb))
+        return ConversationHandler.END
+
+    if data == "toggle_sub_placeholder":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        current = (get_setting(uid, "subscription_placeholder_enabled") or "0") != "0"
+        set_setting(uid, "subscription_placeholder_enabled", "0" if current else "1")
+        notif_enabled = (get_setting(uid, "limit_event_notifications_enabled") or "1") != "0"
+        notif_label = "🟢 Limit Event Notifications: ON" if notif_enabled else "🔴 Limit Event Notifications: OFF"
+        sub_placeholder_enabled = not current
+        sub_placeholder_label = (
+            "🟢 Sub Placeholder: ON"
+            if sub_placeholder_enabled
+            else "🔴 Sub Placeholder: OFF"
+        )
+        kb = [
+            [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
+            [InlineKeyboardButton(sub_placeholder_label, callback_data="toggle_sub_placeholder")],
+            [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
             [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
             [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
             [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
@@ -1402,6 +1445,20 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur = get_setting(uid, "limit_message") or "—"
         await q.edit_message_text(f"پیام فعلی:\n{cur}\n\nپیام جدید را بفرست:", reply_markup=_back_kb("admin_technical"))
         return ASK_LIMIT_MSG
+
+    if data == "sub_placeholder_template":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        cur = get_setting(uid, "subscription_placeholder_template") or "—"
+        await q.edit_message_text(
+            "قالب فعلی:\n"
+            f"{cur}\n\n"
+            "قالب جدید را بفرست.\n"
+            "برای حذف: clear",
+            reply_markup=_back_kb("admin_technical"),
+        )
+        return ASK_SUB_PLACEHOLDER_TEMPLATE
 
     if data == "extra_sub_domains":
         if not is_admin(uid):
@@ -2539,6 +2596,21 @@ async def got_limit_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ پیام ذخیره شد.", reply_markup=_back_kb("admin_technical"))
     return ConversationHandler.END
 
+async def got_sub_placeholder_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    msg = (update.message.text or "").strip()
+    if not msg:
+        await update.message.reply_text("❌ قالب خالیه. دوباره بفرست:")
+        return ASK_SUB_PLACEHOLDER_TEMPLATE
+    if msg.lower() in {"off", "none", "clear", "delete"}:
+        set_setting(update.effective_user.id, "subscription_placeholder_template", "")
+        await update.message.reply_text("✅ قالب پاک شد.", reply_markup=_back_kb("admin_technical"))
+        return ConversationHandler.END
+    set_setting(update.effective_user.id, "subscription_placeholder_template", msg)
+    await update.message.reply_text("✅ قالب ذخیره شد.", reply_markup=_back_kb("admin_technical"))
+    return ConversationHandler.END
+
 async def got_service_emerg_cfg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
@@ -3550,6 +3622,9 @@ def build_app():
 
             # settings
             ASK_LIMIT_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_limit_msg)],
+            ASK_SUB_PLACEHOLDER_TEMPLATE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, got_sub_placeholder_template)
+            ],
             ASK_SERVICE_EMERGENCY_CFG: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_service_emerg_cfg)],
             ASK_EXTRA_SUB_DOMAINS: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_extra_sub_domains)],
 

@@ -11,6 +11,7 @@ Flask subscription aggregator for Marzneshin/Marzban/Rebecca/Sanaei/Pasarguard/G
 
 import os
 import logging
+import math
 import re
 from pathlib import Path
 from urllib.parse import urljoin, unquote, quote
@@ -36,6 +37,9 @@ logging.basicConfig(
 log = logging.getLogger("flask_agg")
 
 ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
+SUB_PLACEHOLDER_BASE_CONFIG = "ss://bm9uZTp2YWxoYWxsYQ%3D%3D@127.0.0.1:53#"
+SUB_PLACEHOLDER_ENABLED_KEY = "subscription_placeholder_enabled"
+SUB_PLACEHOLDER_TEMPLATE_KEY = "subscription_placeholder_template"
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 with (BASE_DIR / "templates" / "index.html").open(encoding="utf-8") as f:
@@ -629,6 +633,123 @@ def format_usage_value(num):
     return f"{scaled:.{precision}f} {unit}"
 
 
+def _to_jalali(gy: int, gm: int, gd: int) -> tuple[int, int, int]:
+    g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    if gy > 1600:
+        jy = 979
+        gy -= 1600
+    else:
+        jy = 0
+        gy -= 621
+    gy2 = gy + 1 if gm > 2 else gy
+    days = (
+        365 * gy
+        + (gy2 + 3) // 4
+        - (gy2 + 99) // 100
+        + (gy2 + 399) // 400
+        - 80
+        + gd
+        + g_d_m[gm - 1]
+    )
+    jy += 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        jm = 1 + days // 31
+        jd = 1 + days % 31
+    else:
+        jm = 7 + (days - 186) // 30
+        jd = 1 + (days - 186) % 30
+    return jy, jm, jd
+
+
+def _parse_expire_datetime(expire_at) -> datetime | None:
+    if not expire_at:
+        return None
+    if isinstance(expire_at, datetime):
+        return expire_at
+    try:
+        return datetime.fromisoformat(str(expire_at))
+    except Exception:
+        return None
+
+
+def _format_time_left(expire_dt: datetime | None, now: datetime) -> str:
+    if not expire_dt:
+        return "Unlimited"
+    seconds = int((expire_dt - now).total_seconds())
+    if seconds <= 0:
+        return "Expired"
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, _ = divmod(rem, 60)
+    parts = []
+    if days:
+        parts.append(f"{days} day" + ("s" if days != 1 else ""))
+    if hours:
+        parts.append(f"{hours} hour" + ("s" if hours != 1 else ""))
+    if minutes and not days:
+        parts.append(f"{minutes} minute" + ("s" if minutes != 1 else ""))
+    return " ".join(parts) if parts else "Less than a minute"
+
+
+def _format_days_left(expire_dt: datetime | None, now: datetime) -> str:
+    if not expire_dt:
+        return "Unlimited"
+    seconds = (expire_dt - now).total_seconds()
+    if seconds <= 0:
+        return "0"
+    return str(max(0, int(math.ceil(seconds / 86400))))
+
+
+def _replace_placeholders(template: str, values: dict[str, str]) -> str:
+    def repl(match: re.Match) -> str:
+        key = match.group(1).upper()
+        return values.get(key, match.group(0))
+
+    return re.sub(r"\{([A-Z0-9_]+)\}", repl, template, flags=re.IGNORECASE)
+
+
+def build_sub_placeholder_config(owner_id: int, local_username: str, lu) -> str | None:
+    enabled = (get_setting(owner_id, SUB_PLACEHOLDER_ENABLED_KEY) or "0") != "0"
+    if not enabled:
+        return None
+    template = (get_setting(owner_id, SUB_PLACEHOLDER_TEMPLATE_KEY) or "").strip()
+    if not template:
+        return None
+
+    limit = int(lu.get("plan_limit_bytes") or 0) if lu else 0
+    used = int(lu.get("used_bytes") or 0) if lu else 0
+    expire_dt = _parse_expire_datetime(lu.get("expire_at") if lu else None)
+    now = datetime.utcnow()
+
+    data_left = "Unlimited" if limit <= 0 else format_usage_value(max(0, limit - used))
+    data_limit = "Unlimited" if limit <= 0 else format_usage_value(limit)
+    expire_date = expire_dt.strftime("%Y-%m-%d") if expire_dt else "Unlimited"
+    jalali_expire_date = "Unlimited"
+    if expire_dt:
+        jy, jm, jd = _to_jalali(expire_dt.year, expire_dt.month, expire_dt.day)
+        jalali_expire_date = f"{jy:04d}-{jm:02d}-{jd:02d}"
+
+    values = {
+        "USERNAME": local_username,
+        "DATA_USAGE": format_usage_value(used),
+        "DATA_LEFT": data_left,
+        "DATA_LIMIT": data_limit,
+        "DAYS_LEFT": _format_days_left(expire_dt, now),
+        "EXPIRE_DATE": expire_date,
+        "JALALI_EXPIRE_DATE": jalali_expire_date,
+        "TIME_LEFT": _format_time_left(expire_dt, now),
+    }
+    resolved = _replace_placeholders(template, values)
+    encoded = quote(resolved, safe="")
+    return f"{SUB_PLACEHOLDER_BASE_CONFIG}{encoded}"
+
+
 app.jinja_env.filters["bytesformat"] = bytesformat
 
 
@@ -876,6 +997,10 @@ def unified_links(local_username, app_key):
         emerg = get_setting(owner_id, "emergency_config")
     if emerg:
         uniq.append(emerg.strip())
+        uniq = filter_dedupe(uniq)
+    placeholder_config = build_sub_placeholder_config(owner_id, local_username, lu)
+    if placeholder_config and uniq:
+        uniq.insert(0, placeholder_config)
         uniq = filter_dedupe(uniq)
     if uniq:
         body = "\n".join(uniq) + "\n"
