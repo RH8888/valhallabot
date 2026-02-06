@@ -681,10 +681,7 @@ def update_limit(owner_id: int, username: str, new_limit_bytes: int):
     manual_disabled = bool(row.get("manual_disabled") or 0)
     exp = row.get("expire_at")
     expired = bool(exp and exp <= datetime.utcnow())
-    if current_limit <= 0:
-        effective_limit = int(new_limit_bytes)
-    else:
-        effective_limit = max(current_limit, used) + int(new_limit_bytes)
+    effective_limit = max(0, int(new_limit_bytes))
     params = [int(effective_limit)] + ids + [username]
     with with_mysql_cursor() as cur:
         cur.execute(
@@ -721,6 +718,78 @@ def update_limit(owner_id: int, username: str, new_limit_bytes: int):
                 )
                 if not ok_en:
                     log.warning("remote enable failed on %s: %s", row["panel_url"], err_en)
+
+def set_user_disabled(owner_id: int, username: str, disabled: bool):
+    ids = expand_owner_ids(owner_id)
+    placeholders = ",".join(["%s"] * len(ids))
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"""SELECT plan_limit_bytes, used_bytes, expire_at
+                FROM local_users
+                WHERE owner_id IN ({placeholders}) AND username=%s
+                LIMIT 1""",
+            tuple(ids) + (username,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return
+    limit = int(row.get("plan_limit_bytes") or 0)
+    used = int(row.get("used_bytes") or 0)
+    exp = row.get("expire_at")
+    expired = bool(exp and exp <= datetime.utcnow())
+    over_limit = limit > 0 and used >= limit
+    should_enable = not disabled and not expired and not over_limit
+
+    if disabled:
+        manual_flag = 1
+        pushed_flag = 1
+        pushed_at = "UTC_TIMESTAMP()"
+    elif should_enable:
+        manual_flag = 0
+        pushed_flag = 0
+        pushed_at = "NULL"
+    else:
+        manual_flag = 0
+        pushed_flag = 1
+        pushed_at = "UTC_TIMESTAMP()"
+
+    params = [manual_flag, pushed_flag] + ids + [username]
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"""UPDATE local_users
+                SET manual_disabled=%s,
+                    disabled_pushed=%s,
+                    disabled_pushed_at={pushed_at}
+                WHERE owner_id IN ({placeholders}) AND username=%s""",
+            params,
+        )
+
+    for row in list_user_links(owner_id, username):
+        api = get_api(row.get("panel_type"))
+        remotes = (
+            row["remote_username"].split(",")
+            if row.get("panel_type") == "sanaei"
+            else [row["remote_username"]]
+        )
+        for rn in remotes:
+            if disabled:
+                ok, err = api.disable_remote_user(
+                    row["panel_url"], row["access_token"], rn
+                )
+                if not ok:
+                    log.warning("remote disable failed on %s: %s", row["panel_url"], err)
+            elif should_enable:
+                ok, err = api.enable_remote_user(
+                    row["panel_url"], row["access_token"], rn
+                )
+                if not ok:
+                    log.warning("remote enable failed on %s: %s", row["panel_url"], err)
+            else:
+                ok, err = api.disable_remote_user(
+                    row["panel_url"], row["access_token"], rn
+                )
+                if not ok:
+                    log.warning("remote disable failed on %s: %s", row["panel_url"], err)
 
 def reset_used(owner_id: int, username: str):
     ids = expand_owner_ids(owner_id)
@@ -1644,6 +1713,20 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await set_local_user_service(uid, uname, sid)
         return await show_user_card(q, uid, uname, notice="✅ سرویس کاربر ذخیره شد.")
 
+    if data == "act_toggle_user":
+        uname = context.user_data.get("manage_username")
+        if not uname:
+            await q.edit_message_text("یوزر انتخاب نشده.")
+            return ConversationHandler.END
+        row = get_local_user(uid, uname)
+        if not row:
+            await q.edit_message_text("کاربر پیدا نشد.")
+            return ConversationHandler.END
+        manual_disabled = bool(row.get("manual_disabled") or 0)
+        set_user_disabled(uid, uname, not manual_disabled)
+        notice = "✅ کاربر فعال شد." if manual_disabled else "🚫 کاربر غیرفعال شد."
+        return await show_user_card(q, uid, uname, notice=notice)
+
     if data == "user_sel_back":
         uname = context.user_data.get("manage_username")
         return await show_user_card(q, uid, uname)
@@ -2134,6 +2217,7 @@ async def show_user_card(q, owner_id: int, uname: str, notice: str = None):
     limit_b = int(row["plan_limit_bytes"] or 0)
     used_b  = int(row["used_bytes"] or 0)
     exp     = row["expire_at"]
+    manual_disabled = bool(row.get("manual_disabled") or 0)
     pushed  = int(row.get("disabled_pushed", 0) or 0)
 
     app_key = get_app_key(owner_id, uname)
@@ -2149,15 +2233,18 @@ async def show_user_card(q, owner_id: int, uname: str, notice: str = None):
         f"📊 Used: <b>{fmt_bytes_short(used_b)}</b>",
         f"🧮 Remaining: <b>{'Unlimited' if limit_b==0 else fmt_bytes_short(max(0, limit_b-used_b))}</b>",
         f"⏳ Expires: <b>{(exp.strftime('%Y-%m-%d %H:%M:%S UTC') if exp else '—')}</b>",
-        f"🚫 Disabled pushed: <b>{'Yes' if pushed else 'No'}</b>",
+        f"🚫 Manual Disabled: <b>{'Yes' if manual_disabled else 'No'}</b>",
+        f"📡 Disabled pushed: <b>{'Yes' if pushed else 'No'}</b>",
         "",
         "Choose an action:",
     ]
+    toggle_label = "✅ Enable User" if manual_disabled else "🚫 Disable User"
     kb = [
         [InlineKeyboardButton("✏️ Edit Limit", callback_data="act_edit_limit")],
         [InlineKeyboardButton("🧹 Reset Used", callback_data="act_reset_used")],
         [InlineKeyboardButton("🔁 Renew (add days)", callback_data="act_renew")],
         [InlineKeyboardButton("🧰 Assign Service", callback_data="act_assign_service")],
+        [InlineKeyboardButton(toggle_label, callback_data="act_toggle_user")],
         [InlineKeyboardButton("🗑️ Delete User", callback_data="act_del_user")],
         [InlineKeyboardButton("⬅️ Back", callback_data="list_users:0")],
     ]
