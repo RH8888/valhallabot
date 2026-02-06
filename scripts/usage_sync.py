@@ -30,6 +30,8 @@ API_MODULES = {
     "guardcore": guardcore,
 }
 
+_local_users_columns = None
+
 
 def get_api(panel_type: str):
     """Return API module for the given panel type."""
@@ -133,15 +135,47 @@ def update_last(link_id, new_used):
             (int(new_used), int(link_id)),
         )
 
+def get_local_users_columns():
+    global _local_users_columns
+    if _local_users_columns is not None:
+        return _local_users_columns
+    with with_mysql_cursor(dict_=False) as cur:
+        cur.execute(
+            """
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'local_users'
+            """
+        )
+        _local_users_columns = {row[0] for row in cur.fetchall()}
+    return _local_users_columns
+
 def get_local_user(owner_id, local_username):
+    columns = get_local_users_columns()
+    wanted = [
+        "plan_limit_bytes",
+        "used_bytes",
+        "manual_disabled",
+        "disabled_pushed",
+        "usage_limit_notified",
+    ]
+    available = [col for col in wanted if col in columns]
     with with_mysql_cursor() as cur:
-        cur.execute("""
-            SELECT plan_limit_bytes, used_bytes, manual_disabled, disabled_pushed, usage_limit_notified
+        cur.execute(
+            f"""
+            SELECT {", ".join(available)}
             FROM local_users
             WHERE owner_id=%s AND username=%s
             LIMIT 1
-        """, (owner_id, local_username))
-        return cur.fetchone()
+            """,
+            (owner_id, local_username),
+        )
+        row = cur.fetchone()
+        if row:
+            for col in wanted:
+                row.setdefault(col, 0)
+        return row
 
 
 def get_setting(owner_id, key):
@@ -300,12 +334,19 @@ def total_used_by_owner(owner_id: int) -> int:
         return int(row.get("tot") or 0) if row else 0
 
 def list_all_local_users(owner_id: int):
+    columns = get_local_users_columns()
+    include_manual = "manual_disabled" in columns
+    select_cols = "username, manual_disabled" if include_manual else "username"
     with with_mysql_cursor() as cur:
         cur.execute(
-            "SELECT username, manual_disabled FROM local_users WHERE owner_id=%s",
+            f"SELECT {select_cols} FROM local_users WHERE owner_id=%s",
             (owner_id,),
         )
-        return cur.fetchall()
+        rows = cur.fetchall()
+        if not include_manual:
+            for row in rows:
+                row["manual_disabled"] = 0
+        return rows
 
 def list_agent_assigned_panels(owner_id: int):
     """پنل‌هایی که به نماینده assign شده‌اند (agent_panels)."""
@@ -363,12 +404,26 @@ def mark_agent_enabled(owner_id: int):
         """, (owner_id,))
 
 def mark_all_users_enabled(owner_id: int):
+    columns = get_local_users_columns()
     with with_mysql_cursor() as cur:
-        cur.execute("""
-            UPDATE local_users
-            SET disabled_pushed=0, disabled_pushed_at=NULL
-            WHERE owner_id=%s AND manual_disabled=0
-        """, (owner_id,))
+        if "manual_disabled" in columns:
+            cur.execute(
+                """
+                UPDATE local_users
+                SET disabled_pushed=0, disabled_pushed_at=NULL
+                WHERE owner_id=%s AND manual_disabled=0
+                """,
+                (owner_id,),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE local_users
+                SET disabled_pushed=0, disabled_pushed_at=NULL
+                WHERE owner_id=%s
+                """,
+                (owner_id,),
+            )
 
 def try_disable_agent_if_exceeded(owner_id: int):
     """
