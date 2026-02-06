@@ -720,11 +720,23 @@ def _replace_placeholders(template: str, values: dict[str, str]) -> str:
     return re.sub(r"\{([A-Z0-9_]+)\}", repl, template, flags=re.IGNORECASE)
 
 
+def _get_admin_setting(key: str) -> str | None:
+    ids = admin_ids()
+    if not ids:
+        return None
+    admin_id = next(iter(ids))
+    return get_setting(admin_id, key)
+
+
 def build_sub_placeholder_config(owner_id: int, local_username: str, lu) -> str | None:
     enabled = (get_setting(owner_id, SUB_PLACEHOLDER_ENABLED_KEY) or "0") != "0"
+    if not enabled and get_agent(owner_id):
+        enabled = (_get_admin_setting(SUB_PLACEHOLDER_ENABLED_KEY) or "0") != "0"
     if not enabled:
         return None
     template = (get_setting(owner_id, SUB_PLACEHOLDER_TEMPLATE_KEY) or "").strip()
+    if not template and get_agent(owner_id):
+        template = (_get_admin_setting(SUB_PLACEHOLDER_TEMPLATE_KEY) or "").strip()
     if not template:
         return None
 
