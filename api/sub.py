@@ -14,6 +14,7 @@ from api.subscription_aggregator.flask_app import (
     collect_links,
     filter_dedupe,
     get_setting,
+    build_sub_placeholder_config,
     get_agent,
     get_agent_total_used,
     list_all_agent_links,
@@ -212,6 +213,10 @@ def get_links(
         emerg = get_setting(real_owner, "emergency_config")
     if emerg:
         uniq.append(emerg.strip())
+        uniq = filter_dedupe(uniq)
+    placeholder_config = build_sub_placeholder_config(real_owner, username, lu)
+    if placeholder_config and uniq:
+        uniq.insert(0, placeholder_config)
         uniq = filter_dedupe(uniq)
 
     return LinksOut(links=uniq)
