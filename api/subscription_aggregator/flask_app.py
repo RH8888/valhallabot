@@ -63,12 +63,18 @@ _settings_table_missing_logged = False
 
 
 def get_setting(owner_id: int, key: str):
-    oid = canonical_owner_id(owner_id)
+    ids = expand_owner_ids(owner_id)
+    placeholders = ",".join(["%s"] * len(ids))
     with with_mysql_cursor() as cur:
         try:
             cur.execute(
-                "SELECT value FROM settings WHERE owner_id=%s AND `key`=%s LIMIT 1",
-                (oid, key),
+                f"""
+                SELECT value
+                FROM settings
+                WHERE owner_id IN ({placeholders}) AND `key`=%s
+                LIMIT 1
+                """,
+                tuple(ids) + (key,),
             )
         except mysql_errors.ProgrammingError as exc:
             if getattr(exc, "errno", None) == errorcode.ER_NO_SUCH_TABLE:
