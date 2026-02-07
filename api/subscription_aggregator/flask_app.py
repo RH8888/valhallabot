@@ -25,7 +25,7 @@ from flask import Flask, Response, abort, request, render_template_string
 from types import SimpleNamespace
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from services import init_mysql_pool, with_mysql_cursor
+from services import ensure_panel_tokens, init_mysql_pool, with_mysql_cursor
 from services.database import errorcode, mysql_errors
 from apis import sanaei, pasarguard, rebecca, guardcore
 from .ownership import expand_owner_ids, canonical_owner_id
@@ -127,14 +127,16 @@ def list_mapped_links(owner_id, local_username):
         cur.execute(
             f"""
             SELECT lup.panel_id, lup.remote_username,
-                   p.panel_url, p.access_token, p.panel_type
+                   p.panel_url, p.access_token, p.panel_type,
+                   p.admin_username, p.admin_password_encrypted
             FROM local_user_panel_links lup
             JOIN panels p ON p.id = lup.panel_id
             WHERE lup.owner_id IN ({placeholders}) AND lup.local_username=%s
             """,
             tuple(ids) + (local_username,),
         )
-        return cur.fetchall()
+        rows = cur.fetchall()
+    return ensure_panel_tokens(rows)
 
 def list_all_panels(owner_id):
     """List all panels for an owner for fallback resolution.
@@ -147,10 +149,16 @@ def list_all_panels(owner_id):
     placeholders = ",".join(["%s"] * len(ids))
     with with_mysql_cursor() as cur:
         cur.execute(
-            f"SELECT id, panel_url, access_token, panel_type FROM panels WHERE telegram_user_id IN ({placeholders})",
+            f"""
+            SELECT id, panel_url, access_token, panel_type,
+                   admin_username, admin_password_encrypted
+            FROM panels
+            WHERE telegram_user_id IN ({placeholders})
+            """,
             tuple(ids),
         )
-        return cur.fetchall()
+        rows = cur.fetchall()
+    return ensure_panel_tokens(rows)
 
 def mark_user_disabled(owner_id, local_username):
     ids = expand_owner_ids(owner_id)
