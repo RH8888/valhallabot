@@ -69,6 +69,9 @@ from services import (
     set_agent_active,
     get_setting,
     set_setting,
+    TokenEncryptionError as PanelTokenEncryptionError,
+    encrypt_panel_password,
+    ensure_panel_tokens,
 )
 from models.admins import TokenEncryptionError as AdminTokenEncryptionError
 
@@ -324,7 +327,8 @@ def list_my_panels_admin(admin_tg_id: int):
             f"SELECT * FROM panels WHERE telegram_user_id IN ({placeholders}) ORDER BY created_at DESC",
             tuple(ids),
         )
-        return cur.fetchall()
+        rows = cur.fetchall()
+    return ensure_panel_tokens(rows)
 
 def list_panels_for_agent(agent_tg_id: int):
     with with_mysql_cursor() as cur:
@@ -334,7 +338,8 @@ def list_panels_for_agent(agent_tg_id: int):
             WHERE ap.agent_tg_id=%s
             ORDER BY p.created_at DESC
         """, (agent_tg_id,))
-        return cur.fetchall()
+        rows = cur.fetchall()
+    return ensure_panel_tokens(rows)
 
 # ----- service helpers -----
 def create_service(name: str) -> int:
@@ -925,13 +930,15 @@ def list_user_links(owner_id: int, local_username: str):
     with with_mysql_cursor() as cur:
         cur.execute(
             f"""SELECT lup.panel_id, lup.remote_username,
-                      p.panel_url, p.access_token, p.panel_type
+                      p.panel_url, p.access_token, p.panel_type,
+                      p.admin_username, p.admin_password_encrypted
                  FROM local_user_panel_links lup
                  JOIN panels p ON p.id = lup.panel_id
                  WHERE lup.owner_id IN ({placeholders}) AND lup.local_username=%s""",
             tuple(ids) + (local_username,),
         )
-        return cur.fetchall()
+        rows = cur.fetchall()
+    return ensure_panel_tokens(rows)
 
 
 def delete_local_user(owner_id: int, username: str):
@@ -2721,10 +2728,33 @@ async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not tok:
             await update.message.reply_text(f"❌ لاگین ناموفق: {err}")
             return ConversationHandler.END
+        encrypted_password = None
+        try:
+            encrypted_password = encrypt_panel_password(password)
+        except PanelTokenEncryptionError as exc:
+            log.warning("Failed to encrypt panel password for %s: %s", panel_url, exc)
         with with_mysql_cursor() as cur:
             cur.execute(
-                "INSERT INTO panels(telegram_user_id,panel_url,name,panel_type,admin_username,access_token)VALUES(%s,%s,%s,%s,%s,%s)",
-                (update.effective_user.id, panel_url, panel_name, panel_type, panel_user, tok)
+                """
+                INSERT INTO panels(
+                    telegram_user_id,
+                    panel_url,
+                    name,
+                    panel_type,
+                    admin_username,
+                    access_token,
+                    admin_password_encrypted
+                ) VALUES(%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (
+                    update.effective_user.id,
+                    panel_url,
+                    panel_name,
+                    panel_type,
+                    panel_user,
+                    tok,
+                    encrypted_password,
+                ),
             )
         msg = f"✅ پنل اضافه شد: {panel_name}"
         if panel_type == "sanaei":
@@ -2832,10 +2862,21 @@ async def got_edit_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE
         tok, err = api.get_admin_token(row["panel_url"], new_user, new_pass)
         if not tok:
             raise RuntimeError(f"login failed: {err}")
+        encrypted_password = None
+        try:
+            encrypted_password = encrypt_panel_password(new_pass)
+        except PanelTokenEncryptionError as exc:
+            log.warning("Failed to encrypt panel password for %s: %s", row["panel_url"], exc)
         with with_mysql_cursor() as cur:
             cur.execute(
-                f"UPDATE panels SET admin_username=%s, access_token=%s WHERE id=%s AND telegram_user_id IN ({placeholders})",
-                tuple([new_user, tok, pid] + ids),
+                f"""
+                UPDATE panels
+                SET admin_username=%s,
+                    access_token=%s,
+                    admin_password_encrypted=%s
+                WHERE id=%s AND telegram_user_id IN ({placeholders})
+                """,
+                tuple([new_user, tok, encrypted_password, pid] + ids),
             )
         context.user_data.pop("new_admin_user", None)
         class FakeCQ:

@@ -4,7 +4,11 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict
 
-from services import with_mysql_cursor
+from services import (
+    TokenEncryptionError as PanelTokenEncryptionError,
+    encrypt_panel_password,
+    with_mysql_cursor,
+)
 from services import get_admin_token as service_get_admin_token
 from services import rotate_admin_token as service_rotate_admin_token
 from api.subscription_aggregator import admin_ids, canonical_owner_id
@@ -50,6 +54,9 @@ class PanelBase(BaseModel):
 
 
 class PanelCreate(PanelBase):
+    admin_password: str | None = Field(
+        None, description="Admin password used to refresh expiring tokens"
+    )
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "panel_url": "https://panel.example.com",
@@ -71,6 +78,7 @@ class PanelUpdate(BaseModel):
     usage_multiplier: float | None = None
     admin_username: str | None = None
     access_token: str | None = None
+    admin_password: str | None = None
     template_username: str | None = None
     sub_url: str | None = None
     model_config = ConfigDict(json_schema_extra={"example": {"name": "Updated Panel"}})
@@ -99,13 +107,19 @@ def list_panels():
 
 @router.post("/panels", response_model=PanelOut, summary="Create a panel")
 def create_panel(data: PanelCreate):
+    encrypted_password = None
+    if data.admin_password:
+        try:
+            encrypted_password = encrypt_panel_password(data.admin_password)
+        except PanelTokenEncryptionError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
     with with_mysql_cursor() as cur:
         cur.execute(
             """
             INSERT INTO panels (
                 telegram_user_id, panel_url, name, panel_type, usage_multiplier,
-                admin_username, access_token, template_username, sub_url
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                admin_username, access_token, admin_password_encrypted, template_username, sub_url
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 _owner_id(),
@@ -115,6 +129,7 @@ def create_panel(data: PanelCreate):
                 data.usage_multiplier,
                 data.admin_username,
                 data.access_token,
+                encrypted_password,
                 data.template_username,
                 data.sub_url,
             ),
@@ -146,6 +161,12 @@ def get_panel(panel_id: int):
 @router.put("/panels/{panel_id}", response_model=PanelOut, summary="Update a panel")
 def update_panel(panel_id: int, data: PanelUpdate):
     fields = data.model_dump(exclude_unset=True)
+    admin_password = fields.pop("admin_password", None)
+    if admin_password is not None:
+        try:
+            fields["admin_password_encrypted"] = encrypt_panel_password(admin_password)
+        except PanelTokenEncryptionError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
     if not fields:
         return get_panel(panel_id)
     ids = _owner_ids()
