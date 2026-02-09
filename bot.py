@@ -143,6 +143,7 @@ def is_admin(tg_id: int) -> bool:
     ASK_SELECT_SERVICE,
     ASK_PANEL_SUB_URL,
     ASK_PANEL_MULTIPLIER,
+    ASK_PANEL_API_KEY,
 
     # agent mgmt
     ASK_AGENT_NAME, ASK_AGENT_TGID,
@@ -162,7 +163,7 @@ def is_admin(tg_id: int) -> bool:
     ASK_SUB_PLACEHOLDER_TEMPLATE,
     ASK_SERVICE_EMERGENCY_CFG,
     ASK_EXTRA_SUB_DOMAINS,
-) = range(36)
+) = range(37)
 
 # ---------- helpers ----------
 UNIT = 1024
@@ -1006,6 +1007,16 @@ def set_panel_sub_url(owner_id: int, panel_id: int, sub_url: str | None):
             params
         )
 
+def set_panel_api_key(owner_id: int, panel_id: int, api_key: str | None):
+    ids = expand_owner_ids(owner_id)
+    placeholders = ",".join(["%s"] * len(ids))
+    params = [api_key, int(panel_id)] + ids
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"UPDATE panels SET access_token=%s WHERE id=%s AND telegram_user_id IN ({placeholders})",
+            params,
+        )
+
 def get_panel(owner_id: int, panel_id: int):
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
@@ -1691,6 +1702,19 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("این پنل از لینک سابسکریپشن پشتیبانی نمی‌کند.")
             return ConversationHandler.END
         await q.edit_message_text("لینک سابسکریپشن پنل را بفرست (برای حذف، '-'):", reply_markup=_back_kb(f"panel_sel:{pid}")) ; return ASK_PANEL_SUB_URL
+    if data == "p_set_api_key":
+        if not is_admin(uid): return ConversationHandler.END
+        pid = context.user_data.get("edit_panel_id")
+        info = get_panel(uid, pid) if pid else None
+        if not info:
+            await q.edit_message_text("پنل پیدا نشد.")
+            return ConversationHandler.END
+        panel_type = (info.get("panel_type") or "").lower()
+        if panel_type not in ("rebecca", "guardcore"):
+            await q.edit_message_text("این پنل از API Key پشتیبانی نمی‌کند.")
+            return ConversationHandler.END
+        await q.edit_message_text("API Key را بفرست (برای حذف، '-'):", reply_markup=_back_kb(f"panel_sel:{pid}"))
+        return ASK_PANEL_API_KEY
     if data == "p_filter_cfgs":
         if not is_admin(uid): return ConversationHandler.END
         pid = context.user_data.get("edit_panel_id")
@@ -2257,7 +2281,12 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         return ConversationHandler.END
 
     is_sanaei = p.get('panel_type') == 'sanaei'
+    panel_type = (p.get("panel_type") or "").lower()
+    supports_api_key = panel_type in ("rebecca", "guardcore")
     label = "Inbound" if is_sanaei else "Template"
+    api_key_state = None
+    if supports_api_key:
+        api_key_state = "set" if (p.get("access_token") or "").strip() else "unset"
     lines = [
         f"🧩 <b>{p['name']}</b>",
         f"📦 Type: <b>{p.get('panel_type', 'marzneshin')}</b>",
@@ -2266,6 +2295,8 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         f"🧬 {label}: <b>{p.get('template_username') or '-'}</b>",
         f"⚖️ Ratio: <b>{float(p.get('usage_multiplier') or 1.0):.2f}x</b>",
     ]
+    if supports_api_key:
+        lines.append(f"🔐 API Key: <b>{api_key_state}</b>")
     if not is_sanaei:
         lines.append(f"🔗 Sub URL: <code>{p.get('sub_url') or '-'}</code>")
     lines += [
@@ -2278,6 +2309,8 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         [InlineKeyboardButton("✏️ Rename Panel", callback_data="p_rename")],
         [InlineKeyboardButton("⚖️ Set Usage Ratio", callback_data="p_set_multiplier")],
     ]
+    if supports_api_key:
+        kb.append([InlineKeyboardButton("🧾 Set/Clear API Key", callback_data="p_set_api_key")])
     if not is_sanaei:
         kb.append([InlineKeyboardButton("🔗 Set/Clear Sub URL", callback_data="p_set_sub")])
         kb.append([InlineKeyboardButton("🧷 فیلتر کانفیگ‌های پنل", callback_data="p_filter_cfgs")])
@@ -2901,6 +2934,40 @@ async def got_panel_sub_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ASK_PANEL_SUB_URL
     try:
         set_panel_sub_url(update.effective_user.id, pid, val)
+        class FakeCQ:
+            async def edit_message_text(self, *args, **kwargs):
+                await update.message.reply_text(*args, **kwargs)
+        return await show_panel_card(FakeCQ(), context, update.effective_user.id, pid)
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطا: {e}", reply_markup=_back_kb("servers_panels"))
+        return ConversationHandler.END
+
+async def got_panel_api_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    pid = context.user_data.get("edit_panel_id")
+    if not pid:
+        await update.message.reply_text("❌ پنل انتخاب نشده.")
+        return ConversationHandler.END
+    info = get_panel(update.effective_user.id, pid)
+    if not info:
+        await update.message.reply_text("❌ پنل انتخاب نشده.")
+        return ConversationHandler.END
+    panel_type = (info.get("panel_type") or "").lower()
+    if panel_type not in ("rebecca", "guardcore"):
+        await update.message.reply_text("❌ این پنل از API Key پشتیبانی نمی‌کند.")
+        return ConversationHandler.END
+    txt = (update.message.text or "").strip()
+    if not txt:
+        await update.message.reply_text("❌ مقدار معتبر بفرست (یا '-' برای حذف):")
+        return ASK_PANEL_API_KEY
+    val = None if txt == "-" else txt
+    if val and panel_type == "guardcore":
+        lowered = val.lower()
+        if not (lowered.startswith("api_key:") or lowered.startswith("apikey:") or lowered.startswith("x-api-key:")):
+            val = f"api_key:{val}"
+    try:
+        set_panel_api_key(update.effective_user.id, pid, val)
         class FakeCQ:
             async def edit_message_text(self, *args, **kwargs):
                 await update.message.reply_text(*args, **kwargs)
@@ -3653,6 +3720,7 @@ def build_app():
             ASK_EDIT_PANEL_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_edit_panel_user)],
             ASK_EDIT_PANEL_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_edit_panel_pass)],
             ASK_PANEL_SUB_URL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_sub_url)],
+            ASK_PANEL_API_KEY:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_api_key)],
             ASK_PANEL_MULTIPLIER: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_multiplier)],
             ASK_PANEL_REMOVE_CONFIRM: [CallbackQueryHandler(on_button)],
 
