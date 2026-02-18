@@ -19,6 +19,7 @@ SESSION = requests.Session()
 import os
 from cachetools import TTLCache, cached
 from threading import RLock
+from services.panel_tokens import refresh_panel_access_token_for_request
 
 FETCH_CACHE_TTL = int(os.getenv("FETCH_CACHE_TTL", "300"))
 _links_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
@@ -29,6 +30,19 @@ def get_headers(token: str) -> Dict[str, str]:
     """Return authorization header for the given bearer token."""
     return {"Authorization": f"Bearer {token}"}
 
+
+
+
+def _request_with_reauth(method: str, panel_url: str, token: str, path: str, **kwargs):
+    url = urljoin(panel_url.rstrip('/') + '/', path)
+    extra_headers = kwargs.pop("headers", {}) or {}
+    response = SESSION.request(method, url, headers={**get_headers(token), **extra_headers}, **kwargs)
+    if response.status_code not in (401, 403):
+        return response
+    new_token = refresh_panel_access_token_for_request(panel_url, token, panel_type="marzneshin")
+    if not new_token:
+        return response
+    return SESSION.request(method, url, headers={**get_headers(new_token), **extra_headers}, **kwargs)
 
 def _canonical_username(username: str) -> str:
     """Return the lowercase representation required by the panel API."""
@@ -42,9 +56,8 @@ def fetch_user_services(panel_url: str, token: str, username: str) -> Tuple[Opti
     """Return list of service IDs for *username* or an error message."""
     username = _canonical_username(username)
     try:
-        r = SESSION.get(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}/services"),
-            headers=get_headers(token),
+        r = _request_with_reauth(
+            "GET", panel_url, token, f"/api/users/{username}/services",
             timeout=15,
         )
         if r.status_code != 200:
@@ -61,10 +74,10 @@ def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dic
     if isinstance(payload.get("username"), str):
         payload["username"] = payload["username"].lower()
     try:
-        r = SESSION.post(
-            urljoin(panel_url.rstrip('/') + '/', '/api/users'),
+        r = _request_with_reauth(
+            "POST", panel_url, token, '/api/users',
             json=payload,
-            headers={**get_headers(token), "Content-Type": "application/json"},
+            headers={"Content-Type": "application/json"},
             timeout=20,
         )
         if r.status_code == 200:
@@ -78,9 +91,8 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
     """Fetch user details from the panel."""
     username = _canonical_username(username)
     try:
-        r = SESSION.get(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}"),
-            headers=get_headers(token),
+        r = _request_with_reauth(
+            "GET", panel_url, token, f"/api/users/{username}",
             timeout=15,
         )
         if r.status_code == 200:
@@ -115,9 +127,8 @@ def disable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool
     """Disable a user on the panel."""
     username = _canonical_username(username)
     try:
-        r = SESSION.post(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}/disable"),
-            headers=get_headers(token),
+        r = _request_with_reauth(
+            "POST", panel_url, token, f"/api/users/{username}/disable",
             timeout=20,
         )
         if r.status_code == 200:
@@ -131,9 +142,8 @@ def enable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
     """Enable a user on the panel."""
     username = _canonical_username(username)
     try:
-        r = SESSION.post(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}/enable"),
-            headers=get_headers(token),
+        r = _request_with_reauth(
+            "POST", panel_url, token, f"/api/users/{username}/enable",
             timeout=20,
         )
         if r.status_code == 200:
@@ -147,9 +157,8 @@ def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
     """Delete a user on the panel."""
     username = _canonical_username(username)
     try:
-        r = SESSION.delete(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}"),
-            headers=get_headers(token),
+        r = _request_with_reauth(
+            "DELETE", panel_url, token, f"/api/users/{username}",
             timeout=20,
         )
         if r.status_code == 200:
@@ -163,9 +172,8 @@ def reset_remote_user_usage(panel_url: str, token: str, username: str) -> Tuple[
     """Reset traffic statistics for *username* on the panel."""
     username = _canonical_username(username)
     try:
-        r = SESSION.post(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}/reset"),
-            headers=get_headers(token),
+        r = _request_with_reauth(
+            "POST", panel_url, token, f"/api/users/{username}/reset",
             timeout=20,
         )
         if r.status_code == 200:
@@ -195,10 +203,10 @@ def update_remote_user(
     if len(payload) == 1:
         return True, None
     try:
-        r = SESSION.put(
-            urljoin(panel_url.rstrip('/') + '/', f"/api/users/{username}"),
+        r = _request_with_reauth(
+            "PUT", panel_url, token, f"/api/users/{username}",
             json=payload,
-            headers={**get_headers(token), "Content-Type": "application/json"},
+            headers={"Content-Type": "application/json"},
             timeout=20,
         )
         if r.status_code == 200:
