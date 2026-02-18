@@ -24,6 +24,7 @@ SESSION = requests.Session()
 import os
 from cachetools import TTLCache, cached
 from threading import RLock
+from services.panel_tokens import refresh_panel_access_token_for_request
 
 ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
 
@@ -36,6 +37,19 @@ def get_headers(token: str) -> Dict[str, str]:
     """Return headers (cookie based) for the given session token."""
     return {"Cookie": token}
 
+
+
+
+def _request_with_reauth(method: str, panel_url: str, token: str, path: str, **kwargs):
+    url = urljoin(panel_url.rstrip('/') + '/', path)
+    extra_headers = kwargs.pop("headers", {}) or {}
+    response = SESSION.request(method, url, headers={**get_headers(token), **extra_headers}, **kwargs)
+    if response.status_code not in (401, 403):
+        return response
+    new_token = refresh_panel_access_token_for_request(panel_url, token, panel_type="sanaei")
+    if not new_token:
+        return response
+    return SESSION.request(method, url, headers={**get_headers(new_token), **extra_headers}, **kwargs)
 
 def fetch_user_services(panel_url: str, token: str, username: str) -> Tuple[Optional[List[int]], Optional[str]]:
     """3x-ui does not expose service identifiers; return an empty list."""
@@ -51,10 +65,10 @@ def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dic
     ``/panel/api/inbounds/addClient`` endpoint.
     """
     try:
-        r = SESSION.post(
-            urljoin(panel_url.rstrip('/') + '/', 'panel/api/inbounds/addClient'),
+        r = _request_with_reauth(
+            "POST", panel_url, token, 'panel/api/inbounds/addClient',
             json=payload,
-            headers={**get_headers(token), 'Content-Type': 'application/json'},
+            headers={'Content-Type': 'application/json'},
             timeout=20,
         )
         if r.status_code == 200:
@@ -67,9 +81,9 @@ def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dic
 def _list_inbounds(panel_url: str, token: str) -> Tuple[Optional[List[Dict]], Optional[str]]:
     """Return list of inbounds or an error message."""
     try:
-        r = SESSION.get(
-            urljoin(panel_url.rstrip('/') + '/', 'panel/api/inbounds/list'),
-            headers={"accept": "application/json", **get_headers(token)},
+        r = _request_with_reauth(
+            "GET", panel_url, token, 'panel/api/inbounds/list',
+            headers={"accept": "application/json"},
             timeout=15,
         )
         if r.status_code != 200:

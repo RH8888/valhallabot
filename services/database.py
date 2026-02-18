@@ -133,6 +133,7 @@ def ensure_schema() -> None:
                 admin_username VARCHAR(64) NOT NULL,
                 access_token VARCHAR(2048) NOT NULL,
                 admin_password_encrypted TEXT NULL,
+                token_refreshed_at DATETIME NULL,
                 template_username VARCHAR(64) NULL,
                 sub_url VARCHAR(2048) NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -154,6 +155,12 @@ def ensure_schema() -> None:
         try:
             cur.execute(
                 "ALTER TABLE panels ADD COLUMN admin_password_encrypted TEXT NULL AFTER access_token"
+            )
+        except MySQLError:
+            pass
+        try:
+            cur.execute(
+                "ALTER TABLE panels ADD COLUMN token_refreshed_at DATETIME NULL AFTER admin_password_encrypted"
             )
         except MySQLError:
             pass
