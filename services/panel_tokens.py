@@ -11,7 +11,7 @@ from typing import Iterable
 
 import requests
 
-from models.token_crypto import TokenEncryptionError, decrypt_token, encrypt_token
+from models.token_crypto import TokenEncryptionError
 
 from .database import with_mysql_cursor
 
@@ -115,21 +115,15 @@ def _is_auth_error(error: str | None) -> bool:
 
 
 def encrypt_panel_password(password: str) -> str:
-    """Encrypt a panel admin password for storage."""
+    """Store panel admin passwords as-is (encryption disabled)."""
 
-    return encrypt_token(password)
+    return password
 
 
 def decrypt_panel_password(ciphertext: str) -> str:
-    """Decrypt a stored panel admin password."""
-    try:
-        return decrypt_token(ciphertext)
-    except TokenEncryptionError:
-        # Backward compatibility: older rows may still store the
-        # admin password as plain text.
-        if isinstance(ciphertext, str) and ciphertext and not ciphertext.startswith("gAAAA"):
-            return ciphertext
-        raise
+    """Read panel admin passwords as-is (decryption disabled)."""
+
+    return ciphertext
 
 
 def _decode_jwt_payload(token: str) -> dict | None:
