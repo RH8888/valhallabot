@@ -177,23 +177,6 @@ def refresh_panel_access_token_for_request(panel_url: str, current_token: str, p
                 """,
                 (panel_url, panel_type),
             )
-            row = cur.fetchone()
-            if not row:
-                # Some APIs share request wrappers across compatible panel
-                # implementations (e.g. Rebecca uses Marzban-style calls).
-                # Fallback to URL lookup so auth-refresh still works.
-                cur.execute(
-                    """
-                    SELECT id, panel_url, panel_type, access_token, admin_username,
-                           admin_password_encrypted, token_refreshed_at
-                    FROM panels
-                    WHERE panel_url=%s
-                    ORDER BY (access_token=%s) DESC, id DESC
-                    LIMIT 1
-                    """,
-                    (panel_url, current_token or ""),
-                )
-                row = cur.fetchone()
         else:
             cur.execute(
                 """
@@ -206,7 +189,7 @@ def refresh_panel_access_token_for_request(panel_url: str, current_token: str, p
                 """,
                 (panel_url, current_token or ""),
             )
-            row = cur.fetchone()
+        row = cur.fetchone()
 
     if not row:
         return None

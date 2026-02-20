@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from services import init_mysql_pool, with_mysql_cursor
 from services.database import mysql_errors
-from services.panel_tokens import ensure_panel_tokens
 from services.settings import get_setting as get_owner_setting
 
 from apis import marzneshin, marzban, rebecca, sanaei, pasarguard, guardcore
@@ -75,19 +74,13 @@ def fetch_all_links():
                        p.panel_url,
                        p.access_token,
                        p.panel_type,
-                       p.usage_multiplier,
-                       p.admin_username,
-                       p.admin_password_encrypted,
-                       p.token_refreshed_at
+                       p.usage_multiplier
                 FROM local_user_panel_links lup
                 JOIN panels p ON p.id = lup.panel_id
                 ORDER BY lup.id ASC
                 """
             )
-            links = cur.fetchall()
-            if links:
-                ensure_panel_tokens(links)
-            return links
+            return cur.fetchall()
     except mysql_errors.ProgrammingError as e:
         if getattr(e, "errno", None) == 1146:  # table doesn't exist
             log.warning("local_user_panel_links table missing; creating")
