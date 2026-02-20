@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -19,6 +20,22 @@ from .database import with_mysql_cursor
 log = logging.getLogger(__name__)
 FORCE_REFRESH_INTERVAL = timedelta(hours=24)
 _TELEGRAM_TIMEOUT_SECONDS = 10
+
+
+def _mask_secret(value: str | None) -> str:
+    text = value or ""
+    if not text:
+        return "<empty>"
+    if len(text) <= 2:
+        return "*" * len(text)
+    return f"{text[0]}***{text[-1]}"
+
+
+def _credential_fingerprint(value: str | None) -> str:
+    text = value or ""
+    if not text:
+        return "empty"
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
 def _root_admin_chat_id() -> int | None:
@@ -194,6 +211,57 @@ def ensure_panel_access_token(panel_row: dict) -> dict:
         )
         return panel_row
 
+    username_whitespace = isinstance(admin_username, str) and admin_username != admin_username.strip()
+    password_whitespace = password != password.strip()
+    log.info(
+        (
+            "Panel credential check panel_id=%s type=%s username=%s username_len=%d "
+            "username_ws=%s password_len=%d password_empty=%s password_ws=%s "
+            "stored_secret_len=%d stored_secret_fingerprint=%s"
+        ),
+        panel_id,
+        panel_type,
+        _mask_secret(admin_username),
+        len(admin_username or ""),
+        username_whitespace,
+        len(password),
+        not bool(password),
+        password_whitespace,
+        len(encrypted or ""),
+        _credential_fingerprint(encrypted),
+    )
+
+    try:
+        roundtrip = decrypt_panel_password(encrypt_panel_password(password))
+    except TokenEncryptionError as exc:
+        log.warning("Panel password round-trip failed for panel %s: %s", panel_id, exc)
+        roundtrip = None
+    if roundtrip is not None and roundtrip != password:
+        log.warning(
+            (
+                "Panel password round-trip mismatch panel_id=%s "
+                "original_len=%d roundtrip_len=%d original_fp=%s roundtrip_fp=%s"
+            ),
+            panel_id,
+            len(password),
+            len(roundtrip),
+            _credential_fingerprint(password),
+            _credential_fingerprint(roundtrip),
+        )
+
+    log.info(
+        (
+            "Panel login payload panel_id=%s type=%s url=%s username=%s "
+            "password_mask=%s password_len=%d"
+        ),
+        panel_id,
+        panel_type,
+        panel_url,
+        _mask_secret(admin_username),
+        "*" * min(len(password), 8) if password else "<empty>",
+        len(password),
+    )
+
     new_token, err = auth_fn(panel_url, admin_username, password)
     if not new_token:
         log.warning("Failed to refresh panel token for panel %s (%s): %s", panel_id, panel_type, err)
@@ -208,11 +276,10 @@ def ensure_panel_access_token(panel_row: dict) -> dict:
                 """
                 UPDATE panels
                 SET access_token=%s,
-                    admin_password_encrypted=%s,
                     token_refreshed_at=NOW()
                 WHERE id=%s
                 """,
-                (new_token, encrypt_panel_password(password), int(panel_id)),
+                (new_token, int(panel_id)),
             )
 
     panel_row["access_token"] = new_token
