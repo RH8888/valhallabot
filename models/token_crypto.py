@@ -98,6 +98,27 @@ def _get_cipher() -> Fernet:
         ) from exc
 
 
+def _fallback_ciphers() -> list[Fernet]:
+    """Build ciphers from legacy keys used for decryption fallback."""
+
+    raw = _normalize_key(os.environ.get("AGENT_TOKEN_ENCRYPTION_OLD_KEYS"))
+    if not raw:
+        return []
+
+    ciphers: list[Fernet] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        key = _normalize_key(part)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        try:
+            ciphers.append(Fernet(key.encode()))
+        except ValueError:
+            log.warning("Ignoring invalid AGENT_TOKEN_ENCRYPTION_OLD_KEYS entry.")
+    return ciphers
+
+
 def encrypt_token(token: str) -> str:
     """Encrypt a raw token using the configured Fernet key."""
     try:
@@ -114,8 +135,15 @@ def decrypt_token(ciphertext: str) -> str:
         return _get_cipher().decrypt(ciphertext.encode()).decode()
     except TokenEncryptionError:
         raise
-    except InvalidToken as exc:
-        raise TokenEncryptionError("Stored token cannot be decrypted") from exc
+    except InvalidToken as primary_exc:
+        for cipher in _fallback_ciphers():
+            try:
+                return cipher.decrypt(ciphertext.encode()).decode()
+            except InvalidToken:
+                continue
+            except Exception as exc:  # pragma: no cover - defensive
+                raise TokenEncryptionError("Failed to decrypt token") from exc
+        raise TokenEncryptionError("Stored token cannot be decrypted") from primary_exc
     except Exception as exc:  # pragma: no cover - defensive
         raise TokenEncryptionError("Failed to decrypt token") from exc
 
