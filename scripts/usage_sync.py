@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from services import init_mysql_pool, with_mysql_cursor
 from services.database import mysql_errors
+from services.panel_tokens import ensure_panel_tokens
 from services.settings import get_setting as get_owner_setting
 
 from apis import marzneshin, marzban, rebecca, sanaei, pasarguard, guardcore
@@ -74,13 +75,31 @@ def fetch_all_links():
                        p.panel_url,
                        p.access_token,
                        p.panel_type,
-                       p.usage_multiplier
+                       p.usage_multiplier,
+                       p.admin_username,
+                       p.admin_password_encrypted,
+                       p.token_refreshed_at
                 FROM local_user_panel_links lup
                 JOIN panels p ON p.id = lup.panel_id
                 ORDER BY lup.id ASC
                 """
             )
-            return cur.fetchall()
+            links = cur.fetchall()
+            if not links:
+                return links
+
+            # Refresh once per unique panel, then fan out refreshed token to all links.
+            panel_rows = {}
+            for row in links:
+                panel_rows.setdefault(row["panel_id"], row)
+            refreshed_panels = ensure_panel_tokens(list(panel_rows.values()))
+            refreshed_by_panel = {int(p["panel_id"]): p for p in refreshed_panels if p.get("panel_id") is not None}
+            for row in links:
+                refreshed = refreshed_by_panel.get(int(row["panel_id"]))
+                if refreshed:
+                    row["access_token"] = refreshed.get("access_token") or row.get("access_token")
+                    row["token_refreshed_at"] = refreshed.get("token_refreshed_at")
+            return links
     except mysql_errors.ProgrammingError as e:
         if getattr(e, "errno", None) == 1146:  # table doesn't exist
             log.warning("local_user_panel_links table missing; creating")
