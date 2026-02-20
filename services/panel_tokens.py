@@ -4,9 +4,12 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
+
+import requests
 
 from models.token_crypto import TokenEncryptionError, decrypt_token, encrypt_token
 
@@ -15,6 +18,46 @@ from .database import with_mysql_cursor
 
 log = logging.getLogger(__name__)
 FORCE_REFRESH_INTERVAL = timedelta(hours=24)
+_TELEGRAM_TIMEOUT_SECONDS = 10
+
+
+def _root_admin_chat_id() -> int | None:
+    admin_ids = (os.getenv("ADMIN_IDS") or "").strip()
+    for raw in admin_ids.split(","):
+        candidate = raw.strip()
+        if candidate.isdigit():
+            return int(candidate)
+    return None
+
+
+def _notify_root_admin_refresh(message: str) -> None:
+    token = (os.getenv("BOT_TOKEN") or "").strip()
+    chat_id = _root_admin_chat_id()
+    if not token or not chat_id:
+        return
+
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": message},
+            timeout=_TELEGRAM_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        log.warning("Failed to send token refresh notification to root admin: %s", exc)
+
+
+def _panel_refresh_message(panel_id, panel_type: str, panel_url: str, status: str, detail: str) -> str:
+    pid = panel_id if panel_id is not None else "unknown"
+    ptype = panel_type or "unknown"
+    purl = panel_url or "unknown"
+    return (
+        "🔐 Panel token refresh\n"
+        f"Panel ID: {pid}\n"
+        f"Type: {ptype}\n"
+        f"URL: {purl}\n"
+        f"Status: {status}\n"
+        f"Detail: {detail}"
+    )
 
 
 def _authenticator_for_panel_type(panel_type: str):
@@ -131,17 +174,32 @@ def ensure_panel_access_token(panel_row: dict) -> dict:
     admin_username = panel_row.get("admin_username")
 
     if not panel_url or not admin_username:
+        _notify_root_admin_refresh(
+            _panel_refresh_message(
+                panel_id,
+                panel_type,
+                panel_url,
+                "failed",
+                "missing panel_url or admin_username",
+            )
+        )
         return panel_row
 
     try:
         password = decrypt_panel_password(encrypted)
     except TokenEncryptionError as exc:
         log.warning("Failed to decrypt panel password for panel %s: %s", panel_id, exc)
+        _notify_root_admin_refresh(
+            _panel_refresh_message(panel_id, panel_type, panel_url, "failed", f"decrypt error: {exc}")
+        )
         return panel_row
 
     new_token, err = auth_fn(panel_url, admin_username, password)
     if not new_token:
         log.warning("Failed to refresh panel token for panel %s (%s): %s", panel_id, panel_type, err)
+        _notify_root_admin_refresh(
+            _panel_refresh_message(panel_id, panel_type, panel_url, "failed", str(err or "unknown error"))
+        )
         return panel_row
 
     if panel_id:
@@ -153,6 +211,9 @@ def ensure_panel_access_token(panel_row: dict) -> dict:
 
     panel_row["access_token"] = new_token
     panel_row["token_refreshed_at"] = datetime.now(timezone.utc)
+    _notify_root_admin_refresh(
+        _panel_refresh_message(panel_id, panel_type, panel_url, "success", "new access token issued")
+    )
     return panel_row
 
 
