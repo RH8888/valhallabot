@@ -133,6 +133,13 @@ def clone_proxy_settings(proxies: dict) -> dict:
 def is_admin(tg_id: int) -> bool:
     return tg_id in admin_ids()
 
+
+def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> int:
+    owner_id = int(context.user_data.get("manage_owner_id") or actor_id)
+    if owner_id != actor_id and not is_admin(actor_id):
+        return actor_id
+    return owner_id
+
 # ---------- states ----------
 (
     ASK_PANEL_NAME, ASK_PANEL_TYPE, ASK_PANEL_URL, ASK_PANEL_USER, ASK_PANEL_PASS,
@@ -1187,6 +1194,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_sudo and not ag:
         return
 
+    context.user_data["manage_owner_id"] = uid
+
     header = ""
     if ag:
         limit_b = int(ag.get("plan_limit_bytes") or 0)
@@ -1771,27 +1780,30 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("list_users:"):
         page = int(data.split(":", 1)[1])
         page = max(0, page)
-        total = count_local_users(uid)
+        owner_id = get_manage_owner_id(context, uid)
+        total = count_local_users(owner_id)
         per = 25
         off = page * per
-        rows = list_all_local_users(uid, offset=off, limit=per) or []
+        rows = list_all_local_users(owner_id, offset=off, limit=per) or []
         if not rows and page > 0:
             page = 0 ; off = 0
-            rows = list_all_local_users(uid, offset=0, limit=per)
+            rows = list_all_local_users(owner_id, offset=0, limit=per)
         kb = [[InlineKeyboardButton("🔍 Search Users", callback_data="search_user")]]
         kb.extend([[InlineKeyboardButton(r["username"], callback_data=f"user_sel:{r['username']}")] for r in rows])
         nav = []
         if page > 0: nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"list_users:{page-1}"))
         if off + per < total: nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"list_users:{page+1}"))
         if nav: kb.append(nav)
-        kb.append([InlineKeyboardButton("⬅️ Back", callback_data="back_home")])
+        back_cb = "back_home" if owner_id == uid else f"agent_sel:{owner_id}"
+        kb.append([InlineKeyboardButton("⬅️ Back", callback_data=back_cb)])
         await q.edit_message_text(f"👥 کاربران (صفحه {page+1})", reply_markup=InlineKeyboardMarkup(kb))
         return ConversationHandler.END
 
     if data.startswith("user_sel:"):
         uname = data.split(":", 1)[1]
         context.user_data["manage_username"] = uname
-        return await show_user_card(q, uid, uname)
+        owner_id = get_manage_owner_id(context, uid)
+        return await show_user_card(q, owner_id, uname)
 
     if data == "act_edit_limit":
         await q.edit_message_text("لیمیت جدید: 0/unlimited یا 500MB / 10GB / 1.5TB") ; return ASK_EDIT_LIMIT
@@ -1801,16 +1813,18 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not uname:
             await q.edit_message_text("یوزر انتخاب نشده.")
             return ConversationHandler.END
-        reset_used(uid, uname)
-        return await show_user_card(q, uid, uname, notice="✅ مصرف صفر شد.")
+        owner_id = get_manage_owner_id(context, uid)
+        reset_used(owner_id, uname)
+        return await show_user_card(q, owner_id, uname, notice="✅ مصرف صفر شد.")
 
     if data == "act_qr_code":
         uname = context.user_data.get("manage_username")
         if not uname:
             await q.edit_message_text("یوزر انتخاب نشده.")
             return ConversationHandler.END
-        app_key = get_app_key(uid, uname)
-        sub_links = build_sub_links(uid, uname, app_key)
+        owner_id = get_manage_owner_id(context, uid)
+        app_key = get_app_key(owner_id, uname)
+        sub_links = build_sub_links(owner_id, uname, app_key)
         if not sub_links:
             await q.edit_message_text("لینک سابسکریپشن پیدا نشد.")
             return ConversationHandler.END
@@ -1822,17 +1836,21 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 photo=qr_img,
                 caption=f"🔗 {link}",
             )
-        return await show_user_card(q, uid, uname, notice="✅ QR codes sent.")
+        return await show_user_card(q, owner_id, uname, notice="✅ QR codes sent.")
 
     if data == "act_renew":
         await q.edit_message_text("چند روز اضافه شود؟ (مثلا 30)") ; return ASK_RENEW_DAYS
 
     if data == "act_assign_service":
         uname = context.user_data.get("manage_username")
+        owner_id = get_manage_owner_id(context, uid)
         rows = list_services()
         if not rows:
             await q.edit_message_text("هیچ سرویسی ثبت نشده.")
             return ConversationHandler.END
+        if not is_admin(uid):
+            allowed = list_agent_service_ids(owner_id)
+            rows = [r for r in rows if int(r["id"]) in allowed]
         kb = [[InlineKeyboardButton(r['name'], callback_data=f"user_service:{r['id']}")] for r in rows]
         kb.append([InlineKeyboardButton("⬅️ Back", callback_data="user_sel_back")])
         await q.edit_message_text("یک سرویس را انتخاب کن:", reply_markup=InlineKeyboardMarkup(kb))
@@ -1840,27 +1858,30 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("user_service:"):
         uname = context.user_data.get("manage_username")
+        owner_id = get_manage_owner_id(context, uid)
         sid = int(data.split(":",1)[1])
-        await set_local_user_service(uid, uname, sid)
-        return await show_user_card(q, uid, uname, notice="✅ سرویس کاربر ذخیره شد.")
+        await set_local_user_service(owner_id, uname, sid)
+        return await show_user_card(q, owner_id, uname, notice="✅ سرویس کاربر ذخیره شد.")
 
     if data == "act_toggle_user":
         uname = context.user_data.get("manage_username")
         if not uname:
             await q.edit_message_text("یوزر انتخاب نشده.")
             return ConversationHandler.END
-        row = get_local_user(uid, uname)
+        owner_id = get_manage_owner_id(context, uid)
+        row = get_local_user(owner_id, uname)
         if not row:
             await q.edit_message_text("کاربر پیدا نشد.")
             return ConversationHandler.END
         manual_disabled = bool(row.get("manual_disabled") or 0)
-        set_user_disabled(uid, uname, not manual_disabled)
+        set_user_disabled(owner_id, uname, not manual_disabled)
         notice = "✅ کاربر فعال شد." if manual_disabled else "🚫 کاربر غیرفعال شد."
-        return await show_user_card(q, uid, uname, notice=notice)
+        return await show_user_card(q, owner_id, uname, notice=notice)
 
     if data == "user_sel_back":
         uname = context.user_data.get("manage_username")
-        return await show_user_card(q, uid, uname)
+        owner_id = get_manage_owner_id(context, uid)
+        return await show_user_card(q, owner_id, uname)
 
     if data == "act_del_user":
         uname = context.user_data.get("manage_username")
@@ -1879,7 +1900,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not uname:
             await q.edit_message_text("یوزر انتخاب نشده.")
             return ConversationHandler.END
-        delete_user(uid, uname)
+        owner_id = get_manage_owner_id(context, uid)
+        delete_user(owner_id, uname)
         await q.edit_message_text("✅ کاربر حذف شد.")
         return ConversationHandler.END
 
@@ -1891,7 +1913,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = list_agents()
         kb = [[InlineKeyboardButton(f"{r['name']} - {r['telegram_user_id']}", callback_data=f"agent_sel:{r['telegram_user_id']}")] for r in rows[:50]]
         kb.append([InlineKeyboardButton("➕ Add Agent", callback_data="agent_add")])
-        kb.append([InlineKeyboardButton("⬅️ Back", callback_data="back_home")])
+        kb.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")])
         await q.edit_message_text("نماینده‌ها:", reply_markup=InlineKeyboardMarkup(kb))
         return ConversationHandler.END
 
@@ -1905,6 +1927,17 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         aid = int(data.split(":",1)[1])
         context.user_data["agent_tg_id"] = aid
         return await show_agent_card(q, context, aid)
+
+    if data == "agent_users":
+        if not is_admin(uid):
+            return ConversationHandler.END
+        agent_id = context.user_data.get("agent_tg_id")
+        if not agent_id:
+            await q.edit_message_text("نماینده انتخاب نشده.")
+            return ConversationHandler.END
+        context.user_data["manage_owner_id"] = int(agent_id)
+        return await on_agent_users_list(q, context)
+
 
     if data == "agent_set_quota":
         if not is_admin(uid): return ConversationHandler.END
@@ -2348,6 +2381,22 @@ async def show_service_card(q, context: ContextTypes.DEFAULT_TYPE, service_id: i
     await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
     return ConversationHandler.END
 
+async def on_agent_users_list(q, context: ContextTypes.DEFAULT_TYPE):
+    owner_id = int(context.user_data.get("manage_owner_id") or q.from_user.id)
+    total = count_local_users(owner_id)
+    per = 25
+    rows = list_all_local_users(owner_id, offset=0, limit=per) or []
+    kb = [[InlineKeyboardButton("🔍 Search Users", callback_data="search_user")]]
+    kb.extend([[InlineKeyboardButton(r["username"], callback_data=f"user_sel:{r['username']}")] for r in rows])
+    nav = []
+    if per < total:
+        nav.append(InlineKeyboardButton("بعدی ➡️", callback_data="list_users:1"))
+    if nav:
+        kb.append(nav)
+    kb.append([InlineKeyboardButton("⬅️ Back", callback_data=f"agent_sel:{owner_id}")])
+    await q.edit_message_text("👥 کاربران نماینده (صفحه 1)", reply_markup=InlineKeyboardMarkup(kb))
+    return ConversationHandler.END
+
 async def show_user_card(q, owner_id: int, uname: str, notice: str = None):
     row = get_local_user(owner_id, uname)
     if not row:
@@ -2425,6 +2474,7 @@ async def show_agent_card(q, context: ContextTypes.DEFAULT_TYPE, agent_tg_id: in
         [InlineKeyboardButton("📛 Set Max/User", callback_data="agent_set_max_user")],
         [InlineKeyboardButton("🔁 Renew (days)", callback_data="agent_renew_days")],
         [InlineKeyboardButton("🧰 Assign Services", callback_data="agent_assign_services")],
+        [InlineKeyboardButton("👥 Users", callback_data="agent_users")],
         [InlineKeyboardButton("📊 Agent Usage by Panel", callback_data="agent_usage_panel")],
         [InlineKeyboardButton("🔘 Toggle Active", callback_data="agent_toggle_active")],
         [InlineKeyboardButton("Show token", callback_data="admin_show_agent_token")],
@@ -3152,7 +3202,8 @@ async def got_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def got_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = (update.message.text or "").strip()
     uid = update.effective_user.id
-    rows = search_local_users(uid, q)
+    owner_id = get_manage_owner_id(context, uid)
+    rows = search_local_users(owner_id, q)
     if not rows:
         await update.message.reply_text("کاربری یافت نشد.")
         return ConversationHandler.END
@@ -3167,11 +3218,12 @@ async def handle_edit_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("یوزر انتخاب نشده.")
         return ConversationHandler.END
     new_bytes = parse_human_size(update.message.text or "")
-    update_limit(update.effective_user.id, uname, new_bytes)
+    owner_id = get_manage_owner_id(context, update.effective_user.id)
+    update_limit(owner_id, uname, new_bytes)
     class FakeCQ:
         async def edit_message_text(self, *args, **kwargs):
             await update.message.reply_text(*args, **kwargs)
-    return await show_user_card(FakeCQ(), update.effective_user.id, uname, notice="✅ لیمیت بروزرسانی شد.")
+    return await show_user_card(FakeCQ(), owner_id, uname, notice="✅ لیمیت بروزرسانی شد.")
 
 async def handle_renew_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uname = context.user_data.get("manage_username")
@@ -3184,11 +3236,12 @@ async def handle_renew_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await update.message.reply_text("❌ یک عدد مثبت بفرست (مثلا 30).")
         return ASK_RENEW_DAYS
-    renew_user(update.effective_user.id, uname, days)
+    owner_id = get_manage_owner_id(context, update.effective_user.id)
+    renew_user(owner_id, uname, days)
     class FakeCQ:
         async def edit_message_text(self, *args, **kwargs):
             await update.message.reply_text(*args, **kwargs)
-    return await show_user_card(FakeCQ(), update.effective_user.id, uname, notice=f"✅ {days} روز تمدید شد.")
+    return await show_user_card(FakeCQ(), owner_id, uname, notice=f"✅ {days} روز تمدید شد.")
 
 # ---------- cancel ----------
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
