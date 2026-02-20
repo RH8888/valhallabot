@@ -122,8 +122,14 @@ def encrypt_panel_password(password: str) -> str:
 
 def decrypt_panel_password(ciphertext: str) -> str:
     """Decrypt a stored panel admin password."""
-
-    return decrypt_token(ciphertext)
+    try:
+        return decrypt_token(ciphertext)
+    except TokenEncryptionError:
+        # Backward compatibility: older rows may still store the
+        # admin password as plain text.
+        if isinstance(ciphertext, str) and ciphertext and not ciphertext.startswith("gAAAA"):
+            return ciphertext
+        raise
 
 
 def _decode_jwt_payload(token: str) -> dict | None:
@@ -205,8 +211,14 @@ def ensure_panel_access_token(panel_row: dict) -> dict:
     if panel_id:
         with with_mysql_cursor() as cur:
             cur.execute(
-                "UPDATE panels SET access_token=%s, token_refreshed_at=NOW() WHERE id=%s",
-                (new_token, int(panel_id)),
+                """
+                UPDATE panels
+                SET access_token=%s,
+                    admin_password_encrypted=%s,
+                    token_refreshed_at=NOW()
+                WHERE id=%s
+                """,
+                (new_token, encrypt_panel_password(password), int(panel_id)),
             )
 
     panel_row["access_token"] = new_token
