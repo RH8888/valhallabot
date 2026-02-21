@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,6 +22,9 @@ from bot import set_local_user_service  # async function
 
 
 router = APIRouter(prefix="/users", dependencies=[Depends(get_identity)])
+
+USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{2,19}$")
+MIN_GUARDCORE_CREATE_LIMIT_BYTES = 20 * (1024**3)
 
 
 class UserOut(BaseModel):
@@ -116,6 +120,25 @@ def _assert_agent_service_allowed(identity: Identity, service_id: int | None) ->
         return
     if service_id not in _agent_service_ids(identity.agent_id):
         raise HTTPException(status_code=403, detail="service not assigned to agent")
+
+
+def _is_valid_local_username(username: str) -> bool:
+    return bool(USERNAME_RE.fullmatch((username or "").strip()))
+
+
+def _service_has_guardcore_panel(service_id: int) -> bool:
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1
+            FROM service_panels sp
+            JOIN panels p ON p.id = sp.panel_id
+            WHERE sp.service_id=%s AND LOWER(COALESCE(p.panel_type, ''))='guardcore'
+            LIMIT 1
+            """,
+            (service_id,),
+        )
+        return bool(cur.fetchone())
 
 
 def _list_users(
@@ -230,6 +253,14 @@ async def create_user(
     )
     if real_owner is None:
         raise HTTPException(status_code=400, detail="owner_id required")
+    if not _is_valid_local_username(data.username):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "invalid username: only English letters and numbers are allowed, "
+                "it must start with an English letter, and length must be 3-20"
+            ),
+        )
     service_id = data.service_id
     if service_id is None and data.template_username:
         template_row = _fetch_user(real_owner, data.template_username)
@@ -237,6 +268,15 @@ async def create_user(
             raise HTTPException(status_code=404, detail="template user not found")
         service_id = template_row.get("service_id")
     _assert_agent_service_allowed(identity, service_id)
+    if (
+        service_id is not None
+        and _service_has_guardcore_panel(int(service_id))
+        and int(data.limit_bytes or 0) < MIN_GUARDCORE_CREATE_LIMIT_BYTES
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="minimum limit is 20GB for services that include a GuardCore panel",
+        )
     upsert_local_user(real_owner, data.username, data.limit_bytes, data.duration_days)
     if service_id is not None:
         await set_local_user_service(real_owner, data.username, service_id)
