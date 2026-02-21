@@ -13,6 +13,7 @@ import os
 import logging
 import math
 import re
+import json
 from pathlib import Path
 from urllib.parse import urljoin, unquote, quote
 
@@ -507,12 +508,47 @@ def maybe_append_ratio_to_name(link: str, ratio: float, enabled: bool) -> str:
         return link
     if not link.lower().startswith(RATIO_NAME_SCHEMES):
         return link
+    ratio_text = f"{float(ratio):g}X"
+
+    if link.lower().startswith("vmess://"):
+        b64 = link[len("vmess://"):]
+        if not b64:
+            return link
+        is_urlsafe = "-" in b64 or "_" in b64
+        padded = b64 + "=" * (-len(b64) % 4)
+        try:
+            raw = (
+                base64.urlsafe_b64decode(padded)
+                if is_urlsafe
+                else base64.b64decode(padded)
+            )
+            obj = json.loads(raw.decode("utf-8"))
+            ps = obj.get("ps")
+            if not isinstance(ps, str):
+                return link
+            if ps.rstrip().endswith(ratio_text):
+                return link
+            obj["ps"] = f"{ps} {ratio_text}"
+            new_raw = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            new_b64 = (
+                base64.urlsafe_b64encode(new_raw).decode("ascii")
+                if is_urlsafe
+                else base64.b64encode(new_raw).decode("ascii")
+            )
+            if "=" not in b64:
+                new_b64 = new_b64.rstrip("=")
+            return f"vmess://{new_b64}"
+        except Exception:
+            return link
+
     i = link.find("#")
     if i == -1:
         return link
     try:
         name = unquote(link[i + 1:])
-        name = f"{name} {float(ratio):g}X"
+        if name.rstrip().endswith(ratio_text):
+            return link
+        name = f"{name} {ratio_text}"
         return f"{link[:i+1]}{quote(name, safe='')}"
     except Exception:
         return link
