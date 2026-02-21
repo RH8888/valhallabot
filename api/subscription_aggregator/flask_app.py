@@ -127,7 +127,7 @@ def list_mapped_links(owner_id, local_username):
         cur.execute(
             f"""
             SELECT lup.panel_id, lup.remote_username,
-                   p.panel_url, p.access_token, p.panel_type,
+                   p.panel_url, p.access_token, p.panel_type, p.usage_multiplier,
                    p.admin_username, p.admin_password_encrypted
             FROM local_user_panel_links lup
             JOIN panels p ON p.id = lup.panel_id
@@ -150,7 +150,7 @@ def list_all_panels(owner_id):
     with with_mysql_cursor() as cur:
         cur.execute(
             f"""
-            SELECT id, panel_url, access_token, panel_type,
+            SELECT id, panel_url, access_token, panel_type, usage_multiplier,
                    admin_username, admin_password_encrypted
             FROM panels
             WHERE telegram_user_id IN ({placeholders})
@@ -363,7 +363,7 @@ def fetch_links_from_panel(
         return [], "; ".join(errors)
 
 
-def collect_links(mapped, local_username: str, want_html: bool):
+def collect_links(owner_id: int, mapped, local_username: str, want_html: bool):
     """Fetch links for multiple panel mappings concurrently.
 
     Using a thread pool allows resolving subscription URLs from different
@@ -375,8 +375,9 @@ def collect_links(mapped, local_username: str, want_html: bool):
 
     panel_ids = [m["panel_id"] for m in mapped]
     disabled_name_map, disabled_num_map = load_disabled_filters(panel_ids)
+    prefix_ratio_enabled = (get_setting(owner_id, "subscription_prefix_panel_ratio") or "0") != "0"
 
-    def worker(l, dn_map, di_map):
+    def worker(l, dn_map, di_map, add_ratio_prefix=False):
         disabled_names = dn_map.get(l["panel_id"], set())
         disabled_nums = di_map.get(l["panel_id"], set())
         links, errs, rinfo = [], [], None
@@ -474,12 +475,17 @@ def collect_links(mapped, local_username: str, want_html: bool):
             links = [x for x in links if (extract_name(x) or "") not in disabled_names]
         if disabled_nums:
             links = [x for idx, x in enumerate(links, 1) if idx not in disabled_nums]
+        if add_ratio_prefix:
+            links = [add_ratio_to_config_name(x, l.get("usage_multiplier")) for x in links]
         return links, errs, rinfo
 
     max_workers_env = int(os.getenv("FETCH_MAX_WORKERS", "5"))
     max_workers = min(max_workers_env, len(mapped)) or 1
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = [ex.submit(worker, m, disabled_name_map, disabled_num_map) for m in mapped]
+        futures = [
+            ex.submit(worker, m, disabled_name_map, disabled_num_map, prefix_ratio_enabled)
+            for m in mapped
+        ]
         for fut in as_completed(futures):
             ls, errs, rinfo = fut.result()
             all_links.extend(ls)
@@ -499,6 +505,31 @@ def filter_dedupe(links):
             seen.add(ss)
             out.append(ss)
     return out
+
+
+def _format_ratio_prefix(multiplier) -> str:
+    try:
+        value = float(multiplier)
+    except (TypeError, ValueError):
+        return ""
+    if math.isclose(value, 1.0):
+        return ""
+    return f"{value:g}X"
+
+
+def add_ratio_to_config_name(link: str, multiplier) -> str:
+    ratio_prefix = _format_ratio_prefix(multiplier)
+    if not ratio_prefix:
+        return link
+    if "#" not in link:
+        return link
+    base, _, fragment = link.partition("#")
+    decoded_name = unquote(fragment or "").strip()
+    if decoded_name.lower().startswith(f"{ratio_prefix.lower()} "):
+        return link
+    new_name = quote(f"{ratio_prefix} {decoded_name}".strip(), safe="")
+    return f"{base}#{new_name}"
+
 
 def canonicalize_name(name: str) -> str:
     """Normalize a config name by stripping user-specific details."""
@@ -987,7 +1018,7 @@ def unified_links(local_username, app_key):
     all_links, errors, remote_info = [], [], None
     if not agent_blocked and not limit_reached and not manual_blocked:
         if mapped:
-            all_links, errors, remote_info = collect_links(mapped, local_username, want_html)
+            all_links, errors, remote_info = collect_links(owner_id, mapped, local_username, want_html)
         else:
             panels = list_all_panels(owner_id)
             mappings = [
@@ -997,10 +1028,11 @@ def unified_links(local_username, app_key):
                     "panel_url": p["panel_url"],
                     "access_token": p["access_token"],
                     "panel_type": p["panel_type"],
+                    "usage_multiplier": p.get("usage_multiplier", 1.0),
                 }
                 for p in panels
             ]
-            all_links, errors, remote_info = collect_links(mappings, local_username, want_html)
+            all_links, errors, remote_info = collect_links(owner_id, mappings, local_username, want_html)
 
     uniq = filter_dedupe(all_links)
     sid = lu.get("service_id") if lu else None
