@@ -1024,6 +1024,17 @@ def set_panel_api_key(owner_id: int, panel_id: int, api_key: str | None):
             params,
         )
 
+
+def set_panel_append_ratio_to_name(owner_id: int, panel_id: int, enabled: bool):
+    ids = expand_owner_ids(owner_id)
+    placeholders = ",".join(["%s"] * len(ids))
+    params = [1 if enabled else 0, int(panel_id)] + ids
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"UPDATE panels SET append_ratio_to_name=%s WHERE id=%s AND telegram_user_id IN ({placeholders})",
+            params,
+        )
+
 def get_panel(owner_id: int, panel_id: int):
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
@@ -1703,6 +1714,19 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(uid): return ConversationHandler.END
         await q.edit_message_text("نسبت مصرف را بفرست (مثلا 1 یا 0.5). برای ریست، '-':", reply_markup=_back_kb(f"panel_sel:{context.user_data.get('edit_panel_id')}"))
         return ASK_PANEL_MULTIPLIER
+    if data == "p_toggle_ratio_name":
+        if not is_admin(uid):
+            return ConversationHandler.END
+        pid = context.user_data.get("edit_panel_id")
+        info = get_panel(uid, pid) if pid else None
+        if not info:
+            await q.edit_message_text("پنل پیدا نشد.")
+            return ConversationHandler.END
+        ratio = float(info.get("usage_multiplier") or 1.0)
+        if abs(ratio - 1.0) <= 1e-9:
+            return await show_panel_card(q, context, uid, pid)
+        set_panel_append_ratio_to_name(uid, pid, not bool(info.get("append_ratio_to_name") or 0))
+        return await show_panel_card(q, context, uid, pid)
     if data == "p_set_sub":
         if not is_admin(uid): return ConversationHandler.END
         pid = context.user_data.get("edit_panel_id")
@@ -2316,6 +2340,9 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
     is_sanaei = p.get('panel_type') == 'sanaei'
     panel_type = (p.get("panel_type") or "").lower()
     supports_api_key = panel_type in ("rebecca", "guardcore")
+    ratio = float(p.get("usage_multiplier") or 1.0)
+    show_append_ratio_toggle = abs(ratio - 1.0) > 1e-9
+    append_ratio_enabled = bool(p.get("append_ratio_to_name") or 0)
     label = "Inbound" if is_sanaei else "Template"
     api_key_state = None
     if supports_api_key:
@@ -2326,8 +2353,10 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         f"🌐 URL: <code>{p['panel_url']}</code>",
         f"👤 Admin: <code>{p['admin_username']}</code>",
         f"🧬 {label}: <b>{p.get('template_username') or '-'}</b>",
-        f"⚖️ Ratio: <b>{float(p.get('usage_multiplier') or 1.0):.2f}x</b>",
+        f"⚖️ Ratio: <b>{ratio:.2f}x</b>",
     ]
+    if show_append_ratio_toggle:
+        lines.append(f"🏷️ Append ratio to config name: <b>{'ON' if append_ratio_enabled else 'OFF'}</b>")
     if supports_api_key:
         lines.append(f"🔐 API Key: <b>{api_key_state}</b>")
     if not is_sanaei:
@@ -2342,6 +2371,9 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         [InlineKeyboardButton("✏️ Rename Panel", callback_data="p_rename")],
         [InlineKeyboardButton("⚖️ Set Usage Ratio", callback_data="p_set_multiplier")],
     ]
+    if show_append_ratio_toggle:
+        toggle_label = "🟢 Append ratio to config name: ON" if append_ratio_enabled else "⚪️ Append ratio to config name: OFF"
+        kb.append([InlineKeyboardButton(toggle_label, callback_data="p_toggle_ratio_name")])
     if supports_api_key:
         kb.append([InlineKeyboardButton("🧾 Set/Clear API Key", callback_data="p_set_api_key")])
     if not is_sanaei:
