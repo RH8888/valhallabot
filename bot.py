@@ -174,6 +174,8 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
 
 # ---------- helpers ----------
 UNIT = 1024
+MIN_GUARDCORE_CREATE_LIMIT_BYTES = 20 * (UNIT**3)
+USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{2,19}$")
 
 def fmt_bytes_short(n: int) -> str:
     if n <= 0:
@@ -219,6 +221,25 @@ def gb_to_bytes(txt: str) -> int:
     except Exception:
         gb = 0.0
     return int(gb * (UNIT**3))
+
+
+def is_valid_local_username(username: str) -> bool:
+    return bool(USERNAME_RE.fullmatch((username or "").strip()))
+
+
+def service_has_guardcore_panel(service_id: int) -> bool:
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1
+            FROM service_panels sp
+            JOIN panels p ON p.id = sp.panel_id
+            WHERE sp.service_id=%s AND LOWER(COALESCE(p.panel_type, ''))='guardcore'
+            LIMIT 1
+            """,
+            (service_id,),
+        )
+        return bool(cur.fetchone())
 
 def make_panel_name(url, u):
     try:
@@ -2098,6 +2119,12 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not selected_ids:
             await q.edit_message_text("این سرویس هیچ پنلی ندارد.")
             return ConversationHandler.END
+        limit_bytes = int(context.user_data.get("limit_bytes") or 0)
+        if service_has_guardcore_panel(sid) and limit_bytes < MIN_GUARDCORE_CREATE_LIMIT_BYTES:
+            await q.edit_message_text(
+                "❌ برای سرویس دارای GuardCore حداقل حجم کاربر باید 20GB باشد. ساخت کاربر لغو شد."
+            )
+            return ConversationHandler.END
         await finalize_create_on_selected(q, context, uid, selected_ids)
         await set_local_user_service(uid, context.user_data.get("new_username"), sid)
         return ConversationHandler.END
@@ -3183,6 +3210,11 @@ async def got_newuser_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["new_username"] = (update.message.text or "").strip()
     if not context.user_data["new_username"]:
         await update.message.reply_text("❌ خالیه. دوباره بفرست:")
+        return ASK_NEWUSER_NAME
+    if not is_valid_local_username(context.user_data["new_username"]):
+        await update.message.reply_text(
+            "❌ نام کاربر نامعتبر است. فقط حروف/اعداد انگلیسی مجاز است، باید با حرف انگلیسی شروع شود و طول آن 3 تا 20 کاراکتر باشد."
+        )
         return ASK_NEWUSER_NAME
     uid = update.effective_user.id
     if not is_admin(uid):
