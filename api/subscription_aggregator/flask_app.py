@@ -37,6 +37,7 @@ logging.basicConfig(
 log = logging.getLogger("flask_agg")
 
 ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
+RATIO_NAME_SCHEMES = ("vless://", "vmess://", "ss://")
 SUB_PLACEHOLDER_BASE_CONFIG = "ss://bm9uZTp2YWxoYWxsYQ%3D%3D@127.0.0.1:53#"
 SUB_PLACEHOLDER_ENABLED_KEY = "subscription_placeholder_enabled"
 SUB_PLACEHOLDER_TEMPLATE_KEY = "subscription_placeholder_template"
@@ -128,7 +129,8 @@ def list_mapped_links(owner_id, local_username):
             f"""
             SELECT lup.panel_id, lup.remote_username,
                    p.panel_url, p.access_token, p.panel_type,
-                   p.admin_username, p.admin_password_encrypted
+                   p.admin_username, p.admin_password_encrypted,
+                   p.usage_multiplier, p.append_ratio_to_name
             FROM local_user_panel_links lup
             JOIN panels p ON p.id = lup.panel_id
             WHERE lup.owner_id IN ({placeholders}) AND lup.local_username=%s
@@ -151,7 +153,8 @@ def list_all_panels(owner_id):
         cur.execute(
             f"""
             SELECT id, panel_url, access_token, panel_type,
-                   admin_username, admin_password_encrypted
+                   admin_username, admin_password_encrypted,
+                   usage_multiplier, append_ratio_to_name
             FROM panels
             WHERE telegram_user_id IN ({placeholders})
             """,
@@ -474,6 +477,14 @@ def collect_links(mapped, local_username: str, want_html: bool):
             links = [x for x in links if (extract_name(x) or "") not in disabled_names]
         if disabled_nums:
             links = [x for idx, x in enumerate(links, 1) if idx not in disabled_nums]
+        links = [
+            maybe_append_ratio_to_name(
+                x,
+                float(l.get("usage_multiplier") or 1.0),
+                bool(l.get("append_ratio_to_name") or 0),
+            )
+            for x in links
+        ]
         return links, errs, rinfo
 
     max_workers_env = int(os.getenv("FETCH_MAX_WORKERS", "5"))
@@ -488,6 +499,23 @@ def collect_links(mapped, local_username: str, want_html: bool):
                 remote_info = rinfo
 
     return all_links, errors, remote_info
+
+def maybe_append_ratio_to_name(link: str, ratio: float, enabled: bool) -> str:
+    if not enabled:
+        return link
+    if abs(float(ratio) - 1.0) <= 1e-9:
+        return link
+    if not link.lower().startswith(RATIO_NAME_SCHEMES):
+        return link
+    i = link.find("#")
+    if i == -1:
+        return link
+    try:
+        name = unquote(link[i + 1:])
+        name = f"{name} {float(ratio):g}X"
+        return f"{link[:i+1]}{quote(name, safe='')}"
+    except Exception:
+        return link
 
 def filter_dedupe(links):
     out, seen = [], set()

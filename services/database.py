@@ -130,6 +130,7 @@ def ensure_schema() -> None:
                 name VARCHAR(128) NOT NULL,
                 panel_type VARCHAR(32) NOT NULL DEFAULT 'marzneshin',
                 usage_multiplier DOUBLE NOT NULL DEFAULT 1.0,
+                append_ratio_to_name TINYINT(1) NOT NULL DEFAULT 0,
                 admin_username VARCHAR(64) NOT NULL,
                 access_token VARCHAR(2048) NOT NULL,
                 admin_password_encrypted TEXT NULL,
@@ -149,6 +150,12 @@ def ensure_schema() -> None:
         try:
             cur.execute(
                 "ALTER TABLE panels ADD COLUMN usage_multiplier DOUBLE NOT NULL DEFAULT 1.0 AFTER panel_type"
+            )
+        except MySQLError:
+            pass
+        try:
+            cur.execute(
+                "ALTER TABLE panels ADD COLUMN append_ratio_to_name TINYINT(1) NOT NULL DEFAULT 0 AFTER usage_multiplier"
             )
         except MySQLError:
             pass
