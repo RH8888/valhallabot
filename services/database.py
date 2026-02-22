@@ -248,6 +248,36 @@ def ensure_schema() -> None:
                 FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_panel_usage_totals(
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                agent_tg_id BIGINT NOT NULL,
+                panel_id BIGINT NOT NULL,
+                total_used_bytes BIGINT NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_agent_panel_usage(agent_tg_id, panel_id),
+                FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO agent_panel_usage_totals(agent_tg_id, panel_id, total_used_bytes)
+            SELECT
+                lup.owner_id,
+                lup.panel_id,
+                COALESCE(SUM(ROUND(lup.last_used_traffic * COALESCE(p.usage_multiplier, 1.0))), 0) AS total_used_bytes
+            FROM local_user_panel_links lup
+            JOIN panels p ON p.id = lup.panel_id
+            GROUP BY lup.owner_id, lup.panel_id
+            ON DUPLICATE KEY UPDATE total_used_bytes = GREATEST(
+                agent_panel_usage_totals.total_used_bytes,
+                VALUES(total_used_bytes)
+            )
+            """
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS panel_disabled_configs(
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,

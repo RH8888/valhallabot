@@ -66,6 +66,41 @@ def ensure_links_table():
         )
 
 
+def ensure_agent_panel_usage_totals_table():
+    """Create lifetime usage table and backfill from existing link snapshots."""
+    with with_mysql_cursor(dict_=False) as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_panel_usage_totals(
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                agent_tg_id BIGINT NOT NULL,
+                panel_id BIGINT NOT NULL,
+                total_used_bytes BIGINT NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_agent_panel_usage(agent_tg_id, panel_id),
+                FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO agent_panel_usage_totals(agent_tg_id, panel_id, total_used_bytes)
+            SELECT
+                lup.owner_id,
+                lup.panel_id,
+                COALESCE(SUM(ROUND(lup.last_used_traffic * COALESCE(p.usage_multiplier, 1.0))), 0) AS total_used_bytes
+            FROM local_user_panel_links lup
+            JOIN panels p ON p.id = lup.panel_id
+            GROUP BY lup.owner_id, lup.panel_id
+            ON DUPLICATE KEY UPDATE total_used_bytes = GREATEST(
+                agent_panel_usage_totals.total_used_bytes,
+                VALUES(total_used_bytes)
+            )
+            """
+        )
+
+
 def fetch_all_links():
     try:
         with with_mysql_cursor() as cur:
@@ -150,6 +185,20 @@ def add_usage(owner_id, local_username, delta):
             WHERE telegram_user_id = %s
         """,
             (int(delta), int(owner_id)),
+        )
+
+
+def add_panel_lifetime_usage(owner_id, panel_id, delta):
+    if delta <= 0:
+        return
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO agent_panel_usage_totals(agent_tg_id, panel_id, total_used_bytes)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE total_used_bytes = LEAST(total_used_bytes + VALUES(total_used_bytes), 18446744073709551615)
+            """,
+            (int(owner_id), int(panel_id), int(delta)),
         )
 
 def update_last(link_id, new_used):
@@ -677,6 +726,7 @@ def loop():
                             multiplier = 1.0
                         weighted_delta = int(round(delta * multiplier))
                         add_usage(owner_id, local_username, weighted_delta)
+                        add_panel_lifetime_usage(owner_id, row["panel_id"], weighted_delta)
                         update_last(row["link_id"], used)
                         log.info("owner=%s local=%s +%s bytes (panel_id=%s)",
                                  owner_id, local_username, weighted_delta, row["panel_id"])
@@ -704,6 +754,7 @@ def loop():
 def main():
     load_dotenv()
     init_mysql_pool()
+    ensure_agent_panel_usage_totals_table()
     loop()
 
 if __name__ == "__main__":
