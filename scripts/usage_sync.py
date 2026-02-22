@@ -33,6 +33,11 @@ API_MODULES = {
 
 _local_users_columns = None
 
+DEFAULT_NEAR_LIMIT_SYNC_INTERVAL_MINUTES = 5
+DEFAULT_NORMAL_SYNC_INTERVAL_MINUTES = 10
+DEFAULT_NEAR_LIMIT_THRESHOLD_PERCENT = 10.0
+MIN_SYNC_INTERVAL_SECONDS = 60
+
 
 def get_api(panel_type: str):
     """Return API module for the given panel type."""
@@ -199,6 +204,79 @@ def get_local_user(owner_id, local_username):
 
 def get_setting(owner_id, key):
     return get_owner_setting(owner_id, key)
+
+
+def _parse_int_setting(owner_id: int, key: str, default_value: int, min_value: int = 1) -> int:
+    raw = (get_setting(owner_id, key) or "").strip()
+    if not raw:
+        return default_value
+    try:
+        parsed = int(float(raw))
+    except (TypeError, ValueError):
+        return default_value
+    return max(min_value, parsed)
+
+
+def _parse_near_limit_threshold(owner_id: int) -> tuple[str, float]:
+    raw = (get_setting(owner_id, "usage_sync_near_limit_threshold") or "").strip().lower()
+    if not raw:
+        return "percent", DEFAULT_NEAR_LIMIT_THRESHOLD_PERCENT
+
+    if raw.endswith("%"):
+        try:
+            val = float(raw[:-1].strip())
+            return "percent", max(0.0, min(100.0, val))
+        except (TypeError, ValueError):
+            return "percent", DEFAULT_NEAR_LIMIT_THRESHOLD_PERCENT
+
+    if raw.endswith("mb"):
+        try:
+            val = float(raw[:-2].strip())
+            return "mb", max(0.0, val)
+        except (TypeError, ValueError):
+            return "percent", DEFAULT_NEAR_LIMIT_THRESHOLD_PERCENT
+
+    try:
+        val = float(raw)
+        return "percent", max(0.0, min(100.0, val))
+    except (TypeError, ValueError):
+        return "percent", DEFAULT_NEAR_LIMIT_THRESHOLD_PERCENT
+
+
+def _is_near_limit(owner_id: int, local_username: str) -> bool:
+    lu = get_local_user(owner_id, local_username)
+    if not lu:
+        return False
+    limit = int(lu.get("plan_limit_bytes") or 0)
+    used = int(lu.get("used_bytes") or 0)
+    if limit <= 0:
+        return False
+
+    remaining = max(0, limit - used)
+    mode, threshold = _parse_near_limit_threshold(owner_id)
+    if mode == "mb":
+        remaining_mb = remaining / float(1024 ** 2)
+        return remaining_mb <= threshold
+
+    remaining_pct = (remaining / float(limit)) * 100.0 if limit > 0 else 100.0
+    return remaining_pct <= threshold
+
+
+def _sync_interval_seconds(owner_id: int, near_limit: bool) -> int:
+    near_minutes = _parse_int_setting(
+        owner_id,
+        "near_limit_sync_interval",
+        DEFAULT_NEAR_LIMIT_SYNC_INTERVAL_MINUTES,
+        min_value=1,
+    )
+    normal_minutes = _parse_int_setting(
+        owner_id,
+        "normal_sync_interval",
+        DEFAULT_NORMAL_SYNC_INTERVAL_MINUTES,
+        min_value=1,
+    )
+    selected_minutes = near_minutes if near_limit else normal_minutes
+    return max(MIN_SYNC_INTERVAL_SECONDS, selected_minutes * 60)
 
 
 def mark_usage_limit_notified(owner_id, local_username):
@@ -552,46 +630,67 @@ def sync_agent_now(owner_id: int):
 # ---------------- main loop ----------------
 
 def loop():
-    interval = int(os.getenv("USAGE_SYNC_INTERVAL", "60"))  # seconds
+    interval = int(os.getenv("USAGE_SYNC_INTERVAL", "60"))  # scheduler tick (seconds)
+    next_sync_at = {}
+
     while True:
         try:
             links = fetch_all_links()
             seen_owners = set()
+            links_by_user = {}
             for row in links:
-                used, err = fetch_used_traffic(row["panel_type"], row["panel_url"], row["access_token"], row["remote_username"])
-                if used is None:
-                    log.warning("fetch_used_traffic failed for %s@%s: %s",
-                                row["remote_username"], row["panel_url"], err)
+                key = (int(row["owner_id"]), row["local_username"])
+                links_by_user.setdefault(key, []).append(row)
+
+            now_ts = time.time()
+            retry_after_seconds = max(MIN_SYNC_INTERVAL_SECONDS, interval)
+
+            for (owner_id, local_username), user_links in links_by_user.items():
+                due_at = float(next_sync_at.get((owner_id, local_username), 0.0) or 0.0)
+                if due_at > now_ts:
                     continue
 
-                last = int(row["last_used_traffic"] or 0)
-                if used < last:
-                    # احتمالا پنل ریست شده
-                    log.info("used dropped (%s -> %s) for link %s; reset baseline",
-                             last, used, row["link_id"])
-                    update_last(row["link_id"], used)
-                    continue
+                user_failed = False
+                for row in user_links:
+                    used, err = fetch_used_traffic(row["panel_type"], row["panel_url"], row["access_token"], row["remote_username"])
+                    if used is None:
+                        log.warning("fetch_used_traffic failed for %s@%s: %s",
+                                    row["remote_username"], row["panel_url"], err)
+                        user_failed = True
+                        continue
 
-                delta = used - last
-                if delta > 0:
-                    try:
-                        multiplier = float(row.get("usage_multiplier") or 1.0)
-                    except (TypeError, ValueError):
-                        multiplier = 1.0
-                    if multiplier < 0:
-                        multiplier = 1.0
-                    weighted_delta = int(round(delta * multiplier))
-                    add_usage(row["owner_id"], row["local_username"], weighted_delta)
-                    update_last(row["link_id"], used)
-                    log.info("owner=%s local=%s +%s bytes (panel_id=%s)",
-                             row["owner_id"], row["local_username"], weighted_delta, row["panel_id"])
+                    last = int(row["last_used_traffic"] or 0)
+                    if used < last:
+                        # احتمالا پنل ریست شده
+                        log.info("used dropped (%s -> %s) for link %s; reset baseline",
+                                 last, used, row["link_id"])
+                        update_last(row["link_id"], used)
+                        continue
+
+                    delta = used - last
+                    if delta > 0:
+                        try:
+                            multiplier = float(row.get("usage_multiplier") or 1.0)
+                        except (TypeError, ValueError):
+                            multiplier = 1.0
+                        if multiplier < 0:
+                            multiplier = 1.0
+                        weighted_delta = int(round(delta * multiplier))
+                        add_usage(owner_id, local_username, weighted_delta)
+                        update_last(row["link_id"], used)
+                        log.info("owner=%s local=%s +%s bytes (panel_id=%s)",
+                                 owner_id, local_username, weighted_delta, row["panel_id"])
 
                 # بعد از هر آپدیت، وضعیت کاربر را بررسی کن (disable/enable)
-                try_disable_if_user_exceeded(row["owner_id"], row["local_username"])
-                try_enable_if_user_ok(row["owner_id"], row["local_username"])
+                try_disable_if_user_exceeded(owner_id, local_username)
+                try_enable_if_user_ok(owner_id, local_username)
+                seen_owners.add(owner_id)
 
-                # برای بهینگی، در پایان هر owner یک‌بار چک agent quota انجام می‌دهیم
-                seen_owners.add(int(row["owner_id"]))
+                if user_failed:
+                    next_sync_at[(owner_id, local_username)] = now_ts + retry_after_seconds
+                else:
+                    near_limit = _is_near_limit(owner_id, local_username)
+                    next_sync_at[(owner_id, local_username)] = now_ts + _sync_interval_seconds(owner_id, near_limit)
 
             # پس از پردازش همه لینک‌ها، وضعیت نماینده‌ها را چک کن
             for owner_id in seen_owners:
