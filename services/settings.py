@@ -11,20 +11,28 @@ _settings_table_missing_logged = False
 
 
 def get_setting(owner_id: int, key: str) -> Optional[str]:
-    from api.subscription_aggregator.ownership import expand_owner_ids
+    from api.subscription_aggregator.ownership import admin_ids
 
-    ids = expand_owner_ids(owner_id)
-    placeholders = ",".join(["%s"] * len(ids))
+    admins = sorted(admin_ids())
+    # Sudo-admin settings are global defaults for every admin and agent.
+    # Admin rows are checked first so their decisions are applied consistently.
+    ids = admins if owner_id in admins else admins + [owner_id]
+    if not ids:
+        ids = [owner_id]
+    in_placeholders = ",".join(["%s"] * len(ids))
+    order_clauses = " ".join([f"WHEN %s THEN {idx}" for idx, _ in enumerate(ids)])
+    order_by = f"CASE owner_id {order_clauses} ELSE {len(ids)} END"
     with with_mysql_cursor() as cur:
         try:
             cur.execute(
                 f"""
                 SELECT `value`
                 FROM settings
-                WHERE owner_id IN ({placeholders}) AND `key`=%s
+                WHERE owner_id IN ({in_placeholders}) AND `key`=%s
+                ORDER BY {order_by}
                 LIMIT 1
                 """,
-                tuple(ids) + (key,),
+                tuple(ids) + (key,) + tuple(ids),
             )
         except mysql_errors.ProgrammingError as exc:
             if getattr(exc, "errno", None) == errorcode.ER_NO_SUCH_TABLE:
