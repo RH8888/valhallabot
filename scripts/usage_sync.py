@@ -131,7 +131,7 @@ def fetch_used_traffic(panel_type, panel_url, bearer, remote_username):
     except Exception as e:  # pragma: no cover - network errors
         return None, str(e)
 
-def add_usage(owner_id, local_username, panel_id, delta):
+def add_usage(owner_id, local_username, delta):
     if delta <= 0:
         return
     with with_mysql_cursor() as cur:
@@ -150,14 +150,6 @@ def add_usage(owner_id, local_username, panel_id, delta):
             WHERE telegram_user_id = %s
         """,
             (int(delta), int(owner_id)),
-        )
-        cur.execute(
-            """
-            INSERT INTO agent_panel_usage_lifetime (owner_id, panel_id, used_bytes)
-            VALUES (%s, %s, %s)
-            ON DUPLICATE KEY UPDATE used_bytes = LEAST(used_bytes + VALUES(used_bytes), 18446744073709551615)
-            """,
-            (int(owner_id), int(panel_id), int(delta)),
         )
 
 def update_last(link_id, new_used):
@@ -684,7 +676,7 @@ def loop():
                         if multiplier < 0:
                             multiplier = 1.0
                         weighted_delta = int(round(delta * multiplier))
-                        add_usage(owner_id, local_username, row["panel_id"], weighted_delta)
+                        add_usage(owner_id, local_username, weighted_delta)
                         update_last(row["link_id"], used)
                         log.info("owner=%s local=%s +%s bytes (panel_id=%s)",
                                  owner_id, local_username, weighted_delta, row["panel_id"])

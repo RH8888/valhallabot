@@ -332,9 +332,22 @@ def get_agent_usage_by_panel(agent_id: int):
 
         cur.execute(
             """
-            SELECT panel_id, used_bytes
-            FROM agent_panel_usage_lifetime
-            WHERE owner_id = %s
+            SELECT
+                lup.panel_id,
+                COALESCE(SUM(ROUND(lup.last_used_traffic * COALESCE(p.usage_multiplier, 1.0))), 0) AS used_bytes
+            FROM local_user_panel_links lup
+            JOIN local_users lu
+              ON lu.owner_id = lup.owner_id
+             AND lu.username = lup.local_username
+            JOIN agent_services ags
+              ON ags.agent_tg_id = lu.owner_id
+             AND ags.service_id = lu.service_id
+            JOIN service_panels sp
+              ON sp.service_id = lu.service_id
+             AND sp.panel_id = lup.panel_id
+            JOIN panels p ON p.id = lup.panel_id
+            WHERE lu.owner_id = %s
+            GROUP BY lup.panel_id
             """,
             (agent_id,),
         )
