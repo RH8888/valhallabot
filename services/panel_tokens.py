@@ -22,6 +22,17 @@ FORCE_REFRESH_INTERVAL = timedelta(hours=24)
 _TELEGRAM_TIMEOUT_SECONDS = 10
 
 
+def _api_failure_token_refresh_enabled() -> bool:
+    """Return whether immediate refresh-on-auth-failure is enabled."""
+
+    return (os.getenv("ENABLE_API_FAILURE_TOKEN_REFRESH") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _mask_secret(value: str | None) -> str:
     text = value or ""
     if not text:
@@ -294,6 +305,9 @@ def ensure_panel_access_token(panel_row: dict) -> dict:
 
 def refresh_panel_access_token_for_request(panel_url: str, current_token: str, panel_type: str | None = None) -> str | None:
     """Lookup panel credentials and refresh token for an API request retry."""
+
+    if not _api_failure_token_refresh_enabled():
+        return None
 
     if not panel_url:
         return None
