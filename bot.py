@@ -251,6 +251,18 @@ def _parse_sync_minutes_input(raw: str) -> int | None:
     return val if val > 0 else None
 
 
+def _propagate_admin_setting_to_agents(key: str, value: str) -> None:
+    """Mirror an admin setting to all agents so worker loops read a consistent value."""
+    with with_mysql_cursor() as cur:
+        cur.execute("SELECT telegram_user_id FROM agents")
+        rows = cur.fetchall()
+    for row in rows:
+        tg_id = row.get("telegram_user_id")
+        if tg_id is None:
+            continue
+        set_setting(int(tg_id), key, value)
+
+
 def is_valid_local_username(username: str) -> bool:
     return bool(USERNAME_RE.fullmatch((username or "").strip()))
 
@@ -2883,6 +2895,7 @@ async def got_near_limit_sync_interval(update: Update, context: ContextTypes.DEF
         await update.message.reply_text("❌ یک عدد مثبت (دقیقه) بفرست:")
         return ASK_NEAR_LIMIT_SYNC_INTERVAL
     set_setting(update.effective_user.id, "near_limit_sync_interval", str(minutes))
+    _propagate_admin_setting_to_agents("near_limit_sync_interval", str(minutes))
     await update.message.reply_text("✅ بازه Near-Limit Sync ذخیره شد.", reply_markup=_back_kb("admin_technical"))
     return ConversationHandler.END
 
@@ -2895,6 +2908,7 @@ async def got_normal_sync_interval(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("❌ یک عدد مثبت (دقیقه) بفرست:")
         return ASK_NORMAL_SYNC_INTERVAL
     set_setting(update.effective_user.id, "normal_sync_interval", str(minutes))
+    _propagate_admin_setting_to_agents("normal_sync_interval", str(minutes))
     await update.message.reply_text("✅ بازه Normal Sync ذخیره شد.", reply_markup=_back_kb("admin_technical"))
     return ConversationHandler.END
 
