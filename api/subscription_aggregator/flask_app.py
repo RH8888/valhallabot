@@ -28,6 +28,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from services import ensure_panel_tokens, init_mysql_pool, with_mysql_cursor
 from services.database import errorcode, mysql_errors
+from services.settings import get_setting as get_owner_setting
 from apis import sanaei, pasarguard, rebecca, guardcore
 from .ownership import expand_owner_ids, canonical_owner_id
 
@@ -65,31 +66,18 @@ _settings_table_missing_logged = False
 
 
 def get_setting(owner_id: int, key: str):
-    ids = expand_owner_ids(owner_id)
-    placeholders = ",".join(["%s"] * len(ids))
-    with with_mysql_cursor() as cur:
-        try:
-            cur.execute(
-                f"""
-                SELECT value
-                FROM settings
-                WHERE owner_id IN ({placeholders}) AND `key`=%s
-                LIMIT 1
-                """,
-                tuple(ids) + (key,),
-            )
-        except mysql_errors.ProgrammingError as exc:
-            if getattr(exc, "errno", None) == errorcode.ER_NO_SUCH_TABLE:
-                global _settings_table_missing_logged
-                if not _settings_table_missing_logged:
-                    log.warning(
-                        "settings table missing; returning no setting values until it is created"
-                    )
-                    _settings_table_missing_logged = True
-                return None
-            raise
-        row = cur.fetchone()
-        return row["value"] if row else None
+    try:
+        return get_owner_setting(owner_id, key)
+    except mysql_errors.ProgrammingError as exc:
+        if getattr(exc, "errno", None) == errorcode.ER_NO_SUCH_TABLE:
+            global _settings_table_missing_logged
+            if not _settings_table_missing_logged:
+                log.warning(
+                    "settings table missing; returning no setting values until it is created"
+                )
+                _settings_table_missing_logged = True
+            return None
+        raise
 
 # ---------- queries ----------
 def get_owner_id(app_username, app_key):

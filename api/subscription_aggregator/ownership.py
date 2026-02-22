@@ -7,18 +7,35 @@ from typing import List, Set
 
 
 @lru_cache()
-def admin_ids() -> Set[int]:
-    """Return the configured set of administrator Telegram IDs."""
+def ordered_admin_ids() -> List[int]:
+    """Return configured administrator IDs in declared env order."""
     ids = (os.getenv("ADMIN_IDS") or "").strip()
     if not ids:
-        return set()
-    return {int(x.strip()) for x in ids.split(",") if x.strip().isdigit()}
+        return []
+    ordered: List[int] = []
+    seen: Set[int] = set()
+    for raw in ids.split(","):
+        raw = raw.strip()
+        if not raw.isdigit():
+            continue
+        value = int(raw)
+        if value in seen:
+            continue
+        ordered.append(value)
+        seen.add(value)
+    return ordered
+
+
+@lru_cache()
+def admin_ids() -> Set[int]:
+    """Return the configured set of administrator Telegram IDs."""
+    return set(ordered_admin_ids())
 
 
 def expand_owner_ids(owner_id: int) -> List[int]:
     """Return the list of owner IDs that should be queried for shared data."""
-    ids = admin_ids()
-    return list(ids) if owner_id in ids else [owner_id]
+    admins = ordered_admin_ids()
+    return admins if owner_id in set(admins) else [owner_id]
 
 
 def canonical_owner_id(owner_id: int) -> int:
@@ -27,4 +44,4 @@ def canonical_owner_id(owner_id: int) -> int:
     return ids[0]
 
 
-__all__ = ["admin_ids", "expand_owner_ids", "canonical_owner_id"]
+__all__ = ["admin_ids", "ordered_admin_ids", "expand_owner_ids", "canonical_owner_id"]

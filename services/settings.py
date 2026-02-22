@@ -11,9 +11,9 @@ _settings_table_missing_logged = False
 
 
 def get_setting(owner_id: int, key: str) -> Optional[str]:
-    from api.subscription_aggregator.ownership import admin_ids
+    from api.subscription_aggregator.ownership import ordered_admin_ids
 
-    admins = sorted(admin_ids())
+    admins = ordered_admin_ids()
     # Sudo-admin settings are global defaults for every admin and agent.
     # Admin rows are checked first so their decisions are applied consistently.
     ids = admins if owner_id in admins else admins + [owner_id]
