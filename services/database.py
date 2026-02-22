@@ -290,6 +290,20 @@ def ensure_schema() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_panel_usage_lifetime(
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                owner_id BIGINT NOT NULL,
+                panel_id BIGINT NOT NULL,
+                used_bytes BIGINT NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_owner_panel(owner_id, panel_id),
+                FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+        )
         try:
             cur.execute("ALTER TABLE agents ADD COLUMN user_limit BIGINT NOT NULL DEFAULT 0")
         except MySQLError:
@@ -330,6 +344,22 @@ def ensure_schema() -> None:
                 FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+        cur.execute(
+            """
+            INSERT INTO agent_panel_usage_lifetime (owner_id, panel_id, used_bytes)
+            SELECT
+                lup.owner_id,
+                lup.panel_id,
+                COALESCE(SUM(ROUND(lup.last_used_traffic * COALESCE(p.usage_multiplier, 1.0))), 0) AS used_bytes
+            FROM local_user_panel_links lup
+            JOIN panels p ON p.id = lup.panel_id
+            LEFT JOIN agent_panel_usage_lifetime apul
+              ON apul.owner_id = lup.owner_id
+             AND apul.panel_id = lup.panel_id
+            WHERE apul.id IS NULL
+            GROUP BY lup.owner_id, lup.panel_id
+            """
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS services(
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
