@@ -253,6 +253,11 @@ def _parse_sync_minutes_input(raw: str) -> int | None:
 
 def _propagate_admin_setting_to_agents(key: str, value: str) -> None:
     """Mirror an admin setting to all agents so worker loops read a consistent value."""
+    agent_key_map = {
+        "near_limit_sync_interval": "agent_near_limit_sync_interval",
+        "normal_sync_interval": "agent_normal_sync_interval",
+    }
+    agent_key = agent_key_map.get(key)
     with with_mysql_cursor() as cur:
         cur.execute("SELECT telegram_user_id FROM agents")
         rows = cur.fetchall()
@@ -261,6 +266,8 @@ def _propagate_admin_setting_to_agents(key: str, value: str) -> None:
         if tg_id is None:
             continue
         set_setting(int(tg_id), key, value)
+        if agent_key:
+            set_setting(int(tg_id), agent_key, value)
 
 
 def is_valid_local_username(username: str) -> bool:
