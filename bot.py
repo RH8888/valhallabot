@@ -911,24 +911,12 @@ def reset_used(owner_id: int, username: str):
     params = ids + [username]
     with with_mysql_cursor() as cur:
         cur.execute(
-            f"SELECT used_bytes, owner_id FROM local_users WHERE owner_id IN ({placeholders}) AND username=%s LIMIT 1",
-            params,
-        )
-        row = cur.fetchone()
-        prev_used = int(row["used_bytes"] or 0) if row else 0
-        owner_real = int(row["owner_id"]) if row else None
-        cur.execute(
             f"""UPDATE local_users
                 SET used_bytes=0,
                     usage_limit_notified=0
                 WHERE owner_id IN ({placeholders}) AND username=%s""",
             params,
         )
-        if prev_used > 0 and owner_real is not None:
-            cur.execute(
-                "UPDATE agents SET total_used_bytes = GREATEST(total_used_bytes - %s, 0) WHERE telegram_user_id=%s",
-                (prev_used, owner_real),
-            )
     for row in list_user_links(owner_id, username):
         api = get_api(row.get("panel_type"))
         remotes = (
@@ -1026,13 +1014,6 @@ def delete_local_user(owner_id: int, username: str):
     params = tuple(ids) + (username,)
     with with_mysql_cursor() as cur:
         cur.execute(
-            f"SELECT used_bytes, owner_id FROM local_users WHERE owner_id IN ({placeholders}) AND username=%s LIMIT 1",
-            params,
-        )
-        row = cur.fetchone()
-        used = int(row["used_bytes"] or 0) if row else 0
-        owner_real = int(row["owner_id"]) if row else None
-        cur.execute(
             f"DELETE FROM local_user_panel_links WHERE owner_id IN ({placeholders}) AND local_username=%s",
             params,
         )
@@ -1044,11 +1025,6 @@ def delete_local_user(owner_id: int, username: str):
             f"DELETE FROM app_users WHERE telegram_user_id IN ({placeholders}) AND username=%s",
             params,
         )
-        if used > 0 and owner_real is not None:
-            cur.execute(
-                "UPDATE agents SET total_used_bytes = GREATEST(total_used_bytes - %s, 0) WHERE telegram_user_id=%s",
-                (used, owner_real),
-            )
 
 
 def delete_user(owner_id: int, username: str):
