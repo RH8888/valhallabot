@@ -37,6 +37,10 @@ DEFAULT_NEAR_LIMIT_SYNC_INTERVAL_MINUTES = 5
 DEFAULT_NORMAL_SYNC_INTERVAL_MINUTES = 10
 DEFAULT_NEAR_LIMIT_THRESHOLD_PERCENT = 10.0
 MIN_SYNC_INTERVAL_SECONDS = 60
+AGENT_INTERVAL_SETTING_KEYS = {
+    "near_limit_sync_interval": "agent_near_limit_sync_interval",
+    "normal_sync_interval": "agent_normal_sync_interval",
+}
 
 
 def get_api(panel_type: str):
@@ -255,8 +259,26 @@ def get_setting(owner_id, key):
     return get_owner_setting(owner_id, key)
 
 
+def _owner_is_agent(owner_id: int) -> bool:
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM agents WHERE telegram_user_id=%s LIMIT 1",
+            (int(owner_id),),
+        )
+        return bool(cur.fetchone())
+
+
+def _usage_interval_setting(owner_id: int, key: str) -> str | None:
+    agent_key = AGENT_INTERVAL_SETTING_KEYS.get(key)
+    if agent_key and _owner_is_agent(owner_id):
+        value = get_setting(owner_id, agent_key)
+        if value is not None:
+            return value
+    return get_setting(owner_id, key)
+
+
 def _parse_int_setting(owner_id: int, key: str, default_value: int, min_value: int = 1) -> int:
-    raw = (get_setting(owner_id, key) or "").strip()
+    raw = (_usage_interval_setting(owner_id, key) or "").strip()
     if not raw:
         return default_value
     try:
