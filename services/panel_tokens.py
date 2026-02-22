@@ -248,7 +248,7 @@ def ensure_panel_access_token(panel_row: dict, *, force: bool = False, reason: s
         else:
             last_hourly = _last_credential_check_at.get(panel_key)
             hourly_due = not last_hourly or (now - last_hourly) >= HOURLY_CREDENTIAL_CHECK_INTERVAL
-            if token and not _token_expired(token) and not _should_force_refresh(panel_row) and not hourly_due:
+            if not hourly_due:
                 return panel_row
 
         log.info(
@@ -260,6 +260,7 @@ def ensure_panel_access_token(panel_row: dict, *, force: bool = False, reason: s
 
         encrypted = panel_row.get("admin_password_encrypted")
         if not encrypted:
+            _last_credential_check_at[panel_key] = now
             return panel_row
 
         panel_id = panel_row.get("id") or panel_row.get("panel_id")
