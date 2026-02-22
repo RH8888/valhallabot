@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
@@ -19,7 +20,31 @@ from .database import with_mysql_cursor
 
 log = logging.getLogger(__name__)
 FORCE_REFRESH_INTERVAL = timedelta(hours=24)
+HOURLY_CREDENTIAL_CHECK_INTERVAL = timedelta(hours=1)
+AUTH_FAILURE_REFRESH_COOLDOWN = timedelta(seconds=90)
 _TELEGRAM_TIMEOUT_SECONDS = 10
+_credential_check_lock = threading.Lock()
+_panel_check_locks: dict[str, threading.Lock] = {}
+_last_credential_check_at: dict[str, datetime] = {}
+_last_auth_fallback_check_at: dict[str, datetime] = {}
+
+
+def _panel_cache_key(panel_row: dict) -> str:
+    panel_id = panel_row.get("id") or panel_row.get("panel_id")
+    panel_type = (panel_row.get("panel_type") or "").lower()
+    panel_url = (panel_row.get("panel_url") or "").strip().lower()
+    if panel_id:
+        return f"id:{panel_id}"
+    return f"{panel_type}:{panel_url}"
+
+
+def _panel_singleflight_lock(key: str) -> threading.Lock:
+    with _credential_check_lock:
+        lock = _panel_check_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _panel_check_locks[key] = lock
+        return lock
 
 
 def _api_failure_token_refresh_enabled() -> bool:
@@ -192,8 +217,12 @@ def _token_expired(token: str, leeway_seconds: int = 60) -> bool:
     return exp_val <= int(time.time()) + leeway_seconds
 
 
-def ensure_panel_access_token(panel_row: dict) -> dict:
-    """Refresh a panel access token when required and credentials are stored."""
+def ensure_panel_access_token(panel_row: dict, *, force: bool = False, reason: str = "hourly") -> dict:
+    """Refresh a panel access token when required and credentials are stored.
+
+    ``force=True`` bypasses hourly cadence checks and is used as a fallback for
+    authentication failures. Forced refreshes are still cooldown-limited.
+    """
 
     panel_type = (panel_row.get("panel_type") or "").lower()
     auth_fn = _authenticator_for_panel_type(panel_type)
@@ -201,116 +230,156 @@ def ensure_panel_access_token(panel_row: dict) -> dict:
         return panel_row
 
     token = panel_row.get("access_token") or ""
-    if token and not _token_expired(token) and not _should_force_refresh(panel_row):
-        return panel_row
+    panel_key = _panel_cache_key(panel_row)
+    lock = _panel_singleflight_lock(panel_key)
 
-    encrypted = panel_row.get("admin_password_encrypted")
-    if not encrypted:
-        return panel_row
+    with lock:
+        now = datetime.now(timezone.utc)
+        if force:
+            last_fallback = _last_auth_fallback_check_at.get(panel_key)
+            if last_fallback and now - last_fallback < AUTH_FAILURE_REFRESH_COOLDOWN:
+                log.info(
+                    "Skipping fallback panel credential check for panel_key=%s reason=%s cooldown_seconds=%d",
+                    panel_key,
+                    reason,
+                    int(AUTH_FAILURE_REFRESH_COOLDOWN.total_seconds()),
+                )
+                return panel_row
+        else:
+            last_hourly = _last_credential_check_at.get(panel_key)
+            hourly_due = not last_hourly or (now - last_hourly) >= HOURLY_CREDENTIAL_CHECK_INTERVAL
+            if token and not _token_expired(token) and not _should_force_refresh(panel_row) and not hourly_due:
+                return panel_row
 
-    panel_id = panel_row.get("id") or panel_row.get("panel_id")
-    panel_url = panel_row.get("panel_url")
-    admin_username = panel_row.get("admin_username")
+        log.info(
+            "Running panel credential check panel_key=%s force=%s reason=%s",
+            panel_key,
+            force,
+            reason,
+        )
 
-    if not panel_url or not admin_username:
-        _notify_root_admin_refresh(
-            _panel_refresh_message(
-                panel_id,
-                panel_type,
-                panel_url,
-                "failed",
-                "missing panel_url or admin_username",
+        encrypted = panel_row.get("admin_password_encrypted")
+        if not encrypted:
+            return panel_row
+
+        panel_id = panel_row.get("id") or panel_row.get("panel_id")
+        panel_url = panel_row.get("panel_url")
+        admin_username = panel_row.get("admin_username")
+
+        if not panel_url or not admin_username:
+            _notify_root_admin_refresh(
+                _panel_refresh_message(
+                    panel_id,
+                    panel_type,
+                    panel_url,
+                    "failed",
+                    "missing panel_url or admin_username",
+                )
             )
-        )
-        return panel_row
+            if force:
+                _last_auth_fallback_check_at[panel_key] = now
+            else:
+                _last_credential_check_at[panel_key] = now
+            return panel_row
 
-    try:
-        password = decrypt_panel_password(encrypted)
-    except TokenEncryptionError as exc:
-        log.warning("Failed to decrypt panel password for panel %s: %s", panel_id, exc)
-        _notify_root_admin_refresh(
-            _panel_refresh_message(panel_id, panel_type, panel_url, "failed", f"decrypt error: {exc}")
-        )
-        return panel_row
+        try:
+            password = decrypt_panel_password(encrypted)
+        except TokenEncryptionError as exc:
+            log.warning("Failed to decrypt panel password for panel %s: %s", panel_id, exc)
+            _notify_root_admin_refresh(
+                _panel_refresh_message(panel_id, panel_type, panel_url, "failed", f"decrypt error: {exc}")
+            )
+            if force:
+                _last_auth_fallback_check_at[panel_key] = now
+            else:
+                _last_credential_check_at[panel_key] = now
+            return panel_row
 
-    username_whitespace = isinstance(admin_username, str) and admin_username != admin_username.strip()
-    password_whitespace = password != password.strip()
-    log.info(
-        (
-            "Panel credential check panel_id=%s type=%s username=%s username_len=%d "
-            "username_ws=%s password_len=%d password_empty=%s password_ws=%s "
-            "stored_secret_len=%d stored_secret_fingerprint=%s"
-        ),
-        panel_id,
-        panel_type,
-        _mask_secret(admin_username),
-        len(admin_username or ""),
-        username_whitespace,
-        len(password),
-        not bool(password),
-        password_whitespace,
-        len(encrypted or ""),
-        _credential_fingerprint(encrypted),
-    )
-
-    try:
-        roundtrip = decrypt_panel_password(encrypt_panel_password(password))
-    except TokenEncryptionError as exc:
-        log.warning("Panel password round-trip failed for panel %s: %s", panel_id, exc)
-        roundtrip = None
-    if roundtrip is not None and roundtrip != password:
-        log.warning(
+        username_whitespace = isinstance(admin_username, str) and admin_username != admin_username.strip()
+        password_whitespace = password != password.strip()
+        log.info(
             (
-                "Panel password round-trip mismatch panel_id=%s "
-                "original_len=%d roundtrip_len=%d original_fp=%s roundtrip_fp=%s"
+                "Panel credential check panel_id=%s type=%s username=%s username_len=%d "
+                "username_ws=%s password_len=%d password_empty=%s password_ws=%s "
+                "stored_secret_len=%d stored_secret_fingerprint=%s"
             ),
             panel_id,
+            panel_type,
+            _mask_secret(admin_username),
+            len(admin_username or ""),
+            username_whitespace,
             len(password),
-            len(roundtrip),
-            _credential_fingerprint(password),
-            _credential_fingerprint(roundtrip),
+            not bool(password),
+            password_whitespace,
+            len(encrypted or ""),
+            _credential_fingerprint(encrypted),
         )
 
-    log.info(
-        (
-            "Panel login payload panel_id=%s type=%s url=%s username=%s "
-            "password_mask=%s password_len=%d"
-        ),
-        panel_id,
-        panel_type,
-        panel_url,
-        _mask_secret(admin_username),
-        "*" * min(len(password), 8) if password else "<empty>",
-        len(password),
-    )
-
-    new_token, err = auth_fn(panel_url, admin_username, password)
-    if not new_token:
-        log.warning("Failed to refresh panel token for panel %s (%s): %s", panel_id, panel_type, err)
-        _notify_root_admin_refresh(
-            _panel_refresh_message(panel_id, panel_type, panel_url, "failed", str(err or "unknown error"))
-        )
-        return panel_row
-
-    if panel_id:
-        with with_mysql_cursor() as cur:
-            cur.execute(
-                """
-                UPDATE panels
-                SET access_token=%s,
-                    token_refreshed_at=NOW()
-                WHERE id=%s
-                """,
-                (new_token, int(panel_id)),
+        try:
+            roundtrip = decrypt_panel_password(encrypt_panel_password(password))
+        except TokenEncryptionError as exc:
+            log.warning("Panel password round-trip failed for panel %s: %s", panel_id, exc)
+            roundtrip = None
+        if roundtrip is not None and roundtrip != password:
+            log.warning(
+                (
+                    "Panel password round-trip mismatch panel_id=%s "
+                    "original_len=%d roundtrip_len=%d original_fp=%s roundtrip_fp=%s"
+                ),
+                panel_id,
+                len(password),
+                len(roundtrip),
+                _credential_fingerprint(password),
+                _credential_fingerprint(roundtrip),
             )
 
-    panel_row["access_token"] = new_token
-    panel_row["token_refreshed_at"] = datetime.now(timezone.utc)
-    if _panel_refresh_success_notification_enabled():
-        _notify_root_admin_refresh(
-            _panel_refresh_message(panel_id, panel_type, panel_url, "success", "new access token issued")
+        log.info(
+            (
+                "Panel login payload panel_id=%s type=%s url=%s username=%s "
+                "password_mask=%s password_len=%d"
+            ),
+            panel_id,
+            panel_type,
+            panel_url,
+            _mask_secret(admin_username),
+            "*" * min(len(password), 8) if password else "<empty>",
+            len(password),
         )
-    return panel_row
+
+        new_token, err = auth_fn(panel_url, admin_username, password)
+        if not new_token:
+            log.warning("Failed to refresh panel token for panel %s (%s): %s", panel_id, panel_type, err)
+            _notify_root_admin_refresh(
+                _panel_refresh_message(panel_id, panel_type, panel_url, "failed", str(err or "unknown error"))
+            )
+            if force:
+                _last_auth_fallback_check_at[panel_key] = now
+            else:
+                _last_credential_check_at[panel_key] = now
+            return panel_row
+
+        if panel_id:
+            with with_mysql_cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE panels
+                    SET access_token=%s,
+                        token_refreshed_at=NOW()
+                    WHERE id=%s
+                    """,
+                    (new_token, int(panel_id)),
+                )
+
+        panel_row["access_token"] = new_token
+        panel_row["token_refreshed_at"] = datetime.now(timezone.utc)
+        _last_credential_check_at[panel_key] = now
+        if force:
+            _last_auth_fallback_check_at[panel_key] = now
+        if _panel_refresh_success_notification_enabled():
+            _notify_root_admin_refresh(
+                _panel_refresh_message(panel_id, panel_type, panel_url, "success", "new access token issued")
+            )
+        return panel_row
 
 
 
@@ -371,7 +440,7 @@ def refresh_panel_access_token_for_request(panel_url: str, current_token: str, p
     if not row:
         return None
 
-    refreshed = ensure_panel_access_token({**row, "token_refreshed_at": None})
+    refreshed = ensure_panel_access_token({**row, "token_refreshed_at": None}, force=True, reason="auth-fallback")
     new_token = refreshed.get("access_token")
     if new_token and new_token != current_token:
         return new_token
@@ -382,7 +451,7 @@ def refresh_panel_access_token_on_auth_error(panel_row: dict, error: str | None)
 
     if not _is_auth_error(error) or not _api_failure_token_refresh_enabled():
         return panel_row
-    return ensure_panel_access_token({**panel_row, "token_refreshed_at": None})
+    return ensure_panel_access_token({**panel_row, "token_refreshed_at": None}, force=True, reason="auth-error")
 
 
 def ensure_panel_tokens(rows: Iterable[dict]) -> list[dict]:
