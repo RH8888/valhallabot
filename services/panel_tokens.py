@@ -20,6 +20,12 @@ from .database import with_mysql_cursor
 log = logging.getLogger(__name__)
 FORCE_REFRESH_INTERVAL = timedelta(hours=24)
 _TELEGRAM_TIMEOUT_SECONDS = 10
+ENABLE_API_FAILURE_TOKEN_REFRESH = (os.getenv("ENABLE_API_FAILURE_TOKEN_REFRESH") or "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def _mask_secret(value: str | None) -> str:
@@ -294,6 +300,9 @@ def ensure_panel_access_token(panel_row: dict) -> dict:
 
 def refresh_panel_access_token_for_request(panel_url: str, current_token: str, panel_type: str | None = None) -> str | None:
     """Lookup panel credentials and refresh token for an API request retry."""
+
+    if not ENABLE_API_FAILURE_TOKEN_REFRESH:
+        return None
 
     if not panel_url:
         return None
