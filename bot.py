@@ -170,7 +170,10 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
     ASK_SUB_PLACEHOLDER_TEMPLATE,
     ASK_SERVICE_EMERGENCY_CFG,
     ASK_EXTRA_SUB_DOMAINS,
-) = range(37)
+    ASK_NEAR_LIMIT_THRESHOLD,
+    ASK_NEAR_LIMIT_SYNC_INTERVAL,
+    ASK_NORMAL_SYNC_INTERVAL,
+) = range(40)
 
 # ---------- helpers ----------
 UNIT = 1024
@@ -221,6 +224,31 @@ def gb_to_bytes(txt: str) -> int:
     except Exception:
         gb = 0.0
     return int(gb * (UNIT**3))
+
+
+def _usage_sync_threshold_text(owner_id: int) -> str:
+    return (get_setting(owner_id, "usage_sync_near_limit_threshold") or "10%").strip() or "10%"
+
+
+def _usage_sync_minutes(owner_id: int, key: str, default_minutes: int) -> int:
+    raw = (get_setting(owner_id, key) or "").strip()
+    if not raw:
+        return default_minutes
+    try:
+        val = int(float(raw))
+    except Exception:
+        return default_minutes
+    return max(1, val)
+
+
+def _parse_sync_minutes_input(raw: str) -> int | None:
+    txt = (raw or "").strip().lower().replace("minutes", "").replace("minute", "").replace("min", "")
+    txt = txt.strip()
+    try:
+        val = int(float(txt))
+    except Exception:
+        return None
+    return val if val > 0 else None
 
 
 def is_valid_local_username(username: str) -> bool:
@@ -289,6 +317,28 @@ def _agent_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⬅️ Back", callback_data="back_home")],
     ]
     return InlineKeyboardMarkup(kb)
+
+
+def _admin_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
+    notif_enabled = (get_setting(owner_id, "limit_event_notifications_enabled") or "1") != "0"
+    notif_label = "🟢 Limit Event Notifications: ON" if notif_enabled else "🔴 Limit Event Notifications: OFF"
+    threshold_text = _usage_sync_threshold_text(owner_id)
+    near_minutes = _usage_sync_minutes(owner_id, "near_limit_sync_interval", 5)
+    normal_minutes = _usage_sync_minutes(owner_id, "normal_sync_interval", 10)
+    kb = [
+        [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
+        [InlineKeyboardButton(_sub_placeholder_toggle_label(owner_id), callback_data="toggle_sub_placeholder")],
+        [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
+        [InlineKeyboardButton(f"⚠️ Near-Limit Threshold: {threshold_text}", callback_data="set_near_limit_threshold")],
+        [InlineKeyboardButton(f"⏱️ Near-Limit Sync: {near_minutes}m", callback_data="set_near_limit_sync_interval")],
+        [InlineKeyboardButton(f"⏱️ Normal Sync: {normal_minutes}m", callback_data="set_normal_sync_interval")],
+        [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
+        [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
+        [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
+    ]
+    return InlineKeyboardMarkup(kb)
+
 
 def get_extra_domains(owner_id: int) -> list[str]:
     settings_owner = owner_id
@@ -1438,18 +1488,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(uid):
             await q.edit_message_text("دسترسی ندارید.")
             return ConversationHandler.END
-        notif_enabled = (get_setting(uid, "limit_event_notifications_enabled") or "1") != "0"
-        notif_label = "🟢 Limit Event Notifications: ON" if notif_enabled else "🔴 Limit Event Notifications: OFF"
-        kb = [
-            [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
-            [InlineKeyboardButton(_sub_placeholder_toggle_label(uid), callback_data="toggle_sub_placeholder")],
-            [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
-            [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
-            [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
-            [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
-        ]
-        await q.edit_message_text("Technical:", reply_markup=InlineKeyboardMarkup(kb))
+        await q.edit_message_text("Technical:", reply_markup=_admin_technical_kb(uid))
         return ConversationHandler.END
 
     if data == "agent_technical":
@@ -1465,18 +1504,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
         current = (get_setting(uid, "limit_event_notifications_enabled") or "1") != "0"
         set_setting(uid, "limit_event_notifications_enabled", "0" if current else "1")
-        notif_enabled = not current
-        notif_label = "🟢 Limit Event Notifications: ON" if notif_enabled else "🔴 Limit Event Notifications: OFF"
-        kb = [
-            [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
-            [InlineKeyboardButton(_sub_placeholder_toggle_label(uid), callback_data="toggle_sub_placeholder")],
-            [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
-            [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
-            [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
-            [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
-        ]
-        await q.edit_message_text("Technical:", reply_markup=InlineKeyboardMarkup(kb))
+        await q.edit_message_text("Technical:", reply_markup=_admin_technical_kb(uid))
         return ConversationHandler.END
 
     if data == "toggle_sub_placeholder":
@@ -1486,22 +1514,47 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current = (get_setting(uid, "subscription_placeholder_enabled") or "0") != "0"
         set_setting(uid, "subscription_placeholder_enabled", "0" if current else "1")
         if is_admin(uid):
-            notif_enabled = (get_setting(uid, "limit_event_notifications_enabled") or "1") != "0"
-            notif_label = "🟢 Limit Event Notifications: ON" if notif_enabled else "🔴 Limit Event Notifications: OFF"
-            kb = [
-                [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
-                [InlineKeyboardButton(_sub_placeholder_toggle_label(uid), callback_data="toggle_sub_placeholder")],
-                [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
-                [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
-                [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
-                [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
-                [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
-            ]
-            await q.edit_message_text("Technical:", reply_markup=InlineKeyboardMarkup(kb))
+            await q.edit_message_text("Technical:", reply_markup=_admin_technical_kb(uid))
         else:
             await q.edit_message_text("Settings:", reply_markup=_agent_technical_kb(uid))
         return ConversationHandler.END
 
+    if data == "set_near_limit_threshold":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        cur = _usage_sync_threshold_text(uid)
+        await q.edit_message_text(
+            "مقدار فعلی Near Limit Threshold\n"
+            f"{cur}\n\n"
+            "مقدار جدید را بفرست. نمونه‌ها: 10% یا 500MB",
+            reply_markup=_back_kb("admin_technical"),
+        )
+        return ASK_NEAR_LIMIT_THRESHOLD
+
+    if data == "set_near_limit_sync_interval":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        cur = _usage_sync_minutes(uid, "near_limit_sync_interval", 5)
+        await q.edit_message_text(
+            f"مقدار فعلی Near-Limit Sync Interval: {cur} دقیقه\n\n"
+            "عدد جدید (دقیقه) را بفرست:",
+            reply_markup=_back_kb("admin_technical"),
+        )
+        return ASK_NEAR_LIMIT_SYNC_INTERVAL
+
+    if data == "set_normal_sync_interval":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        cur = _usage_sync_minutes(uid, "normal_sync_interval", 10)
+        await q.edit_message_text(
+            f"مقدار فعلی Normal Sync Interval: {cur} دقیقه\n\n"
+            "عدد جدید (دقیقه) را بفرست:",
+            reply_markup=_back_kb("admin_technical"),
+        )
+        return ASK_NORMAL_SYNC_INTERVAL
     if data == "limit_msg":
         if not is_admin(uid):
             await q.edit_message_text("دسترسی ندارید.")
@@ -2804,6 +2857,61 @@ async def got_extra_sub_domains(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text("✅ دامنه‌های اضافه ذخیره شد.", reply_markup=_back_kb("admin_technical"))
     return ConversationHandler.END
 
+
+async def got_near_limit_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    msg = (update.message.text or "").strip().lower()
+    if not msg:
+        await update.message.reply_text("❌ مقدار خالیه. دوباره بفرست (مثل 10% یا 500MB):")
+        return ASK_NEAR_LIMIT_THRESHOLD
+
+    valid = False
+    if msg.endswith("%"):
+        try:
+            val = float(msg[:-1].strip())
+            valid = 0 <= val <= 100
+        except Exception:
+            valid = False
+    elif msg.endswith("mb"):
+        try:
+            val = float(msg[:-2].strip())
+            valid = val >= 0
+        except Exception:
+            valid = False
+
+    if not valid:
+        await update.message.reply_text("❌ فرمت نامعتبر است. مثل 10% یا 500MB بفرست:")
+        return ASK_NEAR_LIMIT_THRESHOLD
+
+    set_setting(update.effective_user.id, "usage_sync_near_limit_threshold", msg.upper() if msg.endswith("mb") else msg)
+    await update.message.reply_text("✅ آستانه Near Limit ذخیره شد.", reply_markup=_back_kb("admin_technical"))
+    return ConversationHandler.END
+
+
+async def got_near_limit_sync_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    minutes = _parse_sync_minutes_input(update.message.text or "")
+    if minutes is None:
+        await update.message.reply_text("❌ یک عدد مثبت (دقیقه) بفرست:")
+        return ASK_NEAR_LIMIT_SYNC_INTERVAL
+    set_setting(update.effective_user.id, "near_limit_sync_interval", str(minutes))
+    await update.message.reply_text("✅ بازه Near-Limit Sync ذخیره شد.", reply_markup=_back_kb("admin_technical"))
+    return ConversationHandler.END
+
+
+async def got_normal_sync_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    minutes = _parse_sync_minutes_input(update.message.text or "")
+    if minutes is None:
+        await update.message.reply_text("❌ یک عدد مثبت (دقیقه) بفرست:")
+        return ASK_NORMAL_SYNC_INTERVAL
+    set_setting(update.effective_user.id, "normal_sync_interval", str(minutes))
+    await update.message.reply_text("✅ بازه Normal Sync ذخیره شد.", reply_markup=_back_kb("admin_technical"))
+    return ConversationHandler.END
+
 # ---------- add/edit panels (admin only) ----------
 async def got_panel_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -3861,6 +3969,9 @@ def build_app():
             ],
             ASK_SERVICE_EMERGENCY_CFG: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_service_emerg_cfg)],
             ASK_EXTRA_SUB_DOMAINS: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_extra_sub_domains)],
+            ASK_NEAR_LIMIT_THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_near_limit_threshold)],
+            ASK_NEAR_LIMIT_SYNC_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_near_limit_sync_interval)],
+            ASK_NORMAL_SYNC_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_normal_sync_interval)],
 
             # preset mgmt
             ASK_PRESET_GB:   [MessageHandler(filters.TEXT & ~filters.COMMAND, got_preset_gb)],
