@@ -93,9 +93,8 @@ def ensure_agent_panel_usage_totals_table():
             SELECT
                 lup.owner_id,
                 lup.panel_id,
-                COALESCE(SUM(ROUND(lup.last_used_traffic * COALESCE(p.usage_multiplier, 1.0))), 0) AS total_used_bytes
+                COALESCE(SUM(lup.last_used_traffic), 0) AS total_used_bytes
             FROM local_user_panel_links lup
-            JOIN panels p ON p.id = lup.panel_id
             GROUP BY lup.owner_id, lup.panel_id
             ON DUPLICATE KEY UPDATE total_used_bytes = GREATEST(
                 agent_panel_usage_totals.total_used_bytes,
@@ -170,7 +169,7 @@ def fetch_used_traffic(panel_type, panel_url, bearer, remote_username):
     except Exception as e:  # pragma: no cover - network errors
         return None, str(e)
 
-def add_usage(owner_id, local_username, delta):
+def add_local_usage(owner_id, local_username, delta):
     if delta <= 0:
         return
     with with_mysql_cursor() as cur:
@@ -182,6 +181,12 @@ def add_usage(owner_id, local_username, delta):
         """,
             (int(delta), int(owner_id), local_username),
         )
+
+
+def add_agent_usage(owner_id, delta):
+    if delta <= 0:
+        return
+    with with_mysql_cursor() as cur:
         cur.execute(
             """
             UPDATE agents
@@ -747,8 +752,9 @@ def loop():
                         if multiplier < 0:
                             multiplier = 1.0
                         weighted_delta = int(round(delta * multiplier))
-                        add_usage(owner_id, local_username, weighted_delta)
-                        add_panel_lifetime_usage(owner_id, row["panel_id"], weighted_delta)
+                        add_local_usage(owner_id, local_username, weighted_delta)
+                        add_agent_usage(owner_id, delta)
+                        add_panel_lifetime_usage(owner_id, row["panel_id"], delta)
                         update_last(row["link_id"], used)
                         log.info("owner=%s local=%s +%s bytes (panel_id=%s)",
                                  owner_id, local_username, weighted_delta, row["panel_id"])
