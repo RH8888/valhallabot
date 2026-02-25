@@ -3463,6 +3463,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
     limit_bytes = context.user_data["limit_bytes"]
     days = context.user_data["duration_days"]
     usage_sec = days * 86400
+    local_user_exists = bool(get_local_user(owner_id, app_username))
 
     app_key = upsert_app_user(owner_id, app_username)
     upsert_local_user(owner_id, app_username, limit_bytes, days)
@@ -3527,6 +3528,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
         return
 
     ok, failed = 0, []
+    created_remotes: list[tuple[dict, list[str]]] = []
     for r in rows:
         api = get_api(r.get("panel_type"))
         remote_name = panel_username(r.get("panel_type"), app_username)
@@ -3552,6 +3554,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
             expire_ts = 0 if usage_sec <= 0 else int(datetime.now(timezone.utc).timestamp()) + usage_sec
             inbound_ids = per_panel.get(r["id"], {}).get("inbound_ids", [])
             remote_names = []
+            panel_failed = False
             for inb in inbound_ids:
                 rn = f"{app_username}_{secrets.token_hex(3)}"
                 client = {
@@ -3572,17 +3575,23 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                     obj, g = api.get_user(r["panel_url"], r["access_token"], rn)
                     if not obj:
                         failed.append(f"{r['panel_url']} (inb {inb}): {e or g or 'unknown error'}")
+                        panel_failed = True
                         continue
                 if not obj.get("enabled", True):
                     ok_en, err_en = api.enable_remote_user(r["panel_url"], r["access_token"], rn)
                     if not ok_en:
                         failed.append(f"{r['panel_url']} (inb {inb}): enable failed - {err_en or 'unknown'}")
+                        panel_failed = True
                         continue
                 remote_names.append(rn)
             if remote_names:
+                created_remotes.append((r, remote_names.copy()))
                 remote_name = ",".join(remote_names)
                 save_link(owner_id, app_username, r["id"], remote_name)
-                ok += 1
+                if not panel_failed:
+                    ok += 1
+            if panel_failed:
+                failed.append(f"{r['panel_url']}: user creation was partial and rolled back")
             continue
         else:
             expire_ts = 0 if usage_sec <= 0 else int(datetime.now(timezone.utc).timestamp()) + usage_sec
@@ -3610,12 +3619,34 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
             if not obj:
                 failed.append(f"{r['panel_url']}: {e or g or 'unknown error'}")
                 continue
+        created_remotes.append((r, [remote_name]))
         if not obj.get("enabled", True):
             ok_en, err_en = api.enable_remote_user(r["panel_url"], r["access_token"], remote_name)
             if not ok_en:
                 failed.append(f"{r['panel_url']}: enable failed - {err_en or 'unknown'}")
+                continue
         save_link(owner_id, app_username, r["id"], remote_name)
         ok += 1
+
+    if failed:
+        for panel, remote_names in created_remotes:
+            api = get_api(panel.get("panel_type"))
+            for remote in remote_names:
+                ok_rm, err_rm = api.remove_remote_user(panel["panel_url"], panel["access_token"], remote)
+                if not ok_rm:
+                    log.warning(
+                        "create rollback failed removing %s from %s: %s",
+                        remote,
+                        panel.get("panel_url"),
+                        err_rm or "unknown error",
+                    )
+            remove_link(owner_id, app_username, int(panel["id"]))
+        if not local_user_exists:
+            delete_local_user(owner_id, app_username)
+        txt = "❌ ساخت کاربر موفق نبود و تمام کاربران ساخته‌شده از پنل‌های دیگر حذف شدند."
+        txt += "\n⚠️ خطاها:\n" + "\n".join(f"• {e}" for e in failed[:8])
+        await q.edit_message_text(txt)
+        return
 
     links = build_sub_links(owner_id, app_username, app_key)
     txt = (
