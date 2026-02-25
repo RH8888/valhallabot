@@ -6,7 +6,7 @@ import time
 import logging
 import requests
 from urllib.parse import urljoin
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from dotenv import load_dotenv
 from services import init_mysql_pool, with_mysql_cursor
@@ -37,6 +37,7 @@ DEFAULT_NEAR_LIMIT_SYNC_INTERVAL_MINUTES = 5
 DEFAULT_NORMAL_SYNC_INTERVAL_MINUTES = 10
 DEFAULT_NEAR_LIMIT_THRESHOLD_PERCENT = 10.0
 MIN_SYNC_INTERVAL_SECONDS = 60
+REPORT_WINDOW_MINUTES = 10
 AGENT_INTERVAL_SETTING_KEYS = {
     "near_limit_sync_interval": "agent_near_limit_sync_interval",
     "normal_sync_interval": "agent_normal_sync_interval",
@@ -385,6 +386,150 @@ def send_owner_limit_notification(owner_id: int, message: str):
     except Exception as exc:  # pragma: no cover - network errors
         log.warning("failed sending limit event notification to %s: %s", owner_id, exc)
 
+
+def _send_telegram_message(chat_id: int, message: str):
+    bot_token = os.getenv("BOT_TOKEN", "").strip()
+    if not bot_token:
+        log.warning("BOT_TOKEN missing; cannot send telegram notification")
+        return False
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    try:
+        resp = requests.post(
+            url,
+            data={"chat_id": int(chat_id), "text": message},
+            timeout=8,
+        )
+        return resp.ok
+    except Exception as exc:  # pragma: no cover - network errors
+        log.warning("failed sending telegram notification to %s: %s", chat_id, exc)
+        return False
+
+
+def _split_message_chunks(text: str, limit: int = 3500) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    lines = text.splitlines()
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    for line in lines:
+        line_len = len(line) + 1
+        if current and current_len + line_len > limit:
+            chunks.append("\n".join(current))
+            current = [line]
+            current_len = line_len
+            continue
+        current.append(line)
+        current_len += line_len
+
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+def _get_sudo_admin_id() -> int | None:
+    ids = (os.getenv("ADMIN_IDS") or "").strip()
+    if not ids:
+        return None
+    for raw in ids.split(","):
+        raw = raw.strip()
+        if raw.isdigit():
+            return int(raw)
+    return None
+
+
+def _collect_all_agents_usage_rows():
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            """
+            SELECT a.telegram_user_id AS agent_tg_id,
+                   COALESCE(a.name, CONCAT('agent-', a.telegram_user_id)) AS agent_name,
+                   p.id AS panel_id,
+                   p.name AS panel_name,
+                   p.panel_type,
+                   COALESCE(apt.total_used_bytes, 0) AS used_bytes
+            FROM agents a
+            JOIN (
+                SELECT ags.agent_tg_id, sp.panel_id
+                FROM agent_services ags
+                JOIN service_panels sp ON sp.service_id = ags.service_id
+
+                UNION
+
+                SELECT apt2.agent_tg_id, apt2.panel_id
+                FROM agent_panel_usage_totals apt2
+            ) ap ON ap.agent_tg_id = a.telegram_user_id
+            JOIN panels p ON p.id = ap.panel_id
+            LEFT JOIN agent_panel_usage_totals apt
+              ON apt.agent_tg_id = ap.agent_tg_id AND apt.panel_id = ap.panel_id
+            ORDER BY a.telegram_user_id ASC, p.id ASC
+            """
+        )
+        return cur.fetchall()
+
+
+def send_nightly_panel_usage_report_if_due(now_utc: datetime, last_sent_local_day: str | None):
+    tehran_tz = timezone(timedelta(hours=3, minutes=30))
+    local_now = now_utc.astimezone(tehran_tz)
+    local_day = local_now.strftime("%Y-%m-%d")
+
+    if local_now.hour != 0 or local_now.minute >= REPORT_WINDOW_MINUTES:
+        return last_sent_local_day
+    if last_sent_local_day == local_day:
+        return last_sent_local_day
+
+    sudo_admin_id = _get_sudo_admin_id()
+    if not sudo_admin_id:
+        log.warning("ADMIN_IDS missing; skipping nightly panel usage report")
+        return last_sent_local_day
+
+    rows = _collect_all_agents_usage_rows()
+    if not rows:
+        message = "📊 Nightly panel usage report\nNo agent/panel usage data found."
+        _send_telegram_message(sudo_admin_id, message)
+        return local_day
+
+    report_lines = [
+        "📊 Nightly panel usage report (all agents)",
+        "Timezone: UTC+03:30 midnight snapshot",
+        "",
+    ]
+    current_agent = None
+    agent_total = 0
+    overall_total = 0
+
+    for row in rows:
+        agent_key = int(row["agent_tg_id"])
+        if agent_key != current_agent:
+            if current_agent is not None:
+                report_lines.append(f"  ↳ Agent total: {agent_total} bytes")
+                report_lines.append("")
+            current_agent = agent_key
+            agent_total = 0
+            report_lines.append(f"👤 {row['agent_name']} ({agent_key})")
+
+        used = int(row.get("used_bytes") or 0)
+        agent_total += used
+        overall_total += used
+        report_lines.append(
+            f"  • [{row['panel_id']}] {row['panel_name']} ({row['panel_type']}): {used} bytes"
+        )
+
+    if current_agent is not None:
+        report_lines.append(f"  ↳ Agent total: {agent_total} bytes")
+        report_lines.append("")
+    report_lines.append(f"🌐 Overall total usage: {overall_total} bytes")
+
+    report_text = "\n".join(report_lines)
+    chunks = _split_message_chunks(report_text)
+    for idx, chunk in enumerate(chunks, start=1):
+        title = f"(part {idx}/{len(chunks)})\n" if len(chunks) > 1 else ""
+        _send_telegram_message(sudo_admin_id, f"{title}{chunk}")
+
+    log.info("nightly panel usage report sent to sudo admin=%s for day=%s", sudo_admin_id, local_day)
+    return local_day
+
 def list_links_of_local_user(owner_id, local_username):
     with with_mysql_cursor() as cur:
         cur.execute("""
@@ -708,6 +853,7 @@ def sync_agent_now(owner_id: int):
 def loop():
     interval = int(os.getenv("USAGE_SYNC_INTERVAL", "60"))  # scheduler tick (seconds)
     next_sync_at = {}
+    last_sent_local_day = None
 
     while True:
         try:
@@ -774,6 +920,11 @@ def loop():
             for owner_id in seen_owners:
                 try_disable_agent_if_exceeded(owner_id)
                 try_enable_agent_if_ok(owner_id)
+
+            last_sent_local_day = send_nightly_panel_usage_report_if_due(
+                datetime.now(timezone.utc),
+                last_sent_local_day,
+            )
 
         except Exception as e:
             log.exception("sync loop error: %s", e)
