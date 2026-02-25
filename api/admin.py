@@ -320,13 +320,22 @@ def get_agent_usage_by_panel(agent_id: int):
         cur.execute(
             """
             SELECT DISTINCT p.id, p.name, p.panel_type, p.panel_url
-            FROM agent_services ags
-            JOIN service_panels sp ON sp.service_id = ags.service_id
-            JOIN panels p ON p.id = sp.panel_id
-            WHERE ags.agent_tg_id = %s
+            FROM (
+                SELECT sp.panel_id
+                FROM agent_services ags
+                JOIN service_panels sp ON sp.service_id = ags.service_id
+                WHERE ags.agent_tg_id = %s
+
+                UNION
+
+                SELECT apt.panel_id
+                FROM agent_panel_usage_totals apt
+                WHERE apt.agent_tg_id = %s
+            ) owned_panels
+            JOIN panels p ON p.id = owned_panels.panel_id
             ORDER BY p.id ASC
             """,
-            (agent_id,),
+            (agent_id, agent_id),
         )
         panel_rows = cur.fetchall()
 
