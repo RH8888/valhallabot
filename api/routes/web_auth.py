@@ -1,7 +1,7 @@
 """Web UI authentication routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from werkzeug.security import check_password_hash
 
@@ -13,6 +13,7 @@ from api.web_auth import (
     owner_settings_id,
     require_web_admin,
 )
+from api.users import UserListResponse, UserOut, _list_users
 from services.settings import get_setting
 
 router = APIRouter(prefix="/web", tags=["Web Auth"])
@@ -65,6 +66,42 @@ async def web_logout(response: Response) -> dict[str, str]:
 @router.get("/me")
 async def web_me(identity: WebIdentity = Depends(require_web_admin)) -> dict[str, str]:
     return {"username": identity.username, "role": identity.role}
+
+
+@router.get("/users", response_model=UserListResponse)
+async def web_list_users(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=200),
+    search: str | None = Query(None),
+    owner_id: int | None = Query(
+        None,
+        description="Optional explicit owner scope; defaults to canonical super-admin owner",
+    ),
+    _identity: WebIdentity = Depends(require_web_admin),
+) -> UserListResponse:
+    scoped_owner_id = owner_settings_id() if owner_id is None else owner_id
+    rows, total = _list_users(
+        owner_id=scoped_owner_id,
+        search=search,
+        offset=offset,
+        limit=limit,
+        service_id=None,
+    )
+    users = [
+        UserOut(
+            username=row["username"],
+            plan_limit_bytes=row.get("plan_limit_bytes", 0),
+            used_bytes=row.get("used_bytes", 0),
+            expire_at=row.get("expire_at"),
+            service_id=row.get("service_id"),
+            disabled=bool(row.get("manual_disabled") or row.get("disabled_pushed")),
+            manual_disabled=bool(row.get("manual_disabled")),
+            access_key=row.get("access_key"),
+            key_expires_at=row.get("key_expires_at"),
+        )
+        for row in rows
+    ]
+    return UserListResponse(total=total, users=users)
 
 
 __all__ = ["router"]
