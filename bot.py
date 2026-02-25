@@ -178,6 +178,8 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
 # ---------- helpers ----------
 UNIT = 1024
 MIN_GUARDCORE_CREATE_LIMIT_BYTES = 20 * (UNIT**3)
+GUARDCORE_TEST_PRESET_LIMIT_BYTES = 1 * (UNIT**3)
+GUARDCORE_TEST_PRESET_DAYS = 1
 USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{2,19}$")
 
 def fmt_bytes_short(n: int) -> str:
@@ -274,19 +276,18 @@ def is_valid_local_username(username: str) -> bool:
     return bool(USERNAME_RE.fullmatch((username or "").strip()))
 
 
-def service_has_guardcore_panel(service_id: int) -> bool:
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            """
-            SELECT 1
-            FROM service_panels sp
-            JOIN panels p ON p.id = sp.panel_id
-            WHERE sp.service_id=%s AND LOWER(COALESCE(p.panel_type, ''))='guardcore'
-            LIMIT 1
-            """,
-            (service_id,),
-        )
-        return bool(cur.fetchone())
+def guardcore_remote_limit(local_limit_bytes: int, panel_type: str | None) -> int:
+    """Return panel-safe limit bytes while preserving local quota semantics.
+
+    Guardcore rejects limits lower than 20GB. For local test presets we keep
+    the local quota (e.g. 1GB) for disable logic, but push a minimum 20GB limit
+    to Guardcore itself so account creation/update is accepted.
+    """
+
+    limit_bytes = max(0, int(local_limit_bytes or 0))
+    if (panel_type or "").lower() == "guardcore" and 0 < limit_bytes < MIN_GUARDCORE_CREATE_LIMIT_BYTES:
+        return MIN_GUARDCORE_CREATE_LIMIT_BYTES
+    return limit_bytes
 
 def make_panel_name(url, u):
     try:
@@ -854,8 +855,9 @@ def update_limit(owner_id: int, username: str, new_limit_bytes: int):
             else [row["remote_username"]]
         )
         for rn in remotes:
+            remote_limit = guardcore_remote_limit(effective_limit, row.get("panel_type"))
             ok, err = api.update_remote_user(
-                row["panel_url"], row["access_token"], rn, data_limit=effective_limit
+                row["panel_url"], row["access_token"], rn, data_limit=remote_limit
             )
             if not ok:
                 log.warning("remote limit update failed on %s: %s", row["panel_url"], err)
@@ -1439,6 +1441,12 @@ async def show_preset_menu(q, context, uid: int, notice: str | None = None):
 async def show_preset_select(update_or_q, context, uid: int, notice: str | None = None):
     rows = list_presets(uid)
     kb = [[InlineKeyboardButton(f"{fmt_bytes_short(r['limit_bytes'])} / {r['duration_days']}d", callback_data=f"preset_sel:{r['id']}")] for r in rows]
+    kb.append([
+        InlineKeyboardButton(
+            f"🧪 Test {fmt_bytes_short(GUARDCORE_TEST_PRESET_LIMIT_BYTES)} / {GUARDCORE_TEST_PRESET_DAYS}d",
+            callback_data="preset_test_guardcore",
+        )
+    ])
     kb.append([InlineKeyboardButton("✏️ Custom", callback_data="preset_custom")])
     text = "یک پریست را انتخاب کن:" if rows else "پریست تعریف نشده، Custom را بزن:" 
     if notice: text = f"{notice}\n{text}"
@@ -1656,6 +1664,16 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await show_preset_select(q, context, uid, notice=f"❌ حداکثر حجم مجاز {fmt_bytes_short(max_b)} است.")
         context.user_data["limit_bytes"] = int(info.get("limit_bytes") or 0)
         context.user_data["duration_days"] = int(info.get("duration_days") or 0)
+        class Fake:
+            async def edit_message_text(self, *a, **k):
+                await q.edit_message_text(*a, **k)
+        return await show_service_select(Fake(), context, uid)
+    if data == "preset_test_guardcore":
+        max_b = int(context.user_data.get("agent_max_user_bytes") or 0)
+        if max_b > 0 and GUARDCORE_TEST_PRESET_LIMIT_BYTES > max_b:
+            return await show_preset_select(q, context, uid, notice=f"❌ حداکثر حجم مجاز {fmt_bytes_short(max_b)} است.")
+        context.user_data["limit_bytes"] = GUARDCORE_TEST_PRESET_LIMIT_BYTES
+        context.user_data["duration_days"] = GUARDCORE_TEST_PRESET_DAYS
         class Fake:
             async def edit_message_text(self, *a, **k):
                 await q.edit_message_text(*a, **k)
@@ -2195,11 +2213,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("این سرویس هیچ پنلی ندارد.")
             return ConversationHandler.END
         limit_bytes = int(context.user_data.get("limit_bytes") or 0)
-        if service_has_guardcore_panel(sid) and limit_bytes < MIN_GUARDCORE_CREATE_LIMIT_BYTES:
-            await q.edit_message_text(
-                "❌ برای سرویس دارای GuardCore حداقل حجم کاربر باید 20GB باشد. ساخت کاربر لغو شد."
-            )
-            return ConversationHandler.END
         await finalize_create_on_selected(q, context, uid, selected_ids)
         await set_local_user_service(uid, context.user_data.get("new_username"), sid)
         return ConversationHandler.END
@@ -3530,7 +3543,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
         elif r.get("panel_type") == "guardcore":
             payload = {
                 "username": remote_name,
-                "limit_usage": limit_bytes,
+                "limit_usage": guardcore_remote_limit(limit_bytes, r.get("panel_type")),
                 "limit_expire": usage_sec,
                 "note": "created_by_bot",
                 "service_ids": per_panel.get(r["id"], {}).get("service_ids", []),
@@ -3783,7 +3796,7 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
 
                 payload = {
                     "username": remote_username,
-                    "limit_usage": limit_bytes_default,
+                    "limit_usage": guardcore_remote_limit(limit_bytes_default, p.get("panel_type")),
                     "limit_expire": usage_duration_default,
                     "note": "user_edit_add_panel",
                     "service_ids": svc or [],
