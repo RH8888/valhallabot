@@ -335,9 +335,12 @@ def _sub_placeholder_toggle_label(owner_id: int) -> str:
     return "🟢 Sub Placeholder: ON" if enabled else "🔴 Sub Placeholder: OFF"
 
 def _agent_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
+    webui_username = (get_setting(owner_id, "webui_agent_username") or "").strip()
+    webui_config_label = f"🔐 Web UI Login: {webui_username}" if webui_username else "🔐 Web UI Login: not set"
     kb = [
         [InlineKeyboardButton(_sub_placeholder_toggle_label(owner_id), callback_data="toggle_sub_placeholder")],
         [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
+        [InlineKeyboardButton(webui_config_label, callback_data="set_webui_login")],
         [InlineKeyboardButton("⬅️ Back", callback_data="back_home")],
     ]
     return InlineKeyboardMarkup(kb)
@@ -349,7 +352,11 @@ def _admin_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
     threshold_text = _usage_sync_threshold_text(owner_id)
     near_minutes = _usage_sync_minutes(owner_id, "near_limit_sync_interval", 5)
     normal_minutes = _usage_sync_minutes(owner_id, "normal_sync_interval", 10)
-    webui_username = (get_setting(owner_id, "webui_username") or "").strip()
+    webui_username = (
+        get_setting(owner_id, "webui_admin_username")
+        or get_setting(owner_id, "webui_username")
+        or ""
+    ).strip()
     webui_config_label = f"🔐 Web UI Login: {webui_username}" if webui_username else "🔐 Web UI Login: not set"
     kb = [
         [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
@@ -1594,15 +1601,24 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ASK_NORMAL_SYNC_INTERVAL
 
     if data == "set_webui_login":
-        if not is_admin(uid):
+        if not is_admin(uid) and not get_agent(uid):
             await q.edit_message_text("دسترسی ندارید.")
             return ConversationHandler.END
-        cur_username = (get_setting(uid, "webui_username") or "—").strip() or "—"
+        if is_admin(uid):
+            cur_username = (
+                get_setting(uid, "webui_admin_username")
+                or get_setting(uid, "webui_username")
+                or "—"
+            ).strip() or "—"
+            back_target = "admin_technical"
+        else:
+            cur_username = (get_setting(uid, "webui_agent_username") or "—").strip() or "—"
+            back_target = "agent_technical"
         await q.edit_message_text(
             "نام کاربری فعلی Web UI:\n"
             f"{cur_username}\n\n"
             "نام کاربری جدید را بفرست (3 تا 32 کاراکتر: حروف/عدد/._- و شروع با حرف):",
-            reply_markup=_back_kb("admin_technical"),
+            reply_markup=_back_kb(back_target),
         )
         return ASK_WEBUI_USERNAME
 
@@ -2972,7 +2988,8 @@ async def got_normal_sync_interval(update: Update, context: ContextTypes.DEFAULT
 
 
 async def got_webui_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
+    uid = update.effective_user.id
+    if not is_admin(uid) and not get_agent(uid):
         return ConversationHandler.END
     username = (update.message.text or "").strip()
     if not WEBUI_USERNAME_RE.fullmatch(username):
@@ -2981,16 +2998,17 @@ async def got_webui_username(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return ASK_WEBUI_USERNAME
     context.user_data["pending_webui_username"] = username
+    back_target = "admin_technical" if is_admin(uid) else "agent_technical"
     await update.message.reply_text(
         "رمز عبور جدید Web UI را بفرست (حداقل 8 کاراکتر):",
-        reply_markup=_back_kb("admin_technical"),
+        reply_markup=_back_kb(back_target),
     )
     return ASK_WEBUI_PASSWORD
 
 
 async def got_webui_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if not is_admin(uid):
+    if not is_admin(uid) and not get_agent(uid):
         return ConversationHandler.END
     password = (update.message.text or "").strip()
     if len(password) < 8:
@@ -3003,9 +3021,17 @@ async def got_webui_password(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return ConversationHandler.END
 
     password_hash = generate_password_hash(password)
-    set_setting(uid, "webui_username", username)
-    set_setting(uid, "webui_password_hash", password_hash)
-    await update.message.reply_text("✅ اطلاعات ورود Web UI ذخیره شد.", reply_markup=_back_kb("admin_technical"))
+    if is_admin(uid):
+        set_setting(uid, "webui_admin_username", username)
+        set_setting(uid, "webui_admin_password_hash", password_hash)
+        # Backward compatibility with older deployments and API versions.
+        set_setting(uid, "webui_username", username)
+        set_setting(uid, "webui_password_hash", password_hash)
+    else:
+        set_setting(uid, "webui_agent_username", username)
+        set_setting(uid, "webui_agent_password_hash", password_hash)
+    back_target = "admin_technical" if is_admin(uid) else "agent_technical"
+    await update.message.reply_text("✅ اطلاعات ورود Web UI ذخیره شد.", reply_markup=_back_kb(back_target))
     return ConversationHandler.END
 
 # ---------- add/edit panels (admin only) ----------

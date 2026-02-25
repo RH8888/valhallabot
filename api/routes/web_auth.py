@@ -16,10 +16,11 @@ from api.web_auth import (
     WebIdentity,
     create_web_session_cookie,
     owner_settings_id,
-    require_web_admin,
+    require_web_user,
     web_session_secure_cookie,
 )
 from api.users import UserListResponse, UserOut, _list_users
+from services import with_mysql_cursor
 from services.settings import get_setting
 
 router = APIRouter(prefix="/web", tags=["Web Auth"])
@@ -30,6 +31,16 @@ WEB_LOGIN_RATE_LIMIT_MAX_ATTEMPTS = int(os.getenv("WEB_LOGIN_RATE_LIMIT_MAX_ATTE
 
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 _LOGIN_ATTEMPTS_LOCK = Lock()
+
+
+def _get_setting_exact(owner_id: int, key: str) -> str:
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            "SELECT `value` FROM settings WHERE owner_id=%s AND `key`=%s LIMIT 1",
+            (owner_id, key),
+        )
+        row = cur.fetchone()
+    return ((row or {}).get("value") or "").strip()
 
 
 def _login_attempt_key(client_id: str, username: str) -> str:
@@ -73,8 +84,16 @@ class WebLoginRequest(BaseModel):
 @router.post("/login")
 async def web_login(payload: WebLoginRequest, request: Request, response: Response) -> dict[str, str]:
     owner_id = owner_settings_id()
-    configured_username = (get_setting(owner_id, "webui_username") or "").strip()
-    configured_password_hash = (get_setting(owner_id, "webui_password_hash") or "").strip()
+    configured_username = (
+        get_setting(owner_id, "webui_admin_username")
+        or get_setting(owner_id, "webui_username")
+        or ""
+    ).strip()
+    configured_password_hash = (
+        get_setting(owner_id, "webui_admin_password_hash")
+        or get_setting(owner_id, "webui_password_hash")
+        or ""
+    ).strip()
     normalized_username = (payload.username or "").strip()
     normalized_password = (payload.password or "").strip()
     forwarded_for = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
@@ -90,19 +109,59 @@ async def web_login(payload: WebLoginRequest, request: Request, response: Respon
         )
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many login attempts")
 
-    if not configured_username or not configured_password_hash:
+    admin_username_ok = normalized_username == configured_username
+    admin_password_ok = bool(configured_password_hash) and check_password_hash(
+        configured_password_hash, normalized_password
+    )
+
+    if admin_username_ok and admin_password_ok:
+        _clear_login_attempts(client_id, normalized_username)
+        session_value = create_web_session_cookie(username=configured_username, role="web_admin")
+        response.set_cookie(
+            key=WEB_SESSION_COOKIE_NAME,
+            value=session_value,
+            max_age=WEB_SESSION_TTL_SECONDS,
+            httponly=True,
+            secure=web_session_secure_cookie(),
+            samesite="lax",
+            path="/",
+        )
+        return {"status": "ok"}
+
+    agent_match = None
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            """
+            SELECT telegram_user_id
+            FROM agents
+            WHERE active=1
+              AND COALESCE(NULLIF(TRIM(%s), ''), '') != ''
+              AND %s = TRIM(COALESCE((
+                  SELECT s.`value`
+                  FROM settings s
+                  WHERE s.owner_id=agents.telegram_user_id
+                    AND s.`key`='webui_agent_username'
+                  LIMIT 1
+              ), ''))
+            LIMIT 1
+            """,
+            (normalized_username, normalized_username),
+        )
+        agent_match = cur.fetchone()
+
+    if not agent_match:
         attempts = _record_failed_login(client_id, normalized_username)
         log.warning(
-            "web login failed (credentials not configured) client_id=%s username=%s failed_attempts=%s",
+            "web login failed client_id=%s username=%s failed_attempts=%s",
             client_id,
             normalized_username,
             attempts,
         )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
-    username_ok = normalized_username == configured_username
-    password_ok = check_password_hash(configured_password_hash, normalized_password)
-    if not username_ok or not password_ok:
+    agent_owner_id = int(agent_match["telegram_user_id"])
+    agent_password_hash = _get_setting_exact(agent_owner_id, "webui_agent_password_hash")
+    if not agent_password_hash or not check_password_hash(agent_password_hash, normalized_password):
         attempts = _record_failed_login(client_id, normalized_username)
         log.warning(
             "web login failed client_id=%s username=%s failed_attempts=%s",
@@ -113,8 +172,11 @@ async def web_login(payload: WebLoginRequest, request: Request, response: Respon
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
     _clear_login_attempts(client_id, normalized_username)
-
-    session_value = create_web_session_cookie(username=configured_username)
+    session_value = create_web_session_cookie(
+        username=normalized_username,
+        role="web_agent",
+        owner_id=agent_owner_id,
+    )
     response.set_cookie(
         key=WEB_SESSION_COOKIE_NAME,
         value=session_value,
@@ -140,8 +202,8 @@ async def web_logout(response: Response) -> dict[str, str]:
 
 
 @router.get("/me")
-async def web_me(identity: WebIdentity = Depends(require_web_admin)) -> dict[str, str]:
-    return {"username": identity.username, "role": identity.role}
+async def web_me(identity: WebIdentity = Depends(require_web_user)) -> dict[str, str | int | None]:
+    return {"username": identity.username, "role": identity.role, "owner_id": identity.owner_id}
 
 
 @router.get("/users", response_model=UserListResponse)
@@ -153,9 +215,15 @@ async def web_list_users(
         None,
         description="Optional explicit owner scope; defaults to canonical super-admin owner",
     ),
-    _identity: WebIdentity = Depends(require_web_admin),
+    identity: WebIdentity = Depends(require_web_user),
 ) -> UserListResponse:
-    scoped_owner_id = owner_settings_id() if owner_id is None else owner_id
+    if identity.role == "web_agent":
+        scoped_owner_id = identity.owner_id
+    else:
+        scoped_owner_id = owner_settings_id() if owner_id is None else owner_id
+
+    if scoped_owner_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
     rows, total = _list_users(
         owner_id=scoped_owner_id,
         search=search,

@@ -30,6 +30,7 @@ def web_session_secure_cookie() -> bool:
 class WebIdentity:
     role: str
     username: str
+    owner_id: int | None = None
 
 
 def web_session_serializer() -> URLSafeTimedSerializer:
@@ -49,9 +50,12 @@ def owner_settings_id() -> int:
     return canonical_owner_id(admins[0] if admins else 0)
 
 
-def create_web_session_cookie(username: str, role: str = "web_admin") -> str:
+def create_web_session_cookie(username: str, role: str = "web_admin", owner_id: int | None = None) -> str:
     serializer = web_session_serializer()
-    return serializer.dumps({"username": username, "role": role})
+    payload = {"username": username, "role": role}
+    if owner_id is not None:
+        payload["owner_id"] = int(owner_id)
+    return serializer.dumps(payload)
 
 
 async def get_web_identity(
@@ -73,14 +77,26 @@ async def get_web_identity(
     role = payload.get("role")
     if not username or not role:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    owner_id = payload.get("owner_id")
+    if owner_id is not None:
+        try:
+            owner_id = int(owner_id)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized") from exc
 
-    identity = WebIdentity(username=username, role=role)
+    identity = WebIdentity(username=username, role=role, owner_id=owner_id)
     request.state.web_identity = identity
     return identity
 
 
 async def require_web_admin(identity: WebIdentity = Depends(get_web_identity)) -> WebIdentity:
     if identity.role != "web_admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    return identity
+
+
+async def require_web_user(identity: WebIdentity = Depends(get_web_identity)) -> WebIdentity:
+    if identity.role not in {"web_admin", "web_agent"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     return identity
 
@@ -93,5 +109,6 @@ __all__ = [
     "get_web_identity",
     "owner_settings_id",
     "require_web_admin",
+    "require_web_user",
     "web_session_secure_cookie",
 ]
