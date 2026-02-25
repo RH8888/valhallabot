@@ -11,13 +11,13 @@ from services import (
 )
 from services import get_admin_token as service_get_admin_token
 from services import rotate_admin_token as service_rotate_admin_token
-from api.subscription_aggregator import admin_ids, canonical_owner_id
+from api.subscription_aggregator import admin_ids, canonical_owner_id, ordered_admin_ids
 from api.auth import require_admin, require_super_admin
 
 
 def _owner_id() -> int:
-    admins = admin_ids()
-    return canonical_owner_id(next(iter(admins)) if admins else 0)
+    admins = ordered_admin_ids()
+    return canonical_owner_id(admins[0] if admins else 0)
 
 
 def _owner_ids() -> list[int]:

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from fastapi import Cookie, Depends, HTTPException, Request, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from api.subscription_aggregator import admin_ids, canonical_owner_id
+from api.subscription_aggregator import canonical_owner_id, ordered_admin_ids
 
 WEB_SESSION_COOKIE_NAME = "web_session"
 WEB_SESSION_TTL_SECONDS = int(os.getenv("WEB_SESSION_TTL_SECONDS", "43200"))
@@ -39,8 +39,8 @@ def web_session_serializer() -> URLSafeTimedSerializer:
 
 
 def owner_settings_id() -> int:
-    admins = admin_ids()
-    return canonical_owner_id(next(iter(admins)) if admins else 0)
+    admins = ordered_admin_ids()
+    return canonical_owner_id(admins[0] if admins else 0)
 
 
 def create_web_session_cookie(username: str, role: str = "web_admin") -> str:
