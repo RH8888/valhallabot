@@ -1067,8 +1067,11 @@ def delete_user(owner_id: int, username: str):
                 else [r["remote_username"]]
             )
             for rn in remotes:
+                log.info("remote delete started on %s@%s", rn, r["panel_url"])
                 ok, err = api.remove_remote_user(r["panel_url"], r["access_token"], rn)
-                if not ok:
+                if ok:
+                    log.info("remote delete succeeded on %s@%s", rn, r["panel_url"])
+                else:
                     log.warning(
                         "remote delete failed on %s@%s: %s",
                         rn,
@@ -3885,8 +3888,31 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                 api = get_api(p.get("panel_type"))
                 remotes = remote.split(",") if p.get("panel_type") == "sanaei" else [remote]
                 for rn in remotes:
+                    log.info(
+                        "sync_user_panels removing remote user %s on %s (%s/%s)",
+                        rn,
+                        p["panel_url"],
+                        owner_id,
+                        username,
+                    )
                     ok, err = api.remove_remote_user(p["panel_url"], p["access_token"], rn)
-                    if not ok:
+                    if ok:
+                        log.info(
+                            "sync_user_panels remove success for %s on %s (%s/%s)",
+                            rn,
+                            p["panel_url"],
+                            owner_id,
+                            username,
+                        )
+                    else:
+                        log.warning(
+                            "sync_user_panels remove failed for %s on %s (%s/%s): %s",
+                            rn,
+                            p["panel_url"],
+                            owner_id,
+                            username,
+                            err or "unknown error",
+                        )
                         added_errs.append(f"remove on {p['panel_url']}: {err or 'unknown error'}")
 
     for pid in selected_ids:

@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote, urljoin, urlparse
 
 import base64
+import logging
 import os
 import time
 from threading import RLock
@@ -22,6 +23,7 @@ ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
 FETCH_CACHE_TTL = int(os.getenv("FETCH_CACHE_TTL", "300"))
 _links_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
 _links_lock = RLock()
+log = logging.getLogger(__name__)
 
 
 def get_headers(token: str) -> Dict[str, str]:
@@ -389,15 +391,28 @@ def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
 
     try:
         username = _normalise_username(username)
-        r = SESSION.delete(
+        r = SESSION.request(
+            "DELETE",
             _build_api_url(panel_url, "api", "subscriptions"),
             json={"usernames": [username]},
             headers={**get_headers(token), "Content-Type": "application/json"},
             timeout=20,
         )
-        if r.status_code in (200, 204, 404):
-            return True, None
-        return False, f"{r.status_code} {r.text[:200]}"
+        if r.status_code != 200:
+            return False, f"{r.status_code} {r.text[:200]}"
+
+        # Guardcore's documented delete endpoint returns HTTP 200 with a JSON
+        # payload. We verify the user no longer exists so callers can detect
+        # no-op removals from panel sync logs.
+        for _ in range(3):
+            _, get_err = get_user(panel_url, token, username)
+            if get_err and str(get_err).startswith("404"):
+                log.info("guardcore remove succeeded for user=%s on panel=%s", username, panel_url)
+                return True, None
+            if get_err and not str(get_err).startswith("404"):
+                return False, f"delete accepted but post-check failed: {get_err}"
+            time.sleep(1)
+        return False, "delete accepted but user still exists"
     except Exception as e:  # pragma: no cover - network errors
         return False, str(e)[:200]
 
