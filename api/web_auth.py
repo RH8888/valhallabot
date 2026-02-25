@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import secrets
+import logging
 from dataclasses import dataclass
 
 from fastapi import Cookie, Depends, HTTPException, Request, status
@@ -11,6 +13,8 @@ from api.subscription_aggregator import canonical_owner_id, ordered_admin_ids
 
 WEB_SESSION_COOKIE_NAME = "web_session"
 WEB_SESSION_TTL_SECONDS = int(os.getenv("WEB_SESSION_TTL_SECONDS", "43200"))
+_WEB_SESSION_FALLBACK_SECRET = secrets.token_urlsafe(32)
+log = logging.getLogger("valhalla.web_auth")
 
 
 def web_session_secure_cookie() -> bool:
@@ -29,12 +33,14 @@ class WebIdentity:
 
 
 def web_session_serializer() -> URLSafeTimedSerializer:
-    secret = (os.getenv("WEB_SESSION_SECRET") or os.getenv("BOT_TOKEN") or "").strip()
-    if not secret:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Web session secret is not configured",
+    explicit_secret = os.getenv("WEB_SESSION_SECRET") or os.getenv("BOT_TOKEN") or os.getenv("SECRET_KEY")
+    if explicit_secret:
+        secret = explicit_secret.strip()
+    else:
+        log.warning(
+            "WEB_SESSION_SECRET/BOT_TOKEN/SECRET_KEY is missing; using an in-memory fallback secret for web sessions"
         )
+        secret = _WEB_SESSION_FALLBACK_SECRET
     return URLSafeTimedSerializer(secret_key=secret, salt="web-session")
 
 
