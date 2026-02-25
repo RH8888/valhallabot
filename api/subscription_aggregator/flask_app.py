@@ -51,6 +51,10 @@ with (BASE_DIR / "templates" / "error.html").open(encoding="utf-8") as f:
     ERROR_TEMPLATE = f.read()
 with (BASE_DIR / "templates" / "landing.html").open(encoding="utf-8") as f:
     LANDING_TEMPLATE = f.read()
+with (BASE_DIR / "templates" / "web_login.html").open(encoding="utf-8") as f:
+    WEB_LOGIN_TEMPLATE = f.read()
+with (BASE_DIR / "templates" / "web_users.html").open(encoding="utf-8") as f:
+    WEB_USERS_TEMPLATE = f.read()
 
 # Load environment variables and initialize the MySQL pool on import so that
 # the application is ready for WSGI servers like Gunicorn.
@@ -1090,6 +1094,16 @@ def unified_links(local_username, app_key):
 @app.route("/", methods=["GET"])
 def landing_page():
     return render_template_string(LANDING_TEMPLATE)
+
+
+@app.route("/web/login", methods=["GET"])
+def web_login_page():
+    return render_template_string(WEB_LOGIN_TEMPLATE)
+
+
+@app.route("/web/users", methods=["GET"])
+def web_users_page():
+    return render_template_string(WEB_USERS_TEMPLATE)
 
 
 @app.errorhandler(404)

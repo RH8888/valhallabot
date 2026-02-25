@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Users</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; background: #f7f7f8; }
+    .container { max-width: 980px; margin: 0 auto; }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+    h1 { margin: 0; font-size: 1.4rem; }
+    button { padding: .5rem .85rem; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.08); }
+    th, td { text-align: left; padding: .6rem; border-bottom: 1px solid #ececec; font-size: .92rem; }
+    th { background: #fafafa; }
+    .muted { color: #666; }
+    .error { color: #b00020; margin-bottom: .75rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="toolbar">
+      <h1>Users</h1>
+      <button id="logout-btn" type="button">Logout</button>
+    </div>
+    <div id="error" class="error"></div>
+    <table>
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Plan limit (bytes)</th>
+          <th>Used bytes</th>
+          <th>Expire date</th>
+          <th>Disabled</th>
+        </tr>
+      </thead>
+      <tbody id="users-body">
+        <tr><td colspan="5" class="muted">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    function toText(value, fallback = '-') {
+      if (value === null || value === undefined || value === '') {
+        return fallback;
+      }
+      return String(value);
+    }
+
+    async function requireAuth() {
+      const meResponse = await fetch('/api/v1/web/me', { credentials: 'same-origin' });
+      if (!meResponse.ok) {
+        window.location.replace('/web/login');
+        throw new Error('Unauthenticated');
+      }
+    }
+
+    function renderUsers(users) {
+      const tbody = document.getElementById('users-body');
+      if (!Array.isArray(users) || users.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="muted">No users found.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = '';
+      users.forEach((user) => {
+        const tr = document.createElement('tr');
+
+        [
+          toText(user.username),
+          toText(user.plan_limit_bytes, '0'),
+          toText(user.used_bytes, '0'),
+          toText(user.expire_at),
+          user.disabled ? 'Yes' : 'No',
+        ].forEach((value) => {
+          const td = document.createElement('td');
+          td.textContent = value;
+          tr.appendChild(td);
+        });
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function loadUsers() {
+      await requireAuth();
+
+      const response = await fetch('/api/v1/web/users', {
+        credentials: 'same-origin',
+      });
+
+      if (response.status === 401) {
+        window.location.replace('/web/login');
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error('Failed to load users');
+      }
+
+      const data = await response.json();
+      renderUsers(data.users || []);
+    }
+
+    async function logout() {
+      try {
+        await fetch('/api/v1/web/logout', {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+      } finally {
+        window.location.replace('/web/login');
+      }
+    }
+
+    document.getElementById('logout-btn').addEventListener('click', logout);
+
+    loadUsers().catch(() => {
+      const errorNode = document.getElementById('error');
+      errorNode.textContent = 'Unable to load users right now.';
+    });
+  </script>
+</body>
+</html>
