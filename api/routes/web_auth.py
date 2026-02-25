@@ -1,7 +1,12 @@
 """Web UI authentication routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+import logging
+import os
+import time
+from threading import Lock
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 from werkzeug.security import check_password_hash
 
@@ -12,11 +17,52 @@ from api.web_auth import (
     create_web_session_cookie,
     owner_settings_id,
     require_web_admin,
+    web_session_secure_cookie,
 )
 from api.users import UserListResponse, UserOut, _list_users
 from services.settings import get_setting
 
 router = APIRouter(prefix="/web", tags=["Web Auth"])
+log = logging.getLogger("valhalla.web_auth")
+
+WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "300"))
+WEB_LOGIN_RATE_LIMIT_MAX_ATTEMPTS = int(os.getenv("WEB_LOGIN_RATE_LIMIT_MAX_ATTEMPTS", "5"))
+
+_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+_LOGIN_ATTEMPTS_LOCK = Lock()
+
+
+def _login_attempt_key(client_id: str, username: str) -> str:
+    return f"{client_id}:{username.lower().strip()}"
+
+
+def _is_login_rate_limited(client_id: str, username: str) -> bool:
+    now = time.time()
+    key = _login_attempt_key(client_id, username)
+    with _LOGIN_ATTEMPTS_LOCK:
+        recent_attempts = [
+            ts for ts in _LOGIN_ATTEMPTS.get(key, []) if now - ts <= WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS
+        ]
+        _LOGIN_ATTEMPTS[key] = recent_attempts
+        return len(recent_attempts) >= WEB_LOGIN_RATE_LIMIT_MAX_ATTEMPTS
+
+
+def _record_failed_login(client_id: str, username: str) -> int:
+    now = time.time()
+    key = _login_attempt_key(client_id, username)
+    with _LOGIN_ATTEMPTS_LOCK:
+        recent_attempts = [
+            ts for ts in _LOGIN_ATTEMPTS.get(key, []) if now - ts <= WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS
+        ]
+        recent_attempts.append(now)
+        _LOGIN_ATTEMPTS[key] = recent_attempts
+        return len(recent_attempts)
+
+
+def _clear_login_attempts(client_id: str, username: str) -> None:
+    key = _login_attempt_key(client_id, username)
+    with _LOGIN_ATTEMPTS_LOCK:
+        _LOGIN_ATTEMPTS.pop(key, None)
 
 
 class WebLoginRequest(BaseModel):
@@ -25,18 +71,46 @@ class WebLoginRequest(BaseModel):
 
 
 @router.post("/login")
-async def web_login(payload: WebLoginRequest, response: Response) -> dict[str, str]:
+async def web_login(payload: WebLoginRequest, request: Request, response: Response) -> dict[str, str]:
     owner_id = owner_settings_id()
     configured_username = (get_setting(owner_id, "webui_username") or "").strip()
     configured_password_hash = (get_setting(owner_id, "webui_password_hash") or "").strip()
+    forwarded_for = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    client_id = forwarded_for or (request.client.host if request.client else "unknown")
+
+    if _is_login_rate_limited(client_id, payload.username):
+        log.warning(
+            "web login blocked by rate limit client_id=%s username=%s window=%ss max_attempts=%s",
+            client_id,
+            payload.username,
+            WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+            WEB_LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
+        )
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many login attempts")
 
     if not configured_username or not configured_password_hash:
+        attempts = _record_failed_login(client_id, payload.username)
+        log.warning(
+            "web login failed (credentials not configured) client_id=%s username=%s failed_attempts=%s",
+            client_id,
+            payload.username,
+            attempts,
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
     username_ok = payload.username == configured_username
     password_ok = check_password_hash(configured_password_hash, payload.password)
     if not username_ok or not password_ok:
+        attempts = _record_failed_login(client_id, payload.username)
+        log.warning(
+            "web login failed client_id=%s username=%s failed_attempts=%s",
+            client_id,
+            payload.username,
+            attempts,
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+    _clear_login_attempts(client_id, payload.username)
 
     session_value = create_web_session_cookie(username=configured_username)
     response.set_cookie(
@@ -44,7 +118,7 @@ async def web_login(payload: WebLoginRequest, response: Response) -> dict[str, s
         value=session_value,
         max_age=WEB_SESSION_TTL_SECONDS,
         httponly=True,
-        secure=True,
+        secure=web_session_secure_cookie(),
         samesite="lax",
         path="/",
     )
@@ -57,7 +131,7 @@ async def web_logout(response: Response) -> dict[str, str]:
         key=WEB_SESSION_COOKIE_NAME,
         path="/",
         httponly=True,
-        secure=True,
+        secure=web_session_secure_cookie(),
         samesite="lax",
     )
     return {"status": "ok"}

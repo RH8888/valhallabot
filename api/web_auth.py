@@ -10,7 +10,16 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from api.subscription_aggregator import admin_ids, canonical_owner_id
 
 WEB_SESSION_COOKIE_NAME = "web_session"
-WEB_SESSION_TTL_SECONDS = int(os.getenv("WEB_SESSION_TTL_SECONDS", "1800"))
+WEB_SESSION_TTL_SECONDS = int(os.getenv("WEB_SESSION_TTL_SECONDS", "43200"))
+
+
+def web_session_secure_cookie() -> bool:
+    explicit = os.getenv("WEB_SESSION_COOKIE_SECURE")
+    if explicit is not None:
+        return explicit.strip().lower() in {"1", "true", "yes", "on"}
+
+    app_env = (os.getenv("APP_ENV") or os.getenv("ENV") or "").strip().lower()
+    return app_env in {"prod", "production", "staging"}
 
 
 @dataclass
@@ -78,4 +87,5 @@ __all__ = [
     "get_web_identity",
     "owner_settings_id",
     "require_web_admin",
+    "web_session_secure_cookie",
 ]
