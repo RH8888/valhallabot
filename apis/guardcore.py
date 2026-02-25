@@ -387,7 +387,12 @@ def enable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
 
 
 def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
-    """Delete a subscription on the panel."""
+    """Delete a subscription on the panel.
+
+    Guardcore environments may reject delete right after service unassignment.
+    In that case we fallback to disabling the user so panel cleanup flows can
+    continue without leaving an active account behind.
+    """
 
     try:
         username = _normalise_username(username)
@@ -398,21 +403,63 @@ def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
             headers={**get_headers(token), "Content-Type": "application/json"},
             timeout=20,
         )
+        log.info(
+            "guardcore remove request user=%s panel=%s status=%s",
+            username,
+            panel_url,
+            r.status_code,
+        )
         if r.status_code != 200:
-            return False, f"{r.status_code} {r.text[:200]}"
+            err = f"{r.status_code} {r.text[:200]}"
+            log.warning(
+                "guardcore remove failed user=%s panel=%s err=%s; falling back to disable",
+                username,
+                panel_url,
+                err,
+            )
+            ok_disable, disable_err = disable_remote_user(panel_url, token, username)
+            if ok_disable:
+                log.info(
+                    "guardcore disable fallback succeeded user=%s panel=%s",
+                    username,
+                    panel_url,
+                )
+                return True, None
+            return False, f"remove failed ({err}) and disable fallback failed ({disable_err or 'unknown error'})"
 
         # Guardcore's documented delete endpoint returns HTTP 200 with a JSON
         # payload. We verify the user no longer exists so callers can detect
         # no-op removals from panel sync logs.
-        for _ in range(3):
+        for attempt in range(1, 4):
             _, get_err = get_user(panel_url, token, username)
             if get_err and str(get_err).startswith("404"):
                 log.info("guardcore remove succeeded for user=%s on panel=%s", username, panel_url)
                 return True, None
             if get_err and not str(get_err).startswith("404"):
-                return False, f"delete accepted but post-check failed: {get_err}"
+                log.warning(
+                    "guardcore remove post-check error user=%s panel=%s attempt=%d err=%s",
+                    username,
+                    panel_url,
+                    attempt,
+                    get_err,
+                )
+                break
             time.sleep(1)
-        return False, "delete accepted but user still exists"
+
+        log.warning(
+            "guardcore remove post-check still exists user=%s panel=%s; falling back to disable",
+            username,
+            panel_url,
+        )
+        ok_disable, disable_err = disable_remote_user(panel_url, token, username)
+        if ok_disable:
+            log.info(
+                "guardcore disable fallback succeeded after delete post-check user=%s panel=%s",
+                username,
+                panel_url,
+            )
+            return True, None
+        return False, f"delete accepted but user still exists, disable fallback failed: {disable_err or 'unknown error'}"
     except Exception as e:  # pragma: no cover - network errors
         return False, str(e)[:200]
 
