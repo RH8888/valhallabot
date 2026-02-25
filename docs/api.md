@@ -69,17 +69,18 @@ login sessions.
 
 ### Configure Web UI username/password from the bot
 
-A super-admin/admin configures Web UI credentials from Telegram:
+Admins and agents can configure Web UI credentials from Telegram:
 
-1. Open **Admin Panel → Technical**.
-2. Click **🔐 Web UI Login**.
+1. Admin: **Admin Panel → Technical → 🔐 Web UI Login**.
+2. Agent: **Settings → 🔐 Web UI Login**.
 3. Send a username (3-32 chars, starts with a letter, allowed: `a-zA-Z0-9._-`).
 4. Send a password (minimum 8 chars).
 
-The bot stores:
+The bot stores separate keys for each role:
 
-- `webui_username`
-- `webui_password_hash`
+- Admin credentials: `webui_admin_username`, `webui_admin_password_hash`
+- Agent credentials: `webui_agent_username`, `webui_agent_password_hash`
+- Legacy compatibility (admin only): `webui_username`, `webui_password_hash`
 
 No plaintext password is stored.
 
@@ -101,8 +102,8 @@ Cookie/session defaults:
 Related endpoints:
 
 - `POST /api/v1/web/logout` clears the session cookie
-- `GET /api/v1/web/me` returns the logged-in web identity
-- `GET /api/v1/web/users` returns paginated users for the Web UI
+- `GET /api/v1/web/me` returns the logged-in web identity (`web_admin` or `web_agent`)
+- `GET /api/v1/web/users` returns paginated users for the Web UI (agents are restricted to their own owner scope)
 
 ### Basic login rate limit and failed-login audit logs
 
