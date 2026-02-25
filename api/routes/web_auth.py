@@ -75,42 +75,44 @@ async def web_login(payload: WebLoginRequest, request: Request, response: Respon
     owner_id = owner_settings_id()
     configured_username = (get_setting(owner_id, "webui_username") or "").strip()
     configured_password_hash = (get_setting(owner_id, "webui_password_hash") or "").strip()
+    normalized_username = (payload.username or "").strip()
+    normalized_password = (payload.password or "").strip()
     forwarded_for = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
     client_id = forwarded_for or (request.client.host if request.client else "unknown")
 
-    if _is_login_rate_limited(client_id, payload.username):
+    if _is_login_rate_limited(client_id, normalized_username):
         log.warning(
             "web login blocked by rate limit client_id=%s username=%s window=%ss max_attempts=%s",
             client_id,
-            payload.username,
+            normalized_username,
             WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS,
             WEB_LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
         )
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many login attempts")
 
     if not configured_username or not configured_password_hash:
-        attempts = _record_failed_login(client_id, payload.username)
+        attempts = _record_failed_login(client_id, normalized_username)
         log.warning(
             "web login failed (credentials not configured) client_id=%s username=%s failed_attempts=%s",
             client_id,
-            payload.username,
+            normalized_username,
             attempts,
         )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
-    username_ok = payload.username == configured_username
-    password_ok = check_password_hash(configured_password_hash, payload.password)
+    username_ok = normalized_username == configured_username
+    password_ok = check_password_hash(configured_password_hash, normalized_password)
     if not username_ok or not password_ok:
-        attempts = _record_failed_login(client_id, payload.username)
+        attempts = _record_failed_login(client_id, normalized_username)
         log.warning(
             "web login failed client_id=%s username=%s failed_attempts=%s",
             client_id,
-            payload.username,
+            normalized_username,
             attempts,
         )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
-    _clear_login_attempts(client_id, payload.username)
+    _clear_login_attempts(client_id, normalized_username)
 
     session_value = create_web_session_cookie(username=configured_username)
     response.set_cookie(
