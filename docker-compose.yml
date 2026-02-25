@@ -27,6 +27,7 @@ services:
       mysql:
         condition: service_healthy
     environment:
+      ADMIN_IDS: ${ADMIN_IDS}
       MYSQL_HOST: ${MYSQL_HOST}
       MYSQL_PORT: ${MYSQL_PORT}
       MYSQL_USER: ${MYSQL_USER}
