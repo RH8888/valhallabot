@@ -3885,9 +3885,14 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                 api = get_api(p.get("panel_type"))
                 remotes = remote.split(",") if p.get("panel_type") == "sanaei" else [remote]
                 for rn in remotes:
-                    ok, err = api.remove_remote_user(p["panel_url"], p["access_token"], rn)
-                    if not ok:
-                        added_errs.append(f"remove on {p['panel_url']}: {err or 'unknown error'}")
+                    if p.get("panel_type") == "guardcore":
+                        ok, err = api.disable_remote_user(p["panel_url"], p["access_token"], rn)
+                        if not ok:
+                            added_errs.append(f"disable on {p['panel_url']}: {err or 'unknown error'}")
+                    else:
+                        ok, err = api.remove_remote_user(p["panel_url"], p["access_token"], rn)
+                        if not ok:
+                            added_errs.append(f"remove on {p['panel_url']}: {err or 'unknown error'}")
 
     for pid in selected_ids:
         if is_disabled:
