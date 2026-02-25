@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Web Login</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; background: #f7f7f8; }
+    .card { max-width: 360px; margin: 0 auto; background: #fff; border-radius: 8px; padding: 1.25rem; box-shadow: 0 2px 10px rgba(0,0,0,.08); }
+    h1 { margin-top: 0; font-size: 1.25rem; }
+    label { display: block; margin-top: .75rem; font-size: .9rem; }
+    input { width: 100%; box-sizing: border-box; margin-top: .35rem; padding: .55rem; }
+    button { margin-top: 1rem; width: 100%; padding: .6rem; cursor: pointer; }
+    .error { color: #b00020; font-size: .9rem; margin-top: .75rem; min-height: 1.2rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Sign in</h1>
+    <form id="login-form">
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required />
+
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+
+      <button type="submit">Login</button>
+      <div id="error" class="error"></div>
+    </form>
+  </div>
+
+  <script>
+    async function checkExistingSession() {
+      try {
+        const response = await fetch('/api/v1/web/me', { credentials: 'same-origin' });
+        if (response.ok) {
+          window.location.replace('/web/users');
+        }
+      } catch (_error) {
+        // Ignore network errors and keep login form visible.
+      }
+    }
+
+    async function onSubmit(event) {
+      event.preventDefault();
+      const errorNode = document.getElementById('error');
+      errorNode.textContent = '';
+
+      const payload = {
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value,
+      };
+
+      try {
+        const response = await fetch('/api/v1/web/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          errorNode.textContent = 'Invalid username or password.';
+          return;
+        }
+
+        window.location.replace('/web/users');
+      } catch (_error) {
+        errorNode.textContent = 'Unable to login right now. Please try again.';
+      }
+    }
+
+    document.getElementById('login-form').addEventListener('submit', onSubmit);
+    checkExistingSession();
+  </script>
+</body>
+</html>
