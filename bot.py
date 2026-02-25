@@ -439,6 +439,20 @@ def list_panels_for_agent(agent_tg_id: int):
         rows = cur.fetchall()
     return ensure_panel_tokens(rows)
 
+
+def load_panels_by_ids(panel_ids: set[int]) -> dict[int, dict]:
+    if not panel_ids:
+        return {}
+    ids = sorted({int(pid) for pid in panel_ids})
+    placeholders = ",".join(["%s"] * len(ids))
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"SELECT * FROM panels WHERE id IN ({placeholders})",
+            tuple(ids),
+        )
+        rows = ensure_panel_tokens(cur.fetchall())
+    return {int(row["id"]): row for row in rows}
+
 # ----- service helpers -----
 def create_service(name: str) -> int:
     with with_mysql_cursor(dict_=False) as cur:
@@ -3613,6 +3627,9 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                 else list_my_panels_admin(owner_id)
             )
             panels_map = {int(p["id"]): p for p in panels}
+            missing_ids = set(links_map.keys()) - set(panels_map.keys())
+            if missing_ids:
+                panels_map.update(load_panels_by_ids(missing_ids))
             for pid, remote in list(links_map.items()):
                 remove_link(owner_id, username, int(pid))
                 panel = panels_map.get(int(pid))
@@ -3650,6 +3667,9 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
 
     panels = list_panels_for_agent(owner_id) if not is_admin(owner_id) else list_my_panels_admin(owner_id)
     panels_map = {int(p["id"]): p for p in panels}
+    missing_ids = (current | selected_ids) - set(panels_map.keys())
+    if missing_ids:
+        panels_map.update(load_panels_by_ids(missing_ids))
 
     limit_bytes_default = int(lu["plan_limit_bytes"] or 0)
     exp = lu["expire_at"]
