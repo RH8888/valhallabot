@@ -34,6 +34,7 @@ import io
 from urllib.parse import urlparse, unquote
 from datetime import datetime, timedelta, timezone
 import asyncio
+from werkzeug.security import generate_password_hash
 
 from dotenv import load_dotenv
 from mysql.connector import Error as MySQLError
@@ -173,7 +174,9 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
     ASK_NEAR_LIMIT_THRESHOLD,
     ASK_NEAR_LIMIT_SYNC_INTERVAL,
     ASK_NORMAL_SYNC_INTERVAL,
-) = range(40)
+    ASK_WEBUI_USERNAME,
+    ASK_WEBUI_PASSWORD,
+) = range(42)
 
 # ---------- helpers ----------
 UNIT = 1024
@@ -181,6 +184,7 @@ MIN_GUARDCORE_CREATE_LIMIT_BYTES = 20 * (UNIT**3)
 GUARDCORE_TEST_PRESET_LIMIT_BYTES = 1 * (UNIT**3)
 GUARDCORE_TEST_PRESET_DAYS = 1
 USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{2,19}$")
+WEBUI_USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{2,31}$")
 
 def fmt_bytes_short(n: int) -> str:
     if n <= 0:
@@ -345,6 +349,8 @@ def _admin_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
     threshold_text = _usage_sync_threshold_text(owner_id)
     near_minutes = _usage_sync_minutes(owner_id, "near_limit_sync_interval", 5)
     normal_minutes = _usage_sync_minutes(owner_id, "normal_sync_interval", 10)
+    webui_username = (get_setting(owner_id, "webui_username") or "").strip()
+    webui_config_label = f"🔐 Web UI Login: {webui_username}" if webui_username else "🔐 Web UI Login: not set"
     kb = [
         [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
         [InlineKeyboardButton(_sub_placeholder_toggle_label(owner_id), callback_data="toggle_sub_placeholder")],
@@ -352,6 +358,7 @@ def _admin_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(f"⚠️ Near-Limit Threshold: {threshold_text}", callback_data="set_near_limit_threshold")],
         [InlineKeyboardButton(f"⏱️ Near-Limit Sync: {near_minutes}m", callback_data="set_near_limit_sync_interval")],
         [InlineKeyboardButton(f"⏱️ Normal Sync: {normal_minutes}m", callback_data="set_normal_sync_interval")],
+        [InlineKeyboardButton(webui_config_label, callback_data="set_webui_login")],
         [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
         [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
         [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
@@ -1585,6 +1592,20 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=_back_kb("admin_technical"),
         )
         return ASK_NORMAL_SYNC_INTERVAL
+
+    if data == "set_webui_login":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        cur_username = (get_setting(uid, "webui_username") or "—").strip() or "—"
+        await q.edit_message_text(
+            "نام کاربری فعلی Web UI:\n"
+            f"{cur_username}\n\n"
+            "نام کاربری جدید را بفرست (3 تا 32 کاراکتر: حروف/عدد/._- و شروع با حرف):",
+            reply_markup=_back_kb("admin_technical"),
+        )
+        return ASK_WEBUI_USERNAME
+
     if data == "limit_msg":
         if not is_admin(uid):
             await q.edit_message_text("دسترسی ندارید.")
@@ -2949,6 +2970,44 @@ async def got_normal_sync_interval(update: Update, context: ContextTypes.DEFAULT
     await update.message.reply_text("✅ بازه Normal Sync ذخیره شد.", reply_markup=_back_kb("admin_technical"))
     return ConversationHandler.END
 
+
+async def got_webui_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    username = (update.message.text or "").strip()
+    if not WEBUI_USERNAME_RE.fullmatch(username):
+        await update.message.reply_text(
+            "❌ نام کاربری نامعتبر است. باید 3 تا 32 کاراکتر باشد، با حرف شروع شود و فقط شامل حروف/عدد/._- باشد:"
+        )
+        return ASK_WEBUI_USERNAME
+    context.user_data["pending_webui_username"] = username
+    await update.message.reply_text(
+        "رمز عبور جدید Web UI را بفرست (حداقل 8 کاراکتر):",
+        reply_markup=_back_kb("admin_technical"),
+    )
+    return ASK_WEBUI_PASSWORD
+
+
+async def got_webui_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        return ConversationHandler.END
+    password = (update.message.text or "").strip()
+    if len(password) < 8:
+        await update.message.reply_text("❌ رمز عبور باید حداقل 8 کاراکتر باشد:")
+        return ASK_WEBUI_PASSWORD
+
+    username = (context.user_data.pop("pending_webui_username", "") or "").strip()
+    if not username:
+        await update.message.reply_text("❌ نام کاربری پیدا نشد. دوباره از منوی Technical شروع کن.")
+        return ConversationHandler.END
+
+    password_hash = generate_password_hash(password)
+    set_setting(uid, "webui_username", username)
+    set_setting(uid, "webui_password_hash", password_hash)
+    await update.message.reply_text("✅ اطلاعات ورود Web UI ذخیره شد.", reply_markup=_back_kb("admin_technical"))
+    return ConversationHandler.END
+
 # ---------- add/edit panels (admin only) ----------
 async def got_panel_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -4069,6 +4128,8 @@ def build_app():
             ASK_NEAR_LIMIT_THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_near_limit_threshold)],
             ASK_NEAR_LIMIT_SYNC_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_near_limit_sync_interval)],
             ASK_NORMAL_SYNC_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_normal_sync_interval)],
+            ASK_WEBUI_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_webui_username)],
+            ASK_WEBUI_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_webui_password)],
 
             # preset mgmt
             ASK_PRESET_GB:   [MessageHandler(filters.TEXT & ~filters.COMMAND, got_preset_gb)],
