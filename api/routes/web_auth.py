@@ -134,8 +134,7 @@ async def web_login(payload: WebLoginRequest, request: Request, response: Respon
             """
             SELECT telegram_user_id
             FROM agents
-            WHERE active=1
-              AND COALESCE(NULLIF(TRIM(%s), ''), '') != ''
+            WHERE COALESCE(NULLIF(TRIM(%s), ''), '') != ''
               AND %s = TRIM(COALESCE((
                   SELECT s.`value`
                   FROM settings s
@@ -149,6 +148,28 @@ async def web_login(payload: WebLoginRequest, request: Request, response: Respon
         )
         agent_match = cur.fetchone()
 
+    # Backward compatibility for deployments that stored agent web usernames
+    # in the legacy `webui_username` key.
+    if not agent_match:
+        with with_mysql_cursor() as cur:
+            cur.execute(
+                """
+                SELECT telegram_user_id
+                FROM agents
+                WHERE COALESCE(NULLIF(TRIM(%s), ''), '') != ''
+                  AND %s = TRIM(COALESCE((
+                      SELECT s.`value`
+                      FROM settings s
+                      WHERE s.owner_id=agents.telegram_user_id
+                        AND s.`key`='webui_username'
+                      LIMIT 1
+                  ), ''))
+                LIMIT 1
+                """,
+                (normalized_username, normalized_username),
+            )
+            agent_match = cur.fetchone()
+
     if not agent_match:
         attempts = _record_failed_login(client_id, normalized_username)
         log.warning(
@@ -160,7 +181,10 @@ async def web_login(payload: WebLoginRequest, request: Request, response: Respon
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
     agent_owner_id = int(agent_match["telegram_user_id"])
-    agent_password_hash = _get_setting_exact(agent_owner_id, "webui_agent_password_hash")
+    agent_password_hash = (
+        _get_setting_exact(agent_owner_id, "webui_agent_password_hash")
+        or _get_setting_exact(agent_owner_id, "webui_password_hash")
+    )
     if not agent_password_hash or not check_password_hash(agent_password_hash, normalized_password):
         attempts = _record_failed_login(client_id, normalized_username)
         log.warning(
