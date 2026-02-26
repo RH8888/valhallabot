@@ -40,7 +40,6 @@ from bot import (
     set_local_user_service,
     update_limit,
     upsert_local_user,
-    delete_user,
 )
 from services import with_mysql_cursor
 from services.settings import get_setting
@@ -425,24 +424,6 @@ async def web_create_user(
         key_expires_at=row.get("key_expires_at"),
     )
 
-
-
-
-@router.delete("/users/{username}")
-async def web_delete_user(
-    username: str,
-    identity: WebIdentity = Depends(require_web_user),
-) -> dict[str, str]:
-    scoped_owner_id = identity.owner_id if identity.role == "web_agent" else owner_settings_id()
-    if scoped_owner_id is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-
-    row = _fetch_user(scoped_owner_id, username)
-    if not row:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    delete_user(scoped_owner_id, username)
-    return {"status": "ok"}
 
 @router.get("/services", response_model=list[WebServiceOut])
 async def web_list_services(identity: WebIdentity = Depends(require_web_user)) -> list[WebServiceOut]:
