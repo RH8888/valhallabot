@@ -66,6 +66,7 @@ class UserUpdate(BaseModel):
 
 class UserListResponse(BaseModel):
     total: int
+    total_used_bytes: int = 0
     users: List[UserOut]
 
 
@@ -104,6 +105,22 @@ def _fetch_user(owner_id: int, username: str) -> dict | None:
             tuple(ids) + (username,),
         )
         return cur.fetchone()
+
+
+def get_total_usage_by_panel(owner_id: int) -> int:
+    ids = expand_owner_ids(owner_id)
+    placeholders = ",".join(["%s"] * len(ids))
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT COALESCE(SUM(total_used_bytes), 0) AS total_used_bytes
+            FROM agent_panel_usage_totals
+            WHERE agent_tg_id IN ({placeholders})
+            """,
+            tuple(ids),
+        )
+        row = cur.fetchone() or {}
+    return int(row.get("total_used_bytes") or 0)
 
 
 def _agent_service_ids(agent_tg_id: int) -> set[int]:
@@ -338,7 +355,11 @@ def list_users(
         )
         for r in rows
     ]
-    return UserListResponse(total=total, users=users)
+    return UserListResponse(
+        total=total,
+        total_used_bytes=get_total_usage_by_panel(real_owner),
+        users=users,
+    )
 
 
 @router.patch("/{username}", response_model=UserOut)
