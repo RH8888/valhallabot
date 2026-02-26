@@ -161,6 +161,15 @@ button:disabled { opacity: 0.6; cursor: wait; }
 .vb-stat-grid strong { display: block; margin-top: 6px; font-size: 1.28rem; }
 
 .vb-table-toolbar { margin-top: 14px; }
+
+.vb-create-user {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1.5fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
 .vb-table-wrap {
   margin-top: 14px;
   border: 1px solid var(--line);
@@ -277,6 +286,9 @@ body[data-theme='light'] .vb-hint {
   }
   .vb-table-toolbar input {
     font-size: 16px;
+  }
+  .vb-create-user {
+    grid-template-columns: 1fr;
   }
   table {
     min-width: 640px;

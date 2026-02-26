@@ -165,8 +165,27 @@ function UsersPage() {
   const [formRenewDays, setFormRenewDays] = useState('');
   const [formServiceId, setFormServiceId] = useState('');
   const [subInfo, setSubInfo] = useState<SubscriptionResponse | null>(null);
+  const [createUsername, setCreateUsername] = useState('');
+  const [createLimitGb, setCreateLimitGb] = useState('');
+  const [createDurationDays, setCreateDurationDays] = useState('');
+  const [createServiceId, setCreateServiceId] = useState('');
+  const [creatingUser, setCreatingUser] = useState(false);
   const parsedLimitGb = Number(formLimit);
   const canSetLimit = Number.isFinite(parsedLimitGb) && parsedLimitGb >= 0;
+
+  const reloadUsers = async () => {
+    const usersRes = await fetch('/api/v1/web/users?limit=200', { credentials: 'same-origin' });
+    if (usersRes.status === 401) {
+      window.location.replace('/web/login');
+      return;
+    }
+    if (!usersRes.ok) {
+      throw new Error('load users failed');
+    }
+    const data = (await usersRes.json()) as UsersResponse;
+    setUsers(data.users || []);
+    setTotalUsageBytes(data.total_used_bytes || 0);
+  };
 
   useEffect(() => {
     const boot = async () => {
@@ -218,6 +237,59 @@ function UsersPage() {
       await fetch('/api/v1/web/logout', { method: 'POST', credentials: 'same-origin' });
     } finally {
       window.location.replace('/web/login');
+    }
+  };
+
+  const createUser = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError('');
+    if (!createUsername.trim()) {
+      setError('Username is required.');
+      return;
+    }
+
+    const limitGbNumber = Number(createLimitGb || '0');
+    const durationDaysNumber = Number(createDurationDays || '0');
+    if (!Number.isFinite(limitGbNumber) || limitGbNumber < 0) {
+      setError('Traffic limit must be a non-negative number.');
+      return;
+    }
+    if (!Number.isFinite(durationDaysNumber) || durationDaysNumber < 0) {
+      setError('Duration days must be a non-negative number.');
+      return;
+    }
+
+    setCreatingUser(true);
+    try {
+      const res = await fetch('/api/v1/web/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          username: createUsername.trim(),
+          limit_bytes: Math.round(limitGbNumber * 1024 * 1024 * 1024),
+          duration_days: Math.round(durationDaysNumber),
+          service_id: createServiceId ? Number(createServiceId) : null,
+        }),
+      });
+      if (res.status === 401) {
+        window.location.replace('/web/login');
+        return;
+      }
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(payload.detail || 'Could not create user.');
+        return;
+      }
+      setCreateUsername('');
+      setCreateLimitGb('');
+      setCreateDurationDays('');
+      setCreateServiceId('');
+      await reloadUsers();
+    } catch {
+      setError('Could not create user. Please try again.');
+    } finally {
+      setCreatingUser(false);
     }
   };
 
@@ -306,6 +378,37 @@ function UsersPage() {
             aria-label="Search by username"
           />
         </div>
+
+        <form className="vb-create-user" onSubmit={createUser}>
+          <input
+            value={createUsername}
+            onChange={(event) => setCreateUsername(event.target.value)}
+            placeholder="Username"
+            aria-label="Create username"
+            required
+          />
+          <input
+            value={createLimitGb}
+            onChange={(event) => setCreateLimitGb(event.target.value)}
+            placeholder="Limit (GB)"
+            aria-label="Create traffic limit in GB"
+          />
+          <input
+            value={createDurationDays}
+            onChange={(event) => setCreateDurationDays(event.target.value)}
+            placeholder="Duration (days)"
+            aria-label="Create duration days"
+          />
+          <select
+            value={createServiceId}
+            onChange={(event) => setCreateServiceId(event.target.value)}
+            aria-label="Create service"
+          >
+            <option value="">No service</option>
+            {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
+          </select>
+          <button type="submit" disabled={creatingUser}>{creatingUser ? 'Creating…' : 'Add user'}</button>
+        </form>
 
         {error ? <p className="vb-error">{error}</p> : null}
 

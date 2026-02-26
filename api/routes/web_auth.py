@@ -22,7 +22,16 @@ from api.web_auth import (
     require_web_user,
     web_session_secure_cookie,
 )
-from api.users import UserListResponse, UserOut, _fetch_user, _list_users, get_total_usage_by_panel
+from api.users import (
+    MIN_GUARDCORE_CREATE_LIMIT_BYTES,
+    UserListResponse,
+    UserOut,
+    _fetch_user,
+    _is_valid_local_username,
+    _list_users,
+    _service_has_guardcore_panel,
+    get_total_usage_by_panel,
+)
 from bot import build_sub_links, list_services_for_owner, renew_user, reset_used, set_local_user_service, update_limit
 from services import with_mysql_cursor
 from services.settings import get_setting
@@ -92,6 +101,13 @@ class WebUserUpdateRequest(BaseModel):
     service_id: int | None = Field(None, description="Assign user to service")
 
 
+class WebUserCreateRequest(BaseModel):
+    username: str
+    limit_bytes: int = Field(0, ge=0, description="Byte limit for the user")
+    duration_days: int = Field(0, ge=0, description="Validity period in days")
+    service_id: int | None = Field(None, description="Assigned service ID")
+
+
 class WebServiceOut(BaseModel):
     id: int
     name: str
@@ -111,6 +127,13 @@ def _to_qr_data_uri(content: str) -> str:
     img.save(buf, format="PNG")
     encoded = base64.b64encode(buf.getvalue()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def _service_allowed_for_owner(owner_id: int, service_id: int | None) -> bool:
+    if service_id is None:
+        return True
+    services = list_services_for_owner(owner_id)
+    return any(int(row["id"]) == int(service_id) for row in services)
 
 
 @router.post("/login")
@@ -330,6 +353,57 @@ async def web_edit_user(
     row = _fetch_user(scoped_owner_id, username)
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
+    return UserOut(
+        username=row["username"],
+        plan_limit_bytes=row.get("plan_limit_bytes", 0),
+        used_bytes=row.get("used_bytes", 0),
+        expire_at=row.get("expire_at"),
+        service_id=row.get("service_id"),
+        disabled=bool(row.get("manual_disabled") or row.get("disabled_pushed")),
+        manual_disabled=bool(row.get("manual_disabled")),
+        access_key=row.get("access_key"),
+        key_expires_at=row.get("key_expires_at"),
+    )
+
+
+@router.post("/users", response_model=UserOut)
+async def web_create_user(
+    payload: WebUserCreateRequest,
+    identity: WebIdentity = Depends(require_web_user),
+) -> UserOut:
+    scoped_owner_id = identity.owner_id if identity.role == "web_agent" else owner_settings_id()
+    if scoped_owner_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+    if not _is_valid_local_username(payload.username):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "invalid username: only English letters and numbers are allowed, "
+                "it must start with an English letter, and length must be 3-20"
+            ),
+        )
+
+    if not _service_allowed_for_owner(scoped_owner_id, payload.service_id):
+        raise HTTPException(status_code=403, detail="service not assigned to owner")
+
+    if (
+        payload.service_id is not None
+        and _service_has_guardcore_panel(int(payload.service_id))
+        and int(payload.limit_bytes or 0) < MIN_GUARDCORE_CREATE_LIMIT_BYTES
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="minimum limit is 20GB for services that include a GuardCore panel",
+        )
+
+    upsert_local_user(scoped_owner_id, payload.username, payload.limit_bytes, payload.duration_days)
+    if payload.service_id is not None:
+        await set_local_user_service(scoped_owner_id, payload.username, payload.service_id)
+
+    row = _fetch_user(scoped_owner_id, payload.username)
+    if not row:
+        raise HTTPException(status_code=500, detail="user not found after create")
     return UserOut(
         username=row["username"],
         plan_limit_bytes=row.get("plan_limit_bytes", 0),
