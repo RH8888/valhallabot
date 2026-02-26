@@ -6,11 +6,85 @@
   <title>Valhalla Web Login</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body data-page="login">
-  <div id="root"></div>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script type="text/babel" data-type="module" data-presets="typescript,react" src="/static/web-ui.tsx"></script>
+<body class="min-h-screen bg-slate-50">
+  <main class="flex min-h-screen items-center justify-center p-4">
+    <section class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h1 class="text-2xl font-semibold text-slate-900">Valhalla Admin Login</h1>
+      <p class="mt-2 text-sm text-slate-500">Sign in to manage users and quotas.</p>
+
+      <form id="login-form" class="mt-6 space-y-4">
+        <label class="block text-sm font-medium text-slate-700">
+          Username
+          <input id="username" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" autocomplete="username" required />
+        </label>
+        <label class="block text-sm font-medium text-slate-700">
+          Password
+          <input id="password" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" type="password" autocomplete="current-password" required />
+        </label>
+        <p id="error" class="hidden text-sm text-red-600"></p>
+        <button id="submit" type="submit" class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60">Sign in</button>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById('login-form');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    const errorNode = document.getElementById('error');
+    const submitButton = document.getElementById('submit');
+
+    function setError(message) {
+      if (!message) {
+        errorNode.textContent = '';
+        errorNode.classList.add('hidden');
+        return;
+      }
+      errorNode.textContent = message;
+      errorNode.classList.remove('hidden');
+    }
+
+    async function redirectIfLoggedIn() {
+      try {
+        const res = await fetch('/api/v1/web/me', { credentials: 'same-origin' });
+        if (res.ok) window.location.replace('/web/users');
+      } catch (_) {
+        // Ignore connectivity checks and allow manual sign in.
+      }
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      setError('');
+      submitButton.disabled = true;
+      submitButton.textContent = 'Signing in…';
+
+      try {
+        const res = await fetch('/api/v1/web/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            username: usernameInput.value,
+            password: passwordInput.value,
+          }),
+        });
+
+        if (res.ok) {
+          window.location.replace('/web/users');
+          return;
+        }
+
+        setError(res.status === 429 ? 'Too many attempts. Please try again later.' : 'Invalid credentials.');
+      } catch (_) {
+        setError('Unable to login right now.');
+      } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = 'Sign in';
+      }
+    });
+
+    void redirectIfLoggedIn();
+  </script>
 </body>
 </html>
