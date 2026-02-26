@@ -32,7 +32,15 @@ from api.users import (
     _service_has_guardcore_panel,
     get_total_usage_by_panel,
 )
-from bot import build_sub_links, list_services_for_owner, renew_user, reset_used, set_local_user_service, update_limit
+from bot import (
+    build_sub_links,
+    list_services_for_owner,
+    renew_user,
+    reset_used,
+    set_local_user_service,
+    update_limit,
+    upsert_local_user,
+)
 from services import with_mysql_cursor
 from services.settings import get_setting
 

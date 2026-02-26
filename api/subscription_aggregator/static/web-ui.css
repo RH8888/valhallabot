@@ -160,7 +160,17 @@ button:disabled { opacity: 0.6; cursor: wait; }
 .vb-stat-grid span { color: var(--muted); font-size: 13px; }
 .vb-stat-grid strong { display: block; margin-top: 6px; font-size: 1.28rem; }
 
-.vb-table-toolbar { margin-top: 14px; }
+.vb-table-toolbar {
+  margin-top: 14px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.vb-table-toolbar input {
+  flex: 1;
+}
 
 .vb-create-user {
   margin-top: 12px;
@@ -286,6 +296,10 @@ body[data-theme='light'] .vb-hint {
   }
   .vb-table-toolbar input {
     font-size: 16px;
+  }
+  .vb-table-toolbar {
+    flex-direction: column;
+    align-items: stretch;
   }
   .vb-create-user {
     grid-template-columns: 1fr;

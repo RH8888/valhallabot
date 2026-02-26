@@ -170,6 +170,7 @@ function UsersPage() {
   const [createDurationDays, setCreateDurationDays] = useState('');
   const [createServiceId, setCreateServiceId] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
+  const [showCreateUserModal, setShowCreateUserModal] = useState(false);
   const parsedLimitGb = Number(formLimit);
   const canSetLimit = Number.isFinite(parsedLimitGb) && parsedLimitGb >= 0;
 
@@ -285,6 +286,7 @@ function UsersPage() {
       setCreateLimitGb('');
       setCreateDurationDays('');
       setCreateServiceId('');
+      setShowCreateUserModal(false);
       await reloadUsers();
     } catch {
       setError('Could not create user. Please try again.');
@@ -377,38 +379,8 @@ function UsersPage() {
             placeholder="Search by username"
             aria-label="Search by username"
           />
+          <button type="button" onClick={() => setShowCreateUserModal(true)}>Add user</button>
         </div>
-
-        <form className="vb-create-user" onSubmit={createUser}>
-          <input
-            value={createUsername}
-            onChange={(event) => setCreateUsername(event.target.value)}
-            placeholder="Username"
-            aria-label="Create username"
-            required
-          />
-          <input
-            value={createLimitGb}
-            onChange={(event) => setCreateLimitGb(event.target.value)}
-            placeholder="Limit (GB)"
-            aria-label="Create traffic limit in GB"
-          />
-          <input
-            value={createDurationDays}
-            onChange={(event) => setCreateDurationDays(event.target.value)}
-            placeholder="Duration (days)"
-            aria-label="Create duration days"
-          />
-          <select
-            value={createServiceId}
-            onChange={(event) => setCreateServiceId(event.target.value)}
-            aria-label="Create service"
-          >
-            <option value="">No service</option>
-            {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
-          </select>
-          <button type="submit" disabled={creatingUser}>{creatingUser ? 'Creating…' : 'Add user'}</button>
-        </form>
 
         {error ? <p className="vb-error">{error}</p> : null}
 
@@ -441,6 +413,47 @@ function UsersPage() {
             </tbody>
           </table>
         </div>
+
+        {showCreateUserModal ? (
+          <div className="vb-modal-overlay" role="presentation" onClick={() => setShowCreateUserModal(false)}>
+            <section className="vb-manage-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+              <div className="vb-modal-head">
+                <h3>Add user</h3>
+                <button type="button" className="vb-secondary-btn" onClick={() => setShowCreateUserModal(false)}>Close</button>
+              </div>
+              <form className="vb-create-user" onSubmit={createUser}>
+                <input
+                  value={createUsername}
+                  onChange={(event) => setCreateUsername(event.target.value)}
+                  placeholder="Username"
+                  aria-label="Create username"
+                  required
+                />
+                <input
+                  value={createLimitGb}
+                  onChange={(event) => setCreateLimitGb(event.target.value)}
+                  placeholder="Limit (GB)"
+                  aria-label="Create traffic limit in GB"
+                />
+                <input
+                  value={createDurationDays}
+                  onChange={(event) => setCreateDurationDays(event.target.value)}
+                  placeholder="Duration (days)"
+                  aria-label="Create duration days"
+                />
+                <select
+                  value={createServiceId}
+                  onChange={(event) => setCreateServiceId(event.target.value)}
+                  aria-label="Create service"
+                >
+                  <option value="">No service</option>
+                  {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
+                </select>
+                <button type="submit" disabled={creatingUser}>{creatingUser ? 'Creating…' : 'Create user'}</button>
+              </form>
+            </section>
+          </div>
+        ) : null}
 
         {selectedUser ? (
           <div className="vb-modal-overlay" role="presentation" onClick={closeManage}>
