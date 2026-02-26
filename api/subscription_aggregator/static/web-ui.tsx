@@ -10,6 +10,7 @@ type UserRecord = {
 
 type UsersResponse = {
   total: number;
+  total_used_bytes?: number;
   users: UserRecord[];
 };
 
@@ -117,6 +118,7 @@ function LoginPage() {
 
 function UsersPage() {
   const [users, setUsers] = useState<UserRecord[]>([]);
+  const [totalUsageBytes, setTotalUsageBytes] = useState(0);
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -140,6 +142,7 @@ function UsersPage() {
         }
         const data = (await usersRes.json()) as UsersResponse;
         setUsers(Array.isArray(data.users) ? data.users : []);
+        setTotalUsageBytes(Number(data.total_used_bytes || 0));
       } catch {
         setError('Unable to load users right now.');
       } finally {
@@ -156,10 +159,9 @@ function UsersPage() {
   );
 
   const stats = useMemo(() => {
-    const totalUsage = users.reduce((sum, user) => sum + (user.used_bytes || 0), 0);
     const disabled = users.filter((user) => user.disabled).length;
-    return { totalUsers: users.length, disabled, totalUsage };
-  }, [users]);
+    return { totalUsers: users.length, disabled, totalUsage: totalUsageBytes };
+  }, [users, totalUsageBytes]);
 
   const logout = async () => {
     try {

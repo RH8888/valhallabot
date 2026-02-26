@@ -19,7 +19,7 @@ from api.web_auth import (
     require_web_user,
     web_session_secure_cookie,
 )
-from api.users import UserListResponse, UserOut, _list_users
+from api.users import UserListResponse, UserOut, _list_users, get_total_usage_by_panel
 from services import with_mysql_cursor
 from services.settings import get_setting
 
@@ -269,7 +269,11 @@ async def web_list_users(
         )
         for row in rows
     ]
-    return UserListResponse(total=total, users=users)
+    return UserListResponse(
+        total=total,
+        total_used_bytes=get_total_usage_by_panel(scoped_owner_id),
+        users=users,
+    )
 
 
 __all__ = ["router"]
