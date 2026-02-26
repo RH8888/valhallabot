@@ -1,33 +1,29 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Valhalla Web Login</title>
-  <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.24/dist/full.min.css" rel="stylesheet" type="text/css" />
   <link rel="stylesheet" href="/static/web-ui.css" />
 </head>
-<body class="valhalla-bg min-h-screen p-4">
-  <main class="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md items-center justify-center">
-    <section class="card w-full border border-base-300 bg-base-100/90 shadow-2xl backdrop-blur">
-      <div class="card-body">
-        <div class="badge badge-primary badge-outline">Valhalla Admin Portal</div>
-        <h1 class="card-title text-3xl">Welcome back</h1>
-        <p class="text-base-content/70">Sign in to manage users, quotas, and subscriptions.</p>
+<body class="min-h-screen bg-slate-50">
+  <main class="flex min-h-screen items-center justify-center p-4">
+    <section class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h1 class="text-2xl font-semibold text-slate-900">Valhalla Admin Login</h1>
+      <p class="mt-2 text-sm text-slate-500">Sign in to manage users and quotas.</p>
 
-        <form id="login-form" class="mt-2 space-y-4">
-          <label class="form-control w-full">
-            <div class="label"><span class="label-text">Username</span></div>
-            <input id="username" class="input input-bordered w-full" autocomplete="username" required />
-          </label>
-          <label class="form-control w-full">
-            <div class="label"><span class="label-text">Password</span></div>
-            <input id="password" class="input input-bordered w-full" type="password" autocomplete="current-password" required />
-          </label>
-          <p id="error" class="hidden text-sm text-error"></p>
-          <button id="submit" type="submit" class="btn btn-primary w-full">Sign in</button>
-        </form>
-      </div>
+      <form id="login-form" class="mt-6 space-y-4">
+        <label class="block text-sm font-medium text-slate-700">
+          Username
+          <input id="username" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" autocomplete="username" required />
+        </label>
+        <label class="block text-sm font-medium text-slate-700">
+          Password
+          <input id="password" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" type="password" autocomplete="current-password" required />
+        </label>
+        <p id="error" class="hidden text-sm text-red-600"></p>
+        <button id="submit" type="submit" class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60">Sign in</button>
+      </form>
     </section>
   </main>
 

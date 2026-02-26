@@ -37,7 +37,6 @@ function useTheme() {
 
   useEffect(() => {
     document.body.dataset.theme = theme;
-    document.documentElement.dataset.theme = theme;
     window.localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
@@ -112,32 +111,41 @@ function LoginPage() {
   };
 
   return (
-    <main className="valhalla-bg min-h-screen p-4">
-      <section className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md items-center justify-center">
-        <article className="card w-full border border-base-300 bg-base-100/90 shadow-2xl backdrop-blur">
-          <div className="card-body">
-            <div className="flex items-center justify-between gap-2">
-              <div className="badge badge-primary badge-outline">Valhalla Web Console</div>
-              <button type="button" className="btn btn-sm btn-ghost" onClick={toggleTheme}>
-                {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-              </button>
-            </div>
-            <h1 className="card-title text-3xl">Welcome back</h1>
-            <p className="text-base-content/70">Sign in to securely manage users, quotas, and expiration dates.</p>
-            <form onSubmit={submit} className="space-y-4">
-              <label className="form-control w-full">
-                <div className="label"><span className="label-text">Username</span></div>
-                <input className="input input-bordered" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required placeholder="Enter your username" />
-              </label>
-              <label className="form-control w-full">
-                <div className="label"><span className="label-text">Password</span></div>
-                <input className="input input-bordered" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" type="password" required placeholder="Enter your password" />
-              </label>
-              <button className="btn btn-primary w-full" type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-              {error ? <p className="text-sm text-error">{error}</p> : <p className="text-sm text-base-content/70">Session is protected with secure HTTP-only cookies.</p>}
-            </form>
-          </div>
-        </article>
+    <main className="vb-shell">
+      <section className="vb-login-card">
+        <div className="vb-inline-head">
+          <p className="vb-chip">Valhalla Web Console</p>
+          <button type="button" className="vb-secondary-btn" onClick={toggleTheme}>
+            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          </button>
+        </div>
+        <h1>Welcome back</h1>
+        <p className="vb-subtitle">Sign in to securely manage users, quotas, and expiration dates.</p>
+        <form onSubmit={submit} className="vb-form">
+          <label>
+            Username
+            <input
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              autoComplete="username"
+              required
+              placeholder="Enter your username"
+            />
+          </label>
+          <label>
+            Password
+            <input
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+              type="password"
+              required
+              placeholder="Enter your password"
+            />
+          </label>
+          <button type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+          {error ? <p className="vb-error">{error}</p> : <p className="vb-hint">Session is protected with secure HTTP-only cookies.</p>}
+        </form>
       </section>
     </main>
   );
@@ -342,63 +350,63 @@ function UsersPage() {
   };
 
   return (
-    <main className="valhalla-bg min-h-screen p-4 md:p-8">
-      <section className="mx-auto max-w-7xl space-y-4">
-        <div className="navbar rounded-2xl border border-base-300 bg-base-100/90 px-4 shadow-xl backdrop-blur">
-          <div className="flex-1">
-            <div>
-              <div className="badge badge-primary badge-outline">Valhalla Dashboard</div>
-              <h1 className="mt-2 text-2xl font-bold">Users</h1>
-            </div>
+    <main className="vb-shell vb-users-shell">
+      <section className="vb-users-card">
+        <header className="vb-users-header">
+          <div>
+            <p className="vb-chip">Valhalla Dashboard</p>
+            <h1>Users</h1>
+            <p className="vb-subtitle">Monitor quota usage and account status in one place.</p>
           </div>
-          <div className="flex-none gap-2">
-            <button type="button" onClick={toggleTheme} className="btn btn-ghost btn-sm">{theme === 'dark' ? 'Light' : 'Dark'}</button>
-            <button type="button" onClick={logout} className="btn btn-outline btn-sm">Logout</button>
+          <div className="vb-header-actions">
+            <button type="button" onClick={toggleTheme} className="vb-secondary-btn">
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </button>
+            <button type="button" onClick={logout} className="vb-secondary-btn">Logout</button>
           </div>
+        </header>
+
+        <section className="vb-stat-grid">
+          <article><span>Total users</span><strong>{numberFormatter.format(stats.totalUsers)}</strong></article>
+          <article><span>Disabled users</span><strong>{numberFormatter.format(stats.disabled)}</strong></article>
+          <article><span>Total usage</span><strong>{formatBytes(stats.totalUsage)}</strong></article>
+        </section>
+
+        <div className="vb-table-toolbar">
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search by username"
+            aria-label="Search by username"
+          />
+          <button type="button" onClick={() => setShowCreateUserModal(true)}>Add user</button>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="stat rounded-box border border-base-300 bg-base-100/90 shadow">
-            <div className="stat-title">Total users</div><div className="stat-value text-primary">{numberFormatter.format(stats.totalUsers)}</div>
-          </div>
-          <div className="stat rounded-box border border-base-300 bg-base-100/90 shadow">
-            <div className="stat-title">Disabled users</div><div className="stat-value text-warning">{numberFormatter.format(stats.disabled)}</div>
-          </div>
-          <div className="stat rounded-box border border-base-300 bg-base-100/90 shadow">
-            <div className="stat-title">Total usage</div><div className="stat-value text-secondary text-2xl md:text-3xl">{formatBytes(stats.totalUsage)}</div>
-          </div>
-        </div>
+        {error ? <p className="vb-error">{error}</p> : null}
 
-        <div className="flex flex-col gap-3 rounded-2xl border border-base-300 bg-base-100/90 p-4 shadow lg:flex-row lg:items-center">
-          <input className="input input-bordered w-full lg:max-w-sm" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by username" aria-label="Search by username" />
-          <button type="button" className="btn btn-primary lg:ms-auto" onClick={() => setShowCreateUserModal(true)}>Add user</button>
-        </div>
-
-        {error ? <div className="alert alert-error"><span>{error}</span></div> : null}
-
-        <div className="overflow-x-auto rounded-2xl border border-base-300 bg-base-100/90 shadow-xl">
-          <table className="table table-zebra">
+        <div className="vb-table-wrap">
+          <table>
             <thead>
               <tr><th>Username</th><th>Plan limit</th><th>Used</th><th>Expires at</th><th>Status</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={6} className="text-center">Loading users…</td></tr>
+                <tr><td colSpan={6}>Loading users…</td></tr>
               ) : filteredUsers.length === 0 ? (
-                <tr><td colSpan={6} className="text-center">No users found.</td></tr>
+                <tr><td colSpan={6}>No users found.</td></tr>
               ) : (
                 filteredUsers.map((user) => (
                   <tr key={user.username}>
-                    <td className="font-semibold">{user.username}</td>
+                    <td>{user.username}</td>
                     <td>{formatBytes(user.plan_limit_bytes)}</td>
                     <td>{formatBytes(user.used_bytes)}</td>
                     <td>{parseDate(user.expire_at)}</td>
                     <td>
-                      <span className={`badge ${user.disabled ? 'badge-error' : 'badge-success'} badge-outline`}>
+                      <span className={user.disabled ? 'vb-badge danger' : 'vb-badge success'}>
                         {user.disabled ? 'Disabled' : 'Active'}
                       </span>
                     </td>
-                    <td><button type="button" className="btn btn-sm" onClick={() => openManage(user)}>Manage</button></td>
+                    <td><button type="button" className="vb-secondary-btn" onClick={() => openManage(user)}>Manage</button></td>
                   </tr>
                 ))
               )}
@@ -407,78 +415,92 @@ function UsersPage() {
         </div>
 
         {showCreateUserModal ? (
-          <div className="modal modal-open">
-            <div className="modal-box max-w-3xl">
-              <h3 className="text-lg font-bold">Add user</h3>
-              <form className="mt-3 grid gap-3 md:grid-cols-2" onSubmit={createUser}>
-                <input className="input input-bordered md:col-span-2" value={createUsername} onChange={(event) => setCreateUsername(event.target.value)} placeholder="Username" aria-label="Create username" required />
-                <input className="input input-bordered" value={createLimitGb} onChange={(event) => setCreateLimitGb(event.target.value)} placeholder="Limit (GB)" aria-label="Create traffic limit in GB" />
-                <input className="input input-bordered" value={createDurationDays} onChange={(event) => setCreateDurationDays(event.target.value)} placeholder="Duration (days)" aria-label="Create duration days" />
-                <select className="select select-bordered md:col-span-2" value={createServiceId} onChange={(event) => setCreateServiceId(event.target.value)} aria-label="Create service">
+          <div className="vb-modal-overlay" role="presentation" onClick={() => setShowCreateUserModal(false)}>
+            <section className="vb-manage-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+              <div className="vb-modal-head">
+                <h3>Add user</h3>
+                <button type="button" className="vb-secondary-btn" onClick={() => setShowCreateUserModal(false)}>Close</button>
+              </div>
+              <form className="vb-create-user" onSubmit={createUser}>
+                <input
+                  value={createUsername}
+                  onChange={(event) => setCreateUsername(event.target.value)}
+                  placeholder="Username"
+                  aria-label="Create username"
+                  required
+                />
+                <input
+                  value={createLimitGb}
+                  onChange={(event) => setCreateLimitGb(event.target.value)}
+                  placeholder="Limit (GB)"
+                  aria-label="Create traffic limit in GB"
+                />
+                <input
+                  value={createDurationDays}
+                  onChange={(event) => setCreateDurationDays(event.target.value)}
+                  placeholder="Duration (days)"
+                  aria-label="Create duration days"
+                />
+                <select
+                  value={createServiceId}
+                  onChange={(event) => setCreateServiceId(event.target.value)}
+                  aria-label="Create service"
+                >
                   <option value="">No service</option>
                   {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
                 </select>
-                <div className="modal-action md:col-span-2">
-                  <button type="button" className="btn" onClick={() => setShowCreateUserModal(false)}>Close</button>
-                  <button type="submit" className="btn btn-primary" disabled={creatingUser}>{creatingUser ? 'Creating…' : 'Create user'}</button>
-                </div>
+                <button type="submit" disabled={creatingUser}>{creatingUser ? 'Creating…' : 'Create user'}</button>
               </form>
-            </div>
-            <form method="dialog" className="modal-backdrop">
-              <button type="button" onClick={() => setShowCreateUserModal(false)}>close</button>
-            </form>
+            </section>
           </div>
         ) : null}
 
         {selectedUser ? (
-          <div className="modal modal-open">
-            <div className="modal-box max-w-5xl">
-              <h3 className="text-lg font-bold">Manage @{selectedUser.username}</h3>
-              <div className="mt-4 grid gap-4 md:grid-cols-2">
-                <div className="space-y-2 rounded-xl border border-base-300 p-4">
-                  <p className="font-semibold">New traffic limit (GB)</p>
-                  <input className="input input-bordered w-full" value={formLimit} onChange={(e) => setFormLimit(e.target.value)} placeholder="e.g. 10" />
-                  <button className="btn btn-primary btn-sm" type="button" disabled={busyUser === selectedUser.username || !formLimit.trim() || !canSetLimit} onClick={() => applyAction({ limit_bytes: Math.round(parsedLimitGb * 1024 * 1024 * 1024) })}>Set limit</button>
-                </div>
-                <div className="space-y-2 rounded-xl border border-base-300 p-4">
-                  <p className="font-semibold">Renew days</p>
-                  <input className="input input-bordered w-full" value={formRenewDays} onChange={(e) => setFormRenewDays(e.target.value)} placeholder="e.g. 30" />
-                  <button className="btn btn-primary btn-sm" type="button" disabled={busyUser === selectedUser.username || !formRenewDays.trim()} onClick={() => applyAction({ renew_days: Number(formRenewDays) })}>Renew</button>
-                </div>
-                <div className="space-y-2 rounded-xl border border-base-300 p-4">
-                  <p className="font-semibold">Assign service</p>
-                  <select className="select select-bordered w-full" value={formServiceId} onChange={(e) => setFormServiceId(e.target.value)}>
-                    <option value="">Select service</option>
-                    {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
-                  </select>
-                  <button className="btn btn-primary btn-sm" type="button" disabled={busyUser === selectedUser.username || !formServiceId} onClick={() => applyAction({ service_id: Number(formServiceId) })}>Assign service</button>
-                </div>
-                <div className="space-y-2 rounded-xl border border-base-300 p-4">
-                  <p className="font-semibold">Reset usage</p>
-                  <p className="text-sm text-base-content/70">Sets used traffic to zero for this user.</p>
-                  <button className="btn btn-warning btn-sm" type="button" disabled={busyUser === selectedUser.username} onClick={() => applyAction({ reset_used: true })}>Reset usage</button>
-                </div>
-              </div>
-              <div className="mt-6 rounded-xl border border-base-300 p-4">
-                <button className="btn btn-secondary btn-sm" type="button" disabled={busyUser === selectedUser.username} onClick={loadQr}>Show QR code</button>
-                {subInfo ? (
-                  <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    {subInfo.urls.map((url, index) => (
-                      <div key={url} className="space-y-2 rounded-xl border border-base-300 p-3">
-                        <p className="break-all text-xs text-base-content/70">{url}</p>
-                        <img src={subInfo.qr_data_uris[index]} alt={`Subscription QR ${index + 1} for ${selectedUser.username}`} className="mx-auto w-44 rounded-lg bg-white p-2" />
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-              <div className="modal-action">
-                <button type="button" className="btn" onClick={closeManage}>Close</button>
-              </div>
+          <div className="vb-modal-overlay" role="presentation" onClick={closeManage}>
+            <section className="vb-manage-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="vb-modal-head">
+            <h3>Manage @{selectedUser.username}</h3>
+            <button type="button" className="vb-secondary-btn" onClick={closeManage}>Close</button>
             </div>
-            <form method="dialog" className="modal-backdrop">
-              <button type="button" onClick={closeManage}>close</button>
-            </form>
+            <div className="vb-manage-grid">
+              <label>
+                New traffic limit (GB)
+                <input value={formLimit} onChange={(e) => setFormLimit(e.target.value)} placeholder="e.g. 10" />
+                <button type="button" disabled={busyUser === selectedUser.username || !formLimit.trim() || !canSetLimit} onClick={() => applyAction({ limit_bytes: Math.round(parsedLimitGb * 1024 * 1024 * 1024) })}>Set limit</button>
+              </label>
+              <label>
+                Renew days
+                <input value={formRenewDays} onChange={(e) => setFormRenewDays(e.target.value)} placeholder="e.g. 30" />
+                <button type="button" disabled={busyUser === selectedUser.username || !formRenewDays.trim()} onClick={() => applyAction({ renew_days: Number(formRenewDays) })}>Renew</button>
+              </label>
+              <label>
+                Assign service
+                <select value={formServiceId} onChange={(e) => setFormServiceId(e.target.value)}>
+                  <option value="">Select service</option>
+                  {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
+                </select>
+                <button type="button" disabled={busyUser === selectedUser.username || !formServiceId} onClick={() => applyAction({ service_id: Number(formServiceId) })}>Assign service</button>
+              </label>
+              <label>
+                Reset usage
+                <p className="vb-hint">Sets used traffic to zero for this user.</p>
+                <button type="button" disabled={busyUser === selectedUser.username} onClick={() => applyAction({ reset_used: true })}>Reset usage</button>
+              </label>
+            </div>
+            <div className="vb-qr-wrap">
+              <button type="button" disabled={busyUser === selectedUser.username} onClick={loadQr}>Show QR code</button>
+              {subInfo ? (
+                <div className="vb-qr-list">
+                  {subInfo.urls.map((url, index) => (
+                    <div key={url}>
+                      <p className="vb-hint">{url}</p>
+                      <img src={subInfo.qr_data_uris[index]} alt={`Subscription QR ${index + 1} for ${selectedUser.username}`} className="vb-qr-img" />
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </section>
           </div>
         ) : null}
       </section>
