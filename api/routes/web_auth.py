@@ -30,7 +30,6 @@ from api.users import (
     _is_valid_local_username,
     _list_users,
     _service_has_guardcore_panel,
-    _set_user_disabled,
     get_total_usage_by_panel,
 )
 from bot import (
@@ -374,25 +373,6 @@ async def web_edit_user(
         key_expires_at=row.get("key_expires_at"),
     )
 
-
-
-
-@router.delete("/users/{username}")
-async def web_toggle_user(
-    username: str,
-    disable: bool = True,
-    identity: WebIdentity = Depends(require_web_user),
-) -> dict[str, str]:
-    scoped_owner_id = identity.owner_id if identity.role == "web_agent" else owner_settings_id()
-    if scoped_owner_id is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-
-    _set_user_disabled(scoped_owner_id, username, disable)
-    row = _fetch_user(scoped_owner_id, username)
-    if not row:
-        raise HTTPException(status_code=404, detail="User not found")
-    is_disabled = bool(row.get("manual_disabled") or row.get("disabled_pushed"))
-    return {"status": "disabled" if is_disabled else "enabled"}
 
 @router.post("/users", response_model=UserOut)
 async def web_create_user(
