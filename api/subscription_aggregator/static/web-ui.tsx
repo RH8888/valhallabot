@@ -76,17 +76,35 @@ function LayoutShell({
   onLogout: () => void;
   children: React.ReactNode;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const closeMenu = () => setMenuOpen(false);
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900">
       <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col lg:flex-row">
-        <aside className="w-full border-b border-slate-200 bg-white p-4 lg:w-72 lg:border-b-0 lg:border-r lg:p-6">
+        {menuOpen && (
+          <button
+            type="button"
+            onClick={closeMenu}
+            className="fixed inset-0 z-30 bg-slate-900/30 lg:hidden"
+            aria-label="Close menu overlay"
+          />
+        )}
+
+        <aside
+          className={`fixed inset-y-0 left-0 z-40 w-72 border-r border-slate-200 bg-white p-6 shadow-xl transition-transform duration-200 lg:static lg:w-72 lg:translate-x-0 lg:shadow-none ${menuOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        >
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-600">Valhalla Admin</p>
           <nav className="mt-6 space-y-2">
-            <a href="/web/users" className="block rounded-lg bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700">Users</a>
+            <a href="/web/users" onClick={closeMenu} className="block rounded-lg bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700">Users</a>
           </nav>
           <button
             type="button"
-            onClick={onLogout}
+            onClick={() => {
+              closeMenu();
+              onLogout();
+            }}
             className="mt-6 w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
           >
             Logout
@@ -95,9 +113,21 @@ function LayoutShell({
 
         <main className="flex-1 p-4 md:p-6 lg:p-8">
           <header className="mb-6 flex flex-col gap-4 rounded-xl bg-white p-4 shadow-sm md:flex-row md:items-center md:justify-between md:p-6">
-            <div>
+            <div className="flex items-start gap-3">
+              <button
+                type="button"
+                onClick={() => setMenuOpen((prev) => !prev)}
+                className="mt-1 inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 lg:hidden"
+                aria-label="Toggle menu"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+              <div>
               <h1 className="text-2xl font-semibold md:text-3xl">{title}</h1>
               <p className="mt-2 text-sm text-slate-500">Manage user accounts, quotas, and lifecycle actions from one place.</p>
+              </div>
             </div>
             <button
               type="button"

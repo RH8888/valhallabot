@@ -660,7 +660,11 @@ def mark_agent_disabled(owner_id: int):
         )
 
 # ---------- app ----------
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    static_folder=str(BASE_DIR / "api" / "subscription_aggregator" / "static"),
+    static_url_path="/static",
+)
 
 
 def create_flask_app() -> Flask:
