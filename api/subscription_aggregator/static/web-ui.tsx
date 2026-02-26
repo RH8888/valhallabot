@@ -65,10 +65,10 @@ function parseDate(value?: string | null): string {
   return date.toLocaleString();
 }
 
-const cardClass = 'rounded-2xl border border-slate-200/80 bg-white/90 p-6 shadow-2xl shadow-slate-900/10 backdrop-blur dark:border-slate-700 dark:bg-slate-900/80 dark:shadow-black/30';
-const inputClass = 'w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100';
+const cardClass = 'rounded-2xl border border-slate-200/80 bg-white/95 p-6 shadow-2xl shadow-slate-900/10 backdrop-blur dark:border-slate-700 dark:bg-slate-900/90 dark:shadow-black/30';
+const inputClass = 'w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-slate-900 focus:ring-2 focus:ring-slate-400/30 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:focus:border-slate-200 dark:focus:ring-slate-500/30';
 const secondaryButtonClass = 'rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700';
-const primaryButtonClass = 'rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60';
+const primaryButtonClass = 'rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white';
 
 function LoginPage() {
   const { theme, toggleTheme } = useTheme();
@@ -116,11 +116,11 @@ function LoginPage() {
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-100 via-indigo-100 to-violet-100 p-4 dark:from-slate-950 dark:via-slate-900 dark:to-indigo-950">
+    <main className="min-h-screen bg-gradient-to-br from-white via-slate-100 to-slate-200 p-4 dark:from-slate-950 dark:via-slate-900 dark:to-black">
       <section className="mx-auto mt-12 max-w-md">
         <div className={cardClass}>
           <div className="mb-4 flex items-center justify-between gap-3">
-            <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200">
+            <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-semibold text-slate-800 dark:bg-slate-700 dark:text-slate-100">
               Valhalla Web Console
             </span>
             <button type="button" className={secondaryButtonClass} onClick={toggleTheme}>
@@ -166,6 +166,7 @@ function LoginPage() {
 
 function UsersPage() {
   const { theme, toggleTheme } = useTheme();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [totalUsageBytes, setTotalUsageBytes] = useState(0);
   const [search, setSearch] = useState('');
@@ -363,11 +364,33 @@ function UsersPage() {
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-100 via-indigo-100 to-violet-100 p-4 dark:from-slate-950 dark:via-slate-900 dark:to-indigo-950">
+    <main className="min-h-screen bg-gradient-to-br from-white via-slate-100 to-slate-200 p-4 dark:from-slate-950 dark:via-slate-900 dark:to-black">
       <section className={`mx-auto max-w-6xl ${cardClass}`}>
+        <div className="flex gap-4">
+          <aside className={`fixed inset-y-0 left-0 z-40 w-64 border-r border-slate-200 bg-white/95 p-4 shadow-xl transition-transform duration-200 dark:border-slate-700 dark:bg-slate-900/95 md:static md:translate-x-0 md:rounded-xl md:shadow-none ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+            <div className="mb-5 flex items-center justify-between md:justify-start">
+              <p className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">Navigation</p>
+              <button type="button" className="md:hidden rounded-lg border border-slate-300 px-2 py-1 text-slate-700 dark:border-slate-600 dark:text-slate-100" onClick={() => setSidebarOpen(false)}>✕</button>
+            </div>
+            <nav className="space-y-2">
+              <a href="#" className="block rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white dark:bg-slate-100 dark:text-slate-900">Users</a>
+              <span className="block rounded-lg border border-dashed border-slate-300 px-3 py-2 text-sm text-slate-500 dark:border-slate-600 dark:text-slate-300">Add future section</span>
+            </nav>
+          </aside>
+          {sidebarOpen ? <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={() => setSidebarOpen(false)} /> : null}
+
+          <div className="w-full">
         <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200">Valhalla Dashboard</span>
+            <button type="button" onClick={() => setSidebarOpen((prev) => !prev)} className="mb-3 inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 md:hidden">
+              <span className="space-y-1">
+                <span className="block h-0.5 w-4 bg-current" />
+                <span className="block h-0.5 w-4 bg-current" />
+                <span className="block h-0.5 w-4 bg-current" />
+              </span>
+              Menu
+            </button>
+            <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-semibold text-slate-800 dark:bg-slate-700 dark:text-slate-100">Valhalla Dashboard</span>
             <h1 className="mt-3 text-3xl font-bold text-slate-900 dark:text-white">Users</h1>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Monitor quota usage and account status in one place.</p>
           </div>
@@ -506,6 +529,8 @@ function UsersPage() {
             </section>
           </div>
         ) : null}
+          </div>
+        </div>
       </section>
     </main>
   );
