@@ -1,5 +1,3 @@
-type PageMode = 'login' | 'users';
-
 type UserRecord = {
   username: string;
   plan_limit_bytes: number;
@@ -25,26 +23,28 @@ type SubscriptionResponse = {
   qr_data_uris: string[];
 };
 
-const { useEffect, useMemo, useState } = React;
-const numberFormatter = new Intl.NumberFormat();
-const THEME_KEY = 'vb-theme';
+type UserFormValues = {
+  username: string;
+  limitGb: string;
+  durationDays: string;
+  renewDays: string;
+  serviceId: string;
+  resetUsed: boolean;
+};
 
-function useTheme() {
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    const stored = window.localStorage.getItem(THEME_KEY);
-    return stored === 'light' ? 'light' : 'dark';
-  });
+type SortDirection = 'asc' | 'desc';
 
-  useEffect(() => {
-    document.body.dataset.theme = theme;
-    window.localStorage.setItem(THEME_KEY, theme);
-  }, [theme]);
-
-  return {
-    theme,
-    toggleTheme: () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark')),
-  };
+declare global {
+  interface Window {
+    HeadlessUI?: {
+      Dialog: React.ComponentType<any>;
+      Transition: React.ComponentType<any> & { Child: React.ComponentType<any> };
+    };
+  }
 }
+
+const { useEffect, useMemo, useState, Fragment } = React;
+const numberFormatter = new Intl.NumberFormat();
 
 function formatBytes(value?: number | null): string {
   if (value === null || value === undefined) return '-';
@@ -65,154 +65,366 @@ function parseDate(value?: string | null): string {
   return date.toLocaleString();
 }
 
-function LoginPage() {
-  const { theme, toggleTheme } = useTheme();
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+function LayoutShell({
+  title,
+  onAddUser,
+  onLogout,
+  children,
+}: {
+  title: string;
+  onAddUser: () => void;
+  onLogout: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="min-h-screen bg-slate-100 text-slate-900">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col lg:flex-row">
+        <aside className="w-full border-b border-slate-200 bg-white p-4 lg:w-72 lg:border-b-0 lg:border-r lg:p-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-600">Valhalla Admin</p>
+          <nav className="mt-6 space-y-2">
+            <a href="/web/users" className="block rounded-lg bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700">Users</a>
+          </nav>
+          <button
+            type="button"
+            onClick={onLogout}
+            className="mt-6 w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+          >
+            Logout
+          </button>
+        </aside>
 
-  useEffect(() => {
-    fetch('/api/v1/web/me', { credentials: 'same-origin' })
-      .then((res) => {
-        if (res.ok) {
-          window.location.replace('/web/users');
-        }
-      })
-      .catch(() => undefined);
-  }, []);
+        <main className="flex-1 p-4 md:p-6 lg:p-8">
+          <header className="mb-6 flex flex-col gap-4 rounded-xl bg-white p-4 shadow-sm md:flex-row md:items-center md:justify-between md:p-6">
+            <div>
+              <h1 className="text-2xl font-semibold md:text-3xl">{title}</h1>
+              <p className="mt-2 text-sm text-slate-500">Manage user accounts, quotas, and lifecycle actions from one place.</p>
+            </div>
+            <button
+              type="button"
+              onClick={onAddUser}
+              className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
+            >
+              Add user
+            </button>
+          </header>
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}
 
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setError('');
-    setBusy(true);
-    try {
-      const res = await fetch('/api/v1/web/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ username, password }),
-      });
+function UsersTable({
+  users,
+  loading,
+  search,
+  sortDirection,
+  onSearchChange,
+  onToggleSort,
+  onEdit,
+  onDelete,
+}: {
+  users: UserRecord[];
+  loading: boolean;
+  search: string;
+  sortDirection: SortDirection;
+  onSearchChange: (value: string) => void;
+  onToggleSort: () => void;
+  onEdit: (user: UserRecord) => void;
+  onDelete: (user: UserRecord) => void;
+}) {
+  return (
+    <section className="rounded-xl bg-white p-4 shadow-sm md:p-6">
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <input
+          value={search}
+          onChange={(event) => onSearchChange(event.target.value)}
+          placeholder="Search users by username"
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200 md:max-w-sm"
+          aria-label="Search users"
+        />
+        <button
+          type="button"
+          onClick={onToggleSort}
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+        >
+          Sort username ({sortDirection === 'asc' ? 'A → Z' : 'Z → A'})
+        </button>
+      </div>
 
-      if (res.ok) {
-        window.location.replace('/web/users');
-        return;
-      }
-      if (res.status === 429) {
-        setError('Too many login attempts. Please wait a bit and try again.');
-        return;
-      }
-      setError('Invalid username or password.');
-    } catch {
-      setError('Unable to login right now. Please try again.');
-    } finally {
-      setBusy(false);
-    }
-  };
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-50 text-left text-slate-500">
+            <tr>
+              <th className="px-4 py-3 font-medium">Username</th>
+              <th className="px-4 py-3 font-medium">Plan limit</th>
+              <th className="px-4 py-3 font-medium">Used</th>
+              <th className="px-4 py-3 font-medium">Expires at</th>
+              <th className="px-4 py-3 font-medium">Status</th>
+              <th className="px-4 py-3 font-medium">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">Loading users…</td></tr>
+            ) : users.length === 0 ? (
+              <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-500">No users found.</td></tr>
+            ) : (
+              users.map((user) => (
+                <tr key={user.username} className="border-t border-slate-200">
+                  <td className="px-4 py-3 font-medium text-slate-900">{user.username}</td>
+                  <td className="px-4 py-3 text-slate-600">{formatBytes(user.plan_limit_bytes)}</td>
+                  <td className="px-4 py-3 text-slate-600">{formatBytes(user.used_bytes)}</td>
+                  <td className="px-4 py-3 text-slate-600">{parseDate(user.expire_at)}</td>
+                  <td className="px-4 py-3">
+                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${user.disabled ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                      {user.disabled ? 'Disabled' : 'Active'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => onEdit(user)} className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">Edit</button>
+                      <button type="button" onClick={() => onDelete(user)} className="rounded-md border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50">Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function UserModal({
+  open,
+  mode,
+  services,
+  values,
+  saving,
+  error,
+  onChange,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  mode: 'create' | 'edit';
+  services: ServiceRecord[];
+  values: UserFormValues;
+  saving: boolean;
+  error: string;
+  onChange: (patch: Partial<UserFormValues>) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  if (!open) return null;
+
+  const Dialog = window.HeadlessUI?.Dialog;
+  const Transition = window.HeadlessUI?.Transition;
+  const validUsername = values.username.trim().length >= 3;
+
+  if (!Dialog || !Transition) {
+    return null;
+  }
 
   return (
-    <main className="vb-shell">
-      <section className="vb-login-card">
-        <div className="vb-inline-head">
-          <p className="vb-chip">Valhalla Web Console</p>
-          <button type="button" className="vb-secondary-btn" onClick={toggleTheme}>
-            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-          </button>
+    <Transition appear show={open} as={Fragment}>
+      <Dialog as="div" className="relative z-50" onClose={onClose}>
+        <Transition.Child as={Fragment} enter="ease-out duration-200" enterFrom="opacity-0" enterTo="opacity-100" leave="ease-in duration-150" leaveFrom="opacity-100" leaveTo="opacity-0">
+          <div className="fixed inset-0 bg-slate-900/50" />
+        </Transition.Child>
+
+        <div className="fixed inset-0 overflow-y-auto p-4">
+          <div className="flex min-h-full items-center justify-center">
+            <Transition.Child as={Fragment} enter="ease-out duration-200" enterFrom="opacity-0 scale-95" enterTo="opacity-100 scale-100" leave="ease-in duration-150" leaveFrom="opacity-100 scale-100" leaveTo="opacity-0 scale-95">
+              <Dialog.Panel className="w-full max-w-2xl rounded-xl bg-white p-6 shadow-xl">
+                <div className="mb-6 flex items-start justify-between gap-4">
+                  <div>
+                    <Dialog.Title className="text-xl font-semibold text-slate-900">{mode === 'create' ? 'Add user' : `Edit ${values.username}`}</Dialog.Title>
+                    <p className="mt-1 text-sm text-slate-500">{mode === 'create' ? 'Create a new user account with quota and duration settings.' : 'Update quota and service settings for this user.'}</p>
+                  </div>
+                  <button type="button" onClick={onClose} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100">Close</button>
+                </div>
+
+                <div className="space-y-4">
+                  <label className="block text-sm font-medium text-slate-700">
+                    Username
+                    <input
+                      disabled={mode === 'edit'}
+                      value={values.username}
+                      onChange={(event) => onChange({ username: event.target.value })}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 disabled:bg-slate-100"
+                    />
+                  </label>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="block text-sm font-medium text-slate-700">
+                      Traffic limit (GB)
+                      <input value={values.limitGb} onChange={(event) => onChange({ limitGb: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" />
+                    </label>
+                    {mode === 'create' ? (
+                      <label className="block text-sm font-medium text-slate-700">
+                        Duration (days)
+                        <input value={values.durationDays} onChange={(event) => onChange({ durationDays: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" />
+                      </label>
+                    ) : (
+                      <label className="block text-sm font-medium text-slate-700">
+                        Renew days
+                        <input value={values.renewDays} onChange={(event) => onChange({ renewDays: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" />
+                      </label>
+                    )}
+                  </div>
+
+                  <label className="block text-sm font-medium text-slate-700">
+                    Service
+                    <select value={values.serviceId} onChange={(event) => onChange({ serviceId: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2">
+                      <option value="">No service</option>
+                      {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
+                    </select>
+                  </label>
+
+                  {mode === 'edit' ? (
+                    <label className="flex items-center gap-2 text-sm text-slate-700">
+                      <input type="checkbox" checked={values.resetUsed} onChange={(event) => onChange({ resetUsed: event.target.checked })} />
+                      Reset used traffic to zero
+                    </label>
+                  ) : null}
+                </div>
+
+                {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
+
+                <div className="mt-6 flex justify-end gap-3">
+                  <button type="button" onClick={onClose} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">Cancel</button>
+                  <button
+                    type="button"
+                    onClick={onSubmit}
+                    disabled={saving || !validUsername}
+                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {saving ? 'Saving…' : mode === 'create' ? 'Create user' : 'Save changes'}
+                  </button>
+                </div>
+              </Dialog.Panel>
+            </Transition.Child>
+          </div>
         </div>
-        <h1>Welcome back</h1>
-        <p className="vb-subtitle">Sign in to securely manage users, quotas, and expiration dates.</p>
-        <form onSubmit={submit} className="vb-form">
-          <label>
-            Username
-            <input
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              autoComplete="username"
-              required
-              placeholder="Enter your username"
-            />
-          </label>
-          <label>
-            Password
-            <input
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-              type="password"
-              required
-              placeholder="Enter your password"
-            />
-          </label>
-          <button type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-          {error ? <p className="vb-error">{error}</p> : <p className="vb-hint">Session is protected with secure HTTP-only cookies.</p>}
-        </form>
-      </section>
-    </main>
+      </Dialog>
+    </Transition>
+  );
+}
+
+function ConfirmDialog({
+  open,
+  username,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  username: string;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!open) return null;
+  const Dialog = window.HeadlessUI?.Dialog;
+  const Transition = window.HeadlessUI?.Transition;
+  if (!Dialog || !Transition) {
+    return null;
+  }
+
+  return (
+    <Transition appear show={open} as={Fragment}>
+      <Dialog as="div" className="relative z-50" onClose={onCancel}>
+        <Transition.Child as={Fragment} enter="ease-out duration-200" enterFrom="opacity-0" enterTo="opacity-100" leave="ease-in duration-150" leaveFrom="opacity-100" leaveTo="opacity-0">
+          <div className="fixed inset-0 bg-slate-900/50" />
+        </Transition.Child>
+        <div className="fixed inset-0 flex items-center justify-center p-4">
+          <Transition.Child as={Fragment} enter="ease-out duration-200" enterFrom="opacity-0 scale-95" enterTo="opacity-100 scale-100" leave="ease-in duration-150" leaveFrom="opacity-100 scale-100" leaveTo="opacity-0 scale-95">
+            <Dialog.Panel className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+              <Dialog.Title className="text-lg font-semibold text-slate-900">Delete user</Dialog.Title>
+              <p className="mt-2 text-sm text-slate-600">Are you sure you want to delete <strong>@{username}</strong>? This cannot be undone.</p>
+              <div className="mt-6 flex justify-end gap-3">
+                <button type="button" onClick={onCancel} className="rounded-lg border border-slate-300 px-4 py-2 text-sm">Cancel</button>
+                <button type="button" onClick={onConfirm} disabled={busy} className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">{busy ? 'Deleting…' : 'Delete user'}</button>
+              </div>
+            </Dialog.Panel>
+          </Transition.Child>
+        </div>
+      </Dialog>
+    </Transition>
   );
 }
 
 function UsersPage() {
-  const { theme, toggleTheme } = useTheme();
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [totalUsageBytes, setTotalUsageBytes] = useState(0);
-  const [search, setSearch] = useState('');
-  const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [services, setServices] = useState<ServiceRecord[]>([]);
-  const [busyUser, setBusyUser] = useState<string>('');
-  const [selectedUser, setSelectedUser] = useState<UserRecord | null>(null);
-  const [formLimit, setFormLimit] = useState('');
-  const [formRenewDays, setFormRenewDays] = useState('');
-  const [formServiceId, setFormServiceId] = useState('');
-  const [subInfo, setSubInfo] = useState<SubscriptionResponse | null>(null);
-  const [createUsername, setCreateUsername] = useState('');
-  const [createLimitGb, setCreateLimitGb] = useState('');
-  const [createDurationDays, setCreateDurationDays] = useState('');
-  const [createServiceId, setCreateServiceId] = useState('');
-  const [creatingUser, setCreatingUser] = useState(false);
-  const [showCreateUserModal, setShowCreateUserModal] = useState(false);
-  const parsedLimitGb = Number(formLimit);
-  const canSetLimit = Number.isFinite(parsedLimitGb) && parsedLimitGb >= 0;
+  const [search, setSearch] = useState('');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<'create' | 'edit'>('create');
+  const [modalSaving, setModalSaving] = useState(false);
+  const [modalError, setModalError] = useState('');
+  const [formValues, setFormValues] = useState<UserFormValues>({
+    username: '',
+    limitGb: '',
+    durationDays: '',
+    renewDays: '',
+    serviceId: '',
+    resetUsed: false,
+  });
+
+  const [deleteTarget, setDeleteTarget] = useState<UserRecord | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const stats = useMemo(() => {
+    const disabled = users.filter((user) => user.disabled).length;
+    return { totalUsers: users.length, disabledUsers: disabled, totalUsageBytes };
+  }, [users, totalUsageBytes]);
+
+  const displayedUsers = useMemo(() => {
+    const filtered = users.filter((user) => user.username.toLowerCase().includes(search.trim().toLowerCase()));
+    return [...filtered].sort((a, b) => {
+      const direction = sortDirection === 'asc' ? 1 : -1;
+      return a.username.localeCompare(b.username) * direction;
+    });
+  }, [users, search, sortDirection]);
 
   const reloadUsers = async () => {
-    const usersRes = await fetch('/api/v1/web/users?limit=200', { credentials: 'same-origin' });
-    if (usersRes.status === 401) {
+    const res = await fetch('/api/v1/web/users?limit=200', { credentials: 'same-origin' });
+    if (res.status === 401) {
       window.location.replace('/web/login');
       return;
     }
-    if (!usersRes.ok) {
-      throw new Error('load users failed');
-    }
-    const data = (await usersRes.json()) as UsersResponse;
-    setUsers(data.users || []);
-    setTotalUsageBytes(data.total_used_bytes || 0);
+    if (!res.ok) throw new Error('Failed to load users');
+    const data = (await res.json()) as UsersResponse;
+    setUsers(Array.isArray(data.users) ? data.users : []);
+    setTotalUsageBytes(Number(data.total_used_bytes || 0));
   };
 
   useEffect(() => {
-    const boot = async () => {
+    const load = async () => {
       try {
-        const meRes = await fetch('/api/v1/web/me', { credentials: 'same-origin' });
-        if (!meRes.ok) {
-          window.location.replace('/web/login');
-          return;
-        }
-
-        const [usersRes, servicesRes] = await Promise.all([
+        const [meRes, usersRes, servicesRes] = await Promise.all([
+          fetch('/api/v1/web/me', { credentials: 'same-origin' }),
           fetch('/api/v1/web/users?limit=200', { credentials: 'same-origin' }),
           fetch('/api/v1/web/services', { credentials: 'same-origin' }),
         ]);
-        if (usersRes.status === 401) {
+        if (!meRes.ok || usersRes.status === 401) {
           window.location.replace('/web/login');
           return;
         }
-        if (!usersRes.ok) {
-          throw new Error('load failed');
-        }
-        const data = (await usersRes.json()) as UsersResponse;
-        const serviceData = servicesRes.ok ? ((await servicesRes.json()) as ServiceRecord[]) : [];
-        setUsers(Array.isArray(data.users) ? data.users : []);
-        setTotalUsageBytes(Number(data.total_used_bytes || 0));
-        setServices(Array.isArray(serviceData) ? serviceData : []);
+        if (!usersRes.ok) throw new Error('Failed users fetch');
+        const usersData = (await usersRes.json()) as UsersResponse;
+        const servicesData = servicesRes.ok ? ((await servicesRes.json()) as ServiceRecord[]) : [];
+        setUsers(Array.isArray(usersData.users) ? usersData.users : []);
+        setTotalUsageBytes(Number(usersData.total_used_bytes || 0));
+        setServices(Array.isArray(servicesData) ? servicesData : []);
       } catch {
         setError('Unable to load users right now.');
       } finally {
@@ -220,18 +432,8 @@ function UsersPage() {
       }
     };
 
-    void boot();
+    void load();
   }, []);
-
-  const filteredUsers = useMemo(
-    () => users.filter((user) => user.username.toLowerCase().includes(search.trim().toLowerCase())),
-    [search, users],
-  );
-
-  const stats = useMemo(() => {
-    const disabled = users.filter((user) => user.disabled).length;
-    return { totalUsers: users.length, disabled, totalUsage: totalUsageBytes };
-  }, [users, totalUsageBytes]);
 
   const logout = async () => {
     try {
@@ -241,280 +443,158 @@ function UsersPage() {
     }
   };
 
-  const createUser = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setError('');
-    if (!createUsername.trim()) {
-      setError('Username is required.');
+  const openCreateModal = () => {
+    setModalMode('create');
+    setFormValues({ username: '', limitGb: '', durationDays: '', renewDays: '', serviceId: '', resetUsed: false });
+    setModalError('');
+    setModalOpen(true);
+  };
+
+  const openEditModal = (user: UserRecord) => {
+    setModalMode('edit');
+    setFormValues({ username: user.username, limitGb: '', durationDays: '', renewDays: '', serviceId: user.service_id ? String(user.service_id) : '', resetUsed: false });
+    setModalError('');
+    setModalOpen(true);
+  };
+
+  const submitUserModal = async () => {
+    setModalError('');
+    const limitGbNumber = Number(formValues.limitGb || '0');
+    const durationDaysNumber = Number(formValues.durationDays || '0');
+    const renewDaysNumber = Number(formValues.renewDays || '0');
+
+    if (!formValues.username.trim()) {
+      setModalError('Username is required.');
       return;
     }
-
-    const limitGbNumber = Number(createLimitGb || '0');
-    const durationDaysNumber = Number(createDurationDays || '0');
     if (!Number.isFinite(limitGbNumber) || limitGbNumber < 0) {
-      setError('Traffic limit must be a non-negative number.');
-      return;
-    }
-    if (!Number.isFinite(durationDaysNumber) || durationDaysNumber < 0) {
-      setError('Duration days must be a non-negative number.');
+      setModalError('Traffic limit must be a non-negative number.');
       return;
     }
 
-    setCreatingUser(true);
+    setModalSaving(true);
     try {
-      const res = await fetch('/api/v1/web/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({
-          username: createUsername.trim(),
-          limit_bytes: Math.round(limitGbNumber * 1024 * 1024 * 1024),
-          duration_days: Math.round(durationDaysNumber),
-          service_id: createServiceId ? Number(createServiceId) : null,
-        }),
-      });
-      if (res.status === 401) {
-        window.location.replace('/web/login');
-        return;
+      if (modalMode === 'create') {
+        if (!Number.isFinite(durationDaysNumber) || durationDaysNumber < 0) {
+          setModalError('Duration days must be a non-negative number.');
+          return;
+        }
+        const createRes = await fetch('/api/v1/web/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            username: formValues.username.trim(),
+            limit_bytes: Math.round(limitGbNumber * 1024 * 1024 * 1024),
+            duration_days: Math.round(durationDaysNumber),
+            service_id: formValues.serviceId ? Number(formValues.serviceId) : null,
+          }),
+        });
+        const payload = await createRes.json().catch(() => ({}));
+        if (!createRes.ok) {
+          setModalError(payload.detail || 'Could not create user.');
+          return;
+        }
+      } else {
+        if (!Number.isFinite(renewDaysNumber) || renewDaysNumber < 0) {
+          setModalError('Renew days must be a non-negative number.');
+          return;
+        }
+        const editRes = await fetch(`/api/v1/web/users/${encodeURIComponent(formValues.username)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            limit_bytes: Math.round(limitGbNumber * 1024 * 1024 * 1024),
+            renew_days: renewDaysNumber > 0 ? Math.round(renewDaysNumber) : null,
+            reset_used: formValues.resetUsed,
+            service_id: formValues.serviceId ? Number(formValues.serviceId) : null,
+          }),
+        });
+        const payload = await editRes.json().catch(() => ({}));
+        if (!editRes.ok) {
+          setModalError(payload.detail || 'Could not update user.');
+          return;
+        }
       }
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(payload.detail || 'Could not create user.');
-        return;
-      }
-      setCreateUsername('');
-      setCreateLimitGb('');
-      setCreateDurationDays('');
-      setCreateServiceId('');
-      setShowCreateUserModal(false);
+
+      setModalOpen(false);
       await reloadUsers();
     } catch {
-      setError('Could not create user. Please try again.');
+      setModalError('Request failed. Please try again.');
     } finally {
-      setCreatingUser(false);
+      setModalSaving(false);
     }
   };
 
-  const openManage = (user: UserRecord) => {
-    setSelectedUser(user);
-    setFormLimit('');
-    setFormRenewDays('');
-    setFormServiceId(user.service_id ? String(user.service_id) : '');
-    setSubInfo(null);
-    setError('');
-  };
-
-  const closeManage = () => {
-    setSelectedUser(null);
-    setSubInfo(null);
-    setBusyUser('');
-  };
-
-  const applyAction = async (payload: Record<string, unknown>) => {
-    if (!selectedUser) return;
-    setBusyUser(selectedUser.username);
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
     setError('');
     try {
-      const res = await fetch(`/api/v1/web/users/${encodeURIComponent(selectedUser.username)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error('update failed');
-      const updated = (await res.json()) as UserRecord;
-      setUsers((prev) => prev.map((u) => (u.username === updated.username ? updated : u)));
-      setSelectedUser(updated);
-    } catch {
-      setError('Could not update user. Please try again.');
-    } finally {
-      setBusyUser('');
-    }
-  };
-
-  const loadQr = async () => {
-    if (!selectedUser) return;
-    setBusyUser(selectedUser.username);
-    setError('');
-    try {
-      const res = await fetch(`/api/v1/web/users/${encodeURIComponent(selectedUser.username)}/subscription`, {
+      const res = await fetch(`/api/v1/web/users/${encodeURIComponent(deleteTarget.username)}`, {
+        method: 'DELETE',
         credentials: 'same-origin',
       });
-      if (!res.ok) throw new Error('qr failed');
-      setSubInfo((await res.json()) as SubscriptionResponse);
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(payload.detail || 'Could not delete user.');
+        return;
+      }
+      setDeleteTarget(null);
+      await reloadUsers();
     } catch {
-      setError('Could not load QR code for this user.');
+      setError('Could not delete user. Please try again.');
     } finally {
-      setBusyUser('');
+      setDeleteBusy(false);
     }
   };
 
   return (
-    <main className="vb-shell vb-users-shell">
-      <section className="vb-users-card">
-        <header className="vb-users-header">
-          <div>
-            <p className="vb-chip">Valhalla Dashboard</p>
-            <h1>Users</h1>
-            <p className="vb-subtitle">Monitor quota usage and account status in one place.</p>
-          </div>
-          <div className="vb-header-actions">
-            <button type="button" onClick={toggleTheme} className="vb-secondary-btn">
-              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            </button>
-            <button type="button" onClick={logout} className="vb-secondary-btn">Logout</button>
-          </div>
-        </header>
-
-        <section className="vb-stat-grid">
-          <article><span>Total users</span><strong>{numberFormatter.format(stats.totalUsers)}</strong></article>
-          <article><span>Disabled users</span><strong>{numberFormatter.format(stats.disabled)}</strong></article>
-          <article><span>Total usage</span><strong>{formatBytes(stats.totalUsage)}</strong></article>
-        </section>
-
-        <div className="vb-table-toolbar">
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search by username"
-            aria-label="Search by username"
-          />
-          <button type="button" onClick={() => setShowCreateUserModal(true)}>Add user</button>
-        </div>
-
-        {error ? <p className="vb-error">{error}</p> : null}
-
-        <div className="vb-table-wrap">
-          <table>
-            <thead>
-              <tr><th>Username</th><th>Plan limit</th><th>Used</th><th>Expires at</th><th>Status</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={6}>Loading users…</td></tr>
-              ) : filteredUsers.length === 0 ? (
-                <tr><td colSpan={6}>No users found.</td></tr>
-              ) : (
-                filteredUsers.map((user) => (
-                  <tr key={user.username}>
-                    <td>{user.username}</td>
-                    <td>{formatBytes(user.plan_limit_bytes)}</td>
-                    <td>{formatBytes(user.used_bytes)}</td>
-                    <td>{parseDate(user.expire_at)}</td>
-                    <td>
-                      <span className={user.disabled ? 'vb-badge danger' : 'vb-badge success'}>
-                        {user.disabled ? 'Disabled' : 'Active'}
-                      </span>
-                    </td>
-                    <td><button type="button" className="vb-secondary-btn" onClick={() => openManage(user)}>Manage</button></td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {showCreateUserModal ? (
-          <div className="vb-modal-overlay" role="presentation" onClick={() => setShowCreateUserModal(false)}>
-            <section className="vb-manage-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-              <div className="vb-modal-head">
-                <h3>Add user</h3>
-                <button type="button" className="vb-secondary-btn" onClick={() => setShowCreateUserModal(false)}>Close</button>
-              </div>
-              <form className="vb-create-user" onSubmit={createUser}>
-                <input
-                  value={createUsername}
-                  onChange={(event) => setCreateUsername(event.target.value)}
-                  placeholder="Username"
-                  aria-label="Create username"
-                  required
-                />
-                <input
-                  value={createLimitGb}
-                  onChange={(event) => setCreateLimitGb(event.target.value)}
-                  placeholder="Limit (GB)"
-                  aria-label="Create traffic limit in GB"
-                />
-                <input
-                  value={createDurationDays}
-                  onChange={(event) => setCreateDurationDays(event.target.value)}
-                  placeholder="Duration (days)"
-                  aria-label="Create duration days"
-                />
-                <select
-                  value={createServiceId}
-                  onChange={(event) => setCreateServiceId(event.target.value)}
-                  aria-label="Create service"
-                >
-                  <option value="">No service</option>
-                  {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
-                </select>
-                <button type="submit" disabled={creatingUser}>{creatingUser ? 'Creating…' : 'Create user'}</button>
-              </form>
-            </section>
-          </div>
-        ) : null}
-
-        {selectedUser ? (
-          <div className="vb-modal-overlay" role="presentation" onClick={closeManage}>
-            <section className="vb-manage-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-            <div className="vb-modal-head">
-            <h3>Manage @{selectedUser.username}</h3>
-            <button type="button" className="vb-secondary-btn" onClick={closeManage}>Close</button>
-            </div>
-            <div className="vb-manage-grid">
-              <label>
-                New traffic limit (GB)
-                <input value={formLimit} onChange={(e) => setFormLimit(e.target.value)} placeholder="e.g. 10" />
-                <button type="button" disabled={busyUser === selectedUser.username || !formLimit.trim() || !canSetLimit} onClick={() => applyAction({ limit_bytes: Math.round(parsedLimitGb * 1024 * 1024 * 1024) })}>Set limit</button>
-              </label>
-              <label>
-                Renew days
-                <input value={formRenewDays} onChange={(e) => setFormRenewDays(e.target.value)} placeholder="e.g. 30" />
-                <button type="button" disabled={busyUser === selectedUser.username || !formRenewDays.trim()} onClick={() => applyAction({ renew_days: Number(formRenewDays) })}>Renew</button>
-              </label>
-              <label>
-                Assign service
-                <select value={formServiceId} onChange={(e) => setFormServiceId(e.target.value)}>
-                  <option value="">Select service</option>
-                  {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
-                </select>
-                <button type="button" disabled={busyUser === selectedUser.username || !formServiceId} onClick={() => applyAction({ service_id: Number(formServiceId) })}>Assign service</button>
-              </label>
-              <label>
-                Reset usage
-                <p className="vb-hint">Sets used traffic to zero for this user.</p>
-                <button type="button" disabled={busyUser === selectedUser.username} onClick={() => applyAction({ reset_used: true })}>Reset usage</button>
-              </label>
-            </div>
-            <div className="vb-qr-wrap">
-              <button type="button" disabled={busyUser === selectedUser.username} onClick={loadQr}>Show QR code</button>
-              {subInfo ? (
-                <div className="vb-qr-list">
-                  {subInfo.urls.map((url, index) => (
-                    <div key={url}>
-                      <p className="vb-hint">{url}</p>
-                      <img src={subInfo.qr_data_uris[index]} alt={`Subscription QR ${index + 1} for ${selectedUser.username}`} className="vb-qr-img" />
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          </section>
-          </div>
-        ) : null}
+    <LayoutShell title="Users" onAddUser={openCreateModal} onLogout={logout}>
+      <section className="mb-6 grid gap-4 sm:grid-cols-3">
+        <article className="rounded-xl bg-white p-4 shadow-sm"><p className="text-sm text-slate-500">Total users</p><p className="mt-2 text-2xl font-semibold">{numberFormatter.format(stats.totalUsers)}</p></article>
+        <article className="rounded-xl bg-white p-4 shadow-sm"><p className="text-sm text-slate-500">Disabled users</p><p className="mt-2 text-2xl font-semibold">{numberFormatter.format(stats.disabledUsers)}</p></article>
+        <article className="rounded-xl bg-white p-4 shadow-sm"><p className="text-sm text-slate-500">Total usage</p><p className="mt-2 text-2xl font-semibold">{formatBytes(stats.totalUsageBytes)}</p></article>
       </section>
-    </main>
-  );
-}
 
-function App() {
-  const page = document.body.dataset.page as PageMode;
-  if (page === 'users') return <UsersPage />;
-  return <LoginPage />;
+      {error ? <p className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+
+      <UsersTable
+        users={displayedUsers}
+        loading={loading}
+        search={search}
+        sortDirection={sortDirection}
+        onSearchChange={setSearch}
+        onToggleSort={() => setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+        onEdit={openEditModal}
+        onDelete={setDeleteTarget}
+      />
+
+      <UserModal
+        open={modalOpen}
+        mode={modalMode}
+        services={services}
+        values={formValues}
+        saving={modalSaving}
+        error={modalError}
+        onChange={(patch) => setFormValues((prev) => ({ ...prev, ...patch }))}
+        onClose={() => setModalOpen(false)}
+        onSubmit={submitUserModal}
+      />
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        username={deleteTarget?.username || ''}
+        busy={deleteBusy}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={confirmDelete}
+      />
+    </LayoutShell>
+  );
 }
 
 const rootNode = document.getElementById('root');
 if (rootNode) {
-  ReactDOM.createRoot(rootNode).render(<App />);
+  ReactDOM.createRoot(rootNode).render(<UsersPage />);
 }
