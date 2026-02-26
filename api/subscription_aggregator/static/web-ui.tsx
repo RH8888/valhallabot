@@ -27,6 +27,24 @@ type SubscriptionResponse = {
 
 const { useEffect, useMemo, useState } = React;
 const numberFormatter = new Intl.NumberFormat();
+const THEME_KEY = 'vb-theme';
+
+function useTheme() {
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    const stored = window.localStorage.getItem(THEME_KEY);
+    return stored === 'light' ? 'light' : 'dark';
+  });
+
+  useEffect(() => {
+    document.body.dataset.theme = theme;
+    window.localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
+
+  return {
+    theme,
+    toggleTheme: () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark')),
+  };
+}
 
 function formatBytes(value?: number | null): string {
   if (value === null || value === undefined) return '-';
@@ -48,6 +66,7 @@ function parseDate(value?: string | null): string {
 }
 
 function LoginPage() {
+  const { theme, toggleTheme } = useTheme();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -94,7 +113,12 @@ function LoginPage() {
   return (
     <main className="vb-shell">
       <section className="vb-login-card">
-        <p className="vb-chip">Valhalla Web Console</p>
+        <div className="vb-inline-head">
+          <p className="vb-chip">Valhalla Web Console</p>
+          <button type="button" className="vb-secondary-btn" onClick={toggleTheme}>
+            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          </button>
+        </div>
         <h1>Welcome back</h1>
         <p className="vb-subtitle">Sign in to securely manage users, quotas, and expiration dates.</p>
         <form onSubmit={submit} className="vb-form">
@@ -128,6 +152,7 @@ function LoginPage() {
 }
 
 function UsersPage() {
+  const { theme, toggleTheme } = useTheme();
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [totalUsageBytes, setTotalUsageBytes] = useState(0);
   const [search, setSearch] = useState('');
@@ -259,7 +284,12 @@ function UsersPage() {
             <h1>Users</h1>
             <p className="vb-subtitle">Monitor quota usage and account status in one place.</p>
           </div>
-          <button type="button" onClick={logout} className="vb-secondary-btn">Logout</button>
+          <div className="vb-header-actions">
+            <button type="button" onClick={toggleTheme} className="vb-secondary-btn">
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </button>
+            <button type="button" onClick={logout} className="vb-secondary-btn">Logout</button>
+          </div>
         </header>
 
         <section className="vb-stat-grid">
