@@ -1,13 +1,16 @@
 """Web UI authentication routes."""
 from __future__ import annotations
 
+import base64
+import io
 import logging
 import os
 import time
 from threading import Lock
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+import qrcode
 from werkzeug.security import check_password_hash
 
 from api.web_auth import (
@@ -19,7 +22,8 @@ from api.web_auth import (
     require_web_user,
     web_session_secure_cookie,
 )
-from api.users import UserListResponse, UserOut, _list_users, get_total_usage_by_panel
+from api.users import UserListResponse, UserOut, _fetch_user, _list_users, get_total_usage_by_panel
+from bot import build_sub_links, list_services_for_owner, renew_user, reset_used, set_local_user_service, update_limit
 from services import with_mysql_cursor
 from services.settings import get_setting
 
@@ -79,6 +83,34 @@ def _clear_login_attempts(client_id: str, username: str) -> None:
 class WebLoginRequest(BaseModel):
     username: str
     password: str
+
+
+class WebUserUpdateRequest(BaseModel):
+    limit_bytes: int | None = Field(None, description="Additional bytes to add to the remaining quota")
+    reset_used: bool = Field(False, description="Reset used traffic")
+    renew_days: int | None = Field(None, description="Days to add to expiry")
+    service_id: int | None = Field(None, description="Assign user to service")
+
+
+class WebServiceOut(BaseModel):
+    id: int
+    name: str
+
+
+class WebSubscriptionOut(BaseModel):
+    url: str
+    qr_data_uri: str
+
+
+def _to_qr_data_uri(content: str) -> str:
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=4)
+    qr.add_data(content)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 @router.post("/login")
@@ -274,6 +306,72 @@ async def web_list_users(
         total_used_bytes=get_total_usage_by_panel(scoped_owner_id),
         users=users,
     )
+
+
+@router.patch("/users/{username}", response_model=UserOut)
+async def web_edit_user(
+    username: str,
+    payload: WebUserUpdateRequest,
+    identity: WebIdentity = Depends(require_web_user),
+) -> UserOut:
+    scoped_owner_id = identity.owner_id if identity.role == "web_agent" else owner_settings_id()
+    if scoped_owner_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+    if payload.limit_bytes is not None:
+        update_limit(scoped_owner_id, username, payload.limit_bytes)
+    if payload.reset_used:
+        reset_used(scoped_owner_id, username)
+    if payload.renew_days is not None:
+        renew_user(scoped_owner_id, username, payload.renew_days)
+    if payload.service_id is not None:
+        await set_local_user_service(scoped_owner_id, username, payload.service_id)
+
+    row = _fetch_user(scoped_owner_id, username)
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserOut(
+        username=row["username"],
+        plan_limit_bytes=row.get("plan_limit_bytes", 0),
+        used_bytes=row.get("used_bytes", 0),
+        expire_at=row.get("expire_at"),
+        service_id=row.get("service_id"),
+        disabled=bool(row.get("manual_disabled") or row.get("disabled_pushed")),
+        manual_disabled=bool(row.get("manual_disabled")),
+        access_key=row.get("access_key"),
+        key_expires_at=row.get("key_expires_at"),
+    )
+
+
+@router.get("/services", response_model=list[WebServiceOut])
+async def web_list_services(identity: WebIdentity = Depends(require_web_user)) -> list[WebServiceOut]:
+    scoped_owner_id = identity.owner_id if identity.role == "web_agent" else owner_settings_id()
+    if scoped_owner_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    rows = list_services_for_owner(scoped_owner_id)
+    return [WebServiceOut(id=int(row["id"]), name=str(row["name"])) for row in rows]
+
+
+@router.get("/users/{username}/subscription", response_model=WebSubscriptionOut)
+async def web_user_subscription(
+    username: str,
+    identity: WebIdentity = Depends(require_web_user),
+) -> WebSubscriptionOut:
+    scoped_owner_id = identity.owner_id if identity.role == "web_agent" else owner_settings_id()
+    if scoped_owner_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+    row = _fetch_user(scoped_owner_id, username)
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+    access_key = row.get("access_key")
+    if not access_key:
+        raise HTTPException(status_code=404, detail="Subscription key not found")
+    sub_links = build_sub_links(scoped_owner_id, username, access_key)
+    if not sub_links:
+        raise HTTPException(status_code=404, detail="Subscription link not found")
+    primary_link = sub_links[0]
+    return WebSubscriptionOut(url=primary_link, qr_data_uri=_to_qr_data_uri(primary_link))
 
 
 __all__ = ["router"]
