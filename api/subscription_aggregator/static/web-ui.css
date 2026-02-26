@@ -69,6 +69,16 @@ input {
   padding: 11px 12px;
   outline: none;
 }
+select {
+  width: 100%;
+  background: var(--panel-strong);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 14px;
+  padding: 11px 12px;
+  outline: none;
+}
 input:focus {
   border-color: rgba(79, 140, 255, 0.9);
   box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.2);
@@ -125,6 +135,28 @@ button:disabled { opacity: 0.6; cursor: wait; }
   overflow: auto;
 }
 
+.vb-manage-panel {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(13, 24, 49, 0.75);
+}
+.vb-manage-panel h3 { margin: 0 0 12px; }
+.vb-manage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.vb-manage-grid label {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  color: #d5e2ff;
+}
+.vb-qr-wrap { margin-top: 14px; display: grid; gap: 10px; }
+.vb-qr-img { width: 180px; height: 180px; background: #fff; border-radius: 10px; padding: 8px; }
+
 table { width: 100%; border-collapse: collapse; min-width: 760px; }
 th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid rgba(136, 163, 220, 0.14); }
 th { color: #c8d8fa; font-size: 13px; background: rgba(17, 31, 61, 0.95); position: sticky; top: 0; }
@@ -144,4 +176,5 @@ td { font-size: 14px; color: #eff3ff; }
   .vb-login-card { padding: 24px; }
   .vb-users-header { flex-direction: column; }
   .vb-stat-grid { grid-template-columns: 1fr; }
+  .vb-manage-grid { grid-template-columns: 1fr; }
 }

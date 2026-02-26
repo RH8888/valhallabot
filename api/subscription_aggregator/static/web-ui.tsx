@@ -5,6 +5,7 @@ type UserRecord = {
   plan_limit_bytes: number;
   used_bytes: number;
   expire_at?: string | null;
+  service_id?: number | null;
   disabled: boolean;
 };
 
@@ -12,6 +13,16 @@ type UsersResponse = {
   total: number;
   total_used_bytes?: number;
   users: UserRecord[];
+};
+
+type ServiceRecord = {
+  id: number;
+  name: string;
+};
+
+type SubscriptionResponse = {
+  url: string;
+  qr_data_uri: string;
 };
 
 const { useEffect, useMemo, useState } = React;
@@ -122,6 +133,13 @@ function UsersPage() {
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [services, setServices] = useState<ServiceRecord[]>([]);
+  const [busyUser, setBusyUser] = useState<string>('');
+  const [selectedUser, setSelectedUser] = useState<UserRecord | null>(null);
+  const [formLimit, setFormLimit] = useState('');
+  const [formRenewDays, setFormRenewDays] = useState('');
+  const [formServiceId, setFormServiceId] = useState('');
+  const [subInfo, setSubInfo] = useState<SubscriptionResponse | null>(null);
 
   useEffect(() => {
     const boot = async () => {
@@ -132,7 +150,10 @@ function UsersPage() {
           return;
         }
 
-        const usersRes = await fetch('/api/v1/web/users?limit=200', { credentials: 'same-origin' });
+        const [usersRes, servicesRes] = await Promise.all([
+          fetch('/api/v1/web/users?limit=200', { credentials: 'same-origin' }),
+          fetch('/api/v1/web/services', { credentials: 'same-origin' }),
+        ]);
         if (usersRes.status === 401) {
           window.location.replace('/web/login');
           return;
@@ -141,8 +162,10 @@ function UsersPage() {
           throw new Error('load failed');
         }
         const data = (await usersRes.json()) as UsersResponse;
+        const serviceData = servicesRes.ok ? ((await servicesRes.json()) as ServiceRecord[]) : [];
         setUsers(Array.isArray(data.users) ? data.users : []);
         setTotalUsageBytes(Number(data.total_used_bytes || 0));
+        setServices(Array.isArray(serviceData) ? serviceData : []);
       } catch {
         setError('Unable to load users right now.');
       } finally {
@@ -168,6 +191,54 @@ function UsersPage() {
       await fetch('/api/v1/web/logout', { method: 'POST', credentials: 'same-origin' });
     } finally {
       window.location.replace('/web/login');
+    }
+  };
+
+  const openManage = (user: UserRecord) => {
+    setSelectedUser(user);
+    setFormLimit('');
+    setFormRenewDays('');
+    setFormServiceId(user.service_id ? String(user.service_id) : '');
+    setSubInfo(null);
+    setError('');
+  };
+
+  const applyAction = async (payload: Record<string, unknown>) => {
+    if (!selectedUser) return;
+    setBusyUser(selectedUser.username);
+    setError('');
+    try {
+      const res = await fetch(`/api/v1/web/users/${encodeURIComponent(selectedUser.username)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error('update failed');
+      const updated = (await res.json()) as UserRecord;
+      setUsers((prev) => prev.map((u) => (u.username === updated.username ? updated : u)));
+      setSelectedUser(updated);
+    } catch {
+      setError('Could not update user. Please try again.');
+    } finally {
+      setBusyUser('');
+    }
+  };
+
+  const loadQr = async () => {
+    if (!selectedUser) return;
+    setBusyUser(selectedUser.username);
+    setError('');
+    try {
+      const res = await fetch(`/api/v1/web/users/${encodeURIComponent(selectedUser.username)}/subscription`, {
+        credentials: 'same-origin',
+      });
+      if (!res.ok) throw new Error('qr failed');
+      setSubInfo((await res.json()) as SubscriptionResponse);
+    } catch {
+      setError('Could not load QR code for this user.');
+    } finally {
+      setBusyUser('');
     }
   };
 
@@ -203,13 +274,13 @@ function UsersPage() {
         <div className="vb-table-wrap">
           <table>
             <thead>
-              <tr><th>Username</th><th>Plan limit</th><th>Used</th><th>Expires at</th><th>Status</th></tr>
+              <tr><th>Username</th><th>Plan limit</th><th>Used</th><th>Expires at</th><th>Status</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={5}>Loading users…</td></tr>
+                <tr><td colSpan={6}>Loading users…</td></tr>
               ) : filteredUsers.length === 0 ? (
-                <tr><td colSpan={5}>No users found.</td></tr>
+                <tr><td colSpan={6}>No users found.</td></tr>
               ) : (
                 filteredUsers.map((user) => (
                   <tr key={user.username}>
@@ -222,12 +293,53 @@ function UsersPage() {
                         {user.disabled ? 'Disabled' : 'Active'}
                       </span>
                     </td>
+                    <td><button type="button" className="vb-secondary-btn" onClick={() => openManage(user)}>Manage</button></td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
+
+        {selectedUser ? (
+          <section className="vb-manage-panel">
+            <h3>Manage @{selectedUser.username}</h3>
+            <div className="vb-manage-grid">
+              <label>
+                Add traffic (bytes)
+                <input value={formLimit} onChange={(e) => setFormLimit(e.target.value)} placeholder="e.g. 10737418240" />
+                <button type="button" disabled={busyUser === selectedUser.username || !formLimit.trim()} onClick={() => applyAction({ limit_bytes: Number(formLimit) })}>Edit limit</button>
+              </label>
+              <label>
+                Renew days
+                <input value={formRenewDays} onChange={(e) => setFormRenewDays(e.target.value)} placeholder="e.g. 30" />
+                <button type="button" disabled={busyUser === selectedUser.username || !formRenewDays.trim()} onClick={() => applyAction({ renew_days: Number(formRenewDays) })}>Renew</button>
+              </label>
+              <label>
+                Assign service
+                <select value={formServiceId} onChange={(e) => setFormServiceId(e.target.value)}>
+                  <option value="">Select service</option>
+                  {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
+                </select>
+                <button type="button" disabled={busyUser === selectedUser.username || !formServiceId} onClick={() => applyAction({ service_id: Number(formServiceId) })}>Assign service</button>
+              </label>
+              <label>
+                Reset usage
+                <p className="vb-hint">Sets used traffic to zero for this user.</p>
+                <button type="button" disabled={busyUser === selectedUser.username} onClick={() => applyAction({ reset_used: true })}>Reset usage</button>
+              </label>
+            </div>
+            <div className="vb-qr-wrap">
+              <button type="button" disabled={busyUser === selectedUser.username} onClick={loadQr}>Show QR code</button>
+              {subInfo ? (
+                <div>
+                  <p className="vb-hint">{subInfo.url}</p>
+                  <img src={subInfo.qr_data_uri} alt={`Subscription QR for ${selectedUser.username}`} className="vb-qr-img" />
+                </div>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
       </section>
     </main>
   );
