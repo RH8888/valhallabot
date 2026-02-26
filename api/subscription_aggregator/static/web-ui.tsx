@@ -1,4 +1,10 @@
+/** @jsxImportSource https://esm.sh/react@18.3.1 */
+import * as React from 'https://esm.sh/react@18.3.1';
+import * as ReactDOM from 'https://esm.sh/react-dom@18.3.1/client';
+import * as Dialog from 'https://esm.sh/@radix-ui/react-dialog@1.1.2?bundle';
+
 type PageMode = 'login' | 'users';
+type UserFormMode = 'create' | 'edit';
 
 type UserRecord = {
   username: string;
@@ -18,11 +24,6 @@ type UsersResponse = {
 type ServiceRecord = {
   id: number;
   name: string;
-};
-
-type SubscriptionResponse = {
-  urls: string[];
-  qr_data_uris: string[];
 };
 
 const { useEffect, useMemo, useState } = React;
@@ -65,8 +66,334 @@ function parseDate(value?: string | null): string {
   return date.toLocaleString();
 }
 
+type LayoutShellProps = {
+  title: string;
+  subtitle: string;
+  theme: 'dark' | 'light';
+  onToggleTheme: () => void;
+  onLogout: () => void;
+  headerAction?: React.ReactNode;
+  children: React.ReactNode;
+};
+
+function LayoutShell(props: LayoutShellProps) {
+  const { title, subtitle, theme, onToggleTheme, onLogout, headerAction, children } = props;
+  return (
+    <main className="vb-admin-shell">
+      <aside className="vb-admin-sidebar">
+        <h2>Valhalla Admin</h2>
+        <nav>
+          <a href="/web/users" className="vb-nav-link active" aria-current="page">Users</a>
+        </nav>
+      </aside>
+      <section className="vb-main-content">
+        <header className="vb-page-header">
+          <div>
+            <h1>{title}</h1>
+            <p className="vb-subtitle">{subtitle}</p>
+          </div>
+          <div className="vb-page-actions">
+            {headerAction}
+            <button type="button" className="vb-secondary-btn" onClick={onToggleTheme}>
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </button>
+            <button type="button" className="vb-secondary-btn" onClick={onLogout}>Logout</button>
+          </div>
+        </header>
+        <section className="vb-content-panel">{children}</section>
+      </section>
+    </main>
+  );
+}
+
+type UsersTableProps = {
+  users: UserRecord[];
+  search: string;
+  onSearchChange: (value: string) => void;
+  loading: boolean;
+  onEdit: (user: UserRecord) => void;
+  onDelete: (user: UserRecord) => void;
+};
+
+function UsersTable(props: UsersTableProps) {
+  const { users, search, onSearchChange, loading, onEdit, onDelete } = props;
+
+  return (
+    <>
+      <div className="vb-table-toolbar">
+        <input
+          value={search}
+          onChange={(event) => onSearchChange(event.target.value)}
+          placeholder="Search by username"
+          aria-label="Search users"
+        />
+      </div>
+      <div className="vb-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Plan limit</th>
+              <th>Used</th>
+              <th>Expires at</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={6} className="vb-table-placeholder">Loading users…</td></tr>
+            ) : users.length === 0 ? (
+              <tr><td colSpan={6} className="vb-table-placeholder">No users found for this search.</td></tr>
+            ) : (
+              users.map((user) => (
+                <tr key={user.username}>
+                  <td>{user.username}</td>
+                  <td>{formatBytes(user.plan_limit_bytes)}</td>
+                  <td>{formatBytes(user.used_bytes)}</td>
+                  <td>{parseDate(user.expire_at)}</td>
+                  <td>
+                    <span className={user.disabled ? 'vb-badge danger' : 'vb-badge success'}>
+                      {user.disabled ? 'Disabled' : 'Active'}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="vb-row-actions">
+                      <button type="button" className="vb-secondary-btn" onClick={() => onEdit(user)}>Edit</button>
+                      <button type="button" className="vb-danger-btn" onClick={() => onDelete(user)}>
+                        {user.disabled ? 'Enable' : 'Disable'}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+type UserModalProps = {
+  open: boolean;
+  mode: UserFormMode;
+  user: UserRecord | null;
+  services: ServiceRecord[];
+  onClose: () => void;
+  onSubmit: (payload: {
+    username: string;
+    limitGb: number;
+    durationDays: number;
+    renewDays: number;
+    serviceId: number | null;
+  }) => Promise<void>;
+};
+
+function UserModal({ open, mode, user, services, onClose, onSubmit }: UserModalProps) {
+  const [username, setUsername] = useState('');
+  const [limitGb, setLimitGb] = useState('0');
+  const [durationDays, setDurationDays] = useState('0');
+  const [renewDays, setRenewDays] = useState('0');
+  const [serviceId, setServiceId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    setError('');
+    if (mode === 'edit' && user) {
+      setUsername(user.username);
+      setLimitGb('0');
+      setDurationDays('0');
+      setRenewDays('0');
+      setServiceId(user.service_id ? String(user.service_id) : '');
+      return;
+    }
+    setUsername('');
+    setLimitGb('0');
+    setDurationDays('30');
+    setRenewDays('0');
+    setServiceId('');
+  }, [mode, open, user]);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError('');
+
+    if (!username.trim()) {
+      setError('Username is required.');
+      return;
+    }
+
+    const parsedLimit = Number(limitGb || '0');
+    const parsedDuration = Number(durationDays || '0');
+    const parsedRenew = Number(renewDays || '0');
+
+    if (!Number.isFinite(parsedLimit) || parsedLimit < 0) {
+      setError('Traffic limit must be a non-negative number.');
+      return;
+    }
+    if (!Number.isFinite(parsedDuration) || parsedDuration < 0) {
+      setError('Duration days must be a non-negative number.');
+      return;
+    }
+    if (!Number.isFinite(parsedRenew) || parsedRenew < 0) {
+      setError('Renew days must be a non-negative number.');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await onSubmit({
+        username: username.trim(),
+        limitGb: parsedLimit,
+        durationDays: parsedDuration,
+        renewDays: parsedRenew,
+        serviceId: serviceId ? Number(serviceId) : null,
+      });
+      onClose();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not save user.';
+      setError(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const isEdit = mode === 'edit';
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(next) => (!next ? onClose() : undefined)}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="vb-modal-overlay" />
+        <Dialog.Content className="vb-modal-content">
+          <div className="vb-modal-head">
+            <Dialog.Title>{isEdit ? `Edit ${user?.username || ''}` : 'Add user'}</Dialog.Title>
+            <Dialog.Close asChild>
+              <button type="button" className="vb-secondary-btn" aria-label="Close dialog">✕</button>
+            </Dialog.Close>
+          </div>
+
+          {error ? <p className="vb-error">{error}</p> : null}
+
+          <form className="vb-form" onSubmit={submit}>
+            <label>
+              Username
+              <input
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                required
+                disabled={isEdit}
+                autoFocus
+              />
+            </label>
+            <label>
+              Traffic limit (GB)
+              <input
+                type="number"
+                min="0"
+                value={limitGb}
+                onChange={(event) => setLimitGb(event.target.value)}
+                required
+              />
+            </label>
+            {!isEdit ? (
+              <label>
+                Duration (days)
+                <input
+                  type="number"
+                  min="0"
+                  value={durationDays}
+                  onChange={(event) => setDurationDays(event.target.value)}
+                  required
+                />
+              </label>
+            ) : (
+              <label>
+                Renew by (days)
+                <input
+                  type="number"
+                  min="0"
+                  value={renewDays}
+                  onChange={(event) => setRenewDays(event.target.value)}
+                />
+              </label>
+            )}
+            <label>
+              Service
+              <select value={serviceId} onChange={(event) => setServiceId(event.target.value)}>
+                <option value="">No service</option>
+                {services.map((service) => (
+                  <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>
+                ))}
+              </select>
+            </label>
+
+            <div className="vb-modal-footer">
+              <button type="button" className="vb-secondary-btn" onClick={onClose} disabled={busy}>Cancel</button>
+              <button type="submit" disabled={busy}>{busy ? 'Saving…' : isEdit ? 'Save changes' : 'Create user'}</button>
+            </div>
+          </form>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+type ConfirmDialogProps = {
+  open: boolean;
+  title: string;
+  description: string;
+  confirmLabel: string;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+};
+
+function ConfirmDialog({ open, title, description, confirmLabel, busy, onCancel, onConfirm }: ConfirmDialogProps) {
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!open) setError('');
+  }, [open]);
+
+  const confirm = async () => {
+    setError('');
+    try {
+      await onConfirm();
+      onCancel();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Action failed.');
+    }
+  };
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(next) => (!next ? onCancel() : undefined)}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="vb-modal-overlay" />
+        <Dialog.Content className="vb-modal-content vb-confirm-dialog">
+          <div className="vb-modal-head">
+            <Dialog.Title>{title}</Dialog.Title>
+            <Dialog.Close asChild>
+              <button type="button" className="vb-secondary-btn" aria-label="Close dialog">✕</button>
+            </Dialog.Close>
+          </div>
+          <p className="vb-subtitle">{description}</p>
+          {error ? <p className="vb-error">{error}</p> : null}
+          <div className="vb-modal-footer">
+            <button type="button" className="vb-secondary-btn" onClick={onCancel} disabled={busy}>Cancel</button>
+            <button type="button" className="vb-danger-btn" onClick={() => void confirm()} disabled={busy}>
+              {busy ? 'Saving…' : confirmLabel}
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function LoginPage() {
-  const { theme, toggleTheme } = useTheme();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -75,9 +402,7 @@ function LoginPage() {
   useEffect(() => {
     fetch('/api/v1/web/me', { credentials: 'same-origin' })
       .then((res) => {
-        if (res.ok) {
-          window.location.replace('/web/users');
-        }
+        if (res.ok) window.location.replace('/web/users');
       })
       .catch(() => undefined);
   }, []);
@@ -98,11 +423,7 @@ function LoginPage() {
         window.location.replace('/web/users');
         return;
       }
-      if (res.status === 429) {
-        setError('Too many login attempts. Please wait a bit and try again.');
-        return;
-      }
-      setError('Invalid username or password.');
+      setError(res.status === 429 ? 'Too many login attempts. Try again later.' : 'Invalid username or password.');
     } catch {
       setError('Unable to login right now. Please try again.');
     } finally {
@@ -113,38 +434,13 @@ function LoginPage() {
   return (
     <main className="vb-shell">
       <section className="vb-login-card">
-        <div className="vb-inline-head">
-          <p className="vb-chip">Valhalla Web Console</p>
-          <button type="button" className="vb-secondary-btn" onClick={toggleTheme}>
-            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-          </button>
-        </div>
         <h1>Welcome back</h1>
-        <p className="vb-subtitle">Sign in to securely manage users, quotas, and expiration dates.</p>
+        <p className="vb-subtitle">Sign in to manage your users.</p>
         <form onSubmit={submit} className="vb-form">
-          <label>
-            Username
-            <input
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              autoComplete="username"
-              required
-              placeholder="Enter your username"
-            />
-          </label>
-          <label>
-            Password
-            <input
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-              type="password"
-              required
-              placeholder="Enter your password"
-            />
-          </label>
+          <label>Username<input value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
+          <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
           <button type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-          {error ? <p className="vb-error">{error}</p> : <p className="vb-hint">Session is protected with secure HTTP-only cookies.</p>}
+          {error ? <p className="vb-error">{error}</p> : null}
         </form>
       </section>
     </main>
@@ -159,20 +455,12 @@ function UsersPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [services, setServices] = useState<ServiceRecord[]>([]);
-  const [busyUser, setBusyUser] = useState<string>('');
   const [selectedUser, setSelectedUser] = useState<UserRecord | null>(null);
-  const [formLimit, setFormLimit] = useState('');
-  const [formRenewDays, setFormRenewDays] = useState('');
-  const [formServiceId, setFormServiceId] = useState('');
-  const [subInfo, setSubInfo] = useState<SubscriptionResponse | null>(null);
-  const [createUsername, setCreateUsername] = useState('');
-  const [createLimitGb, setCreateLimitGb] = useState('');
-  const [createDurationDays, setCreateDurationDays] = useState('');
-  const [createServiceId, setCreateServiceId] = useState('');
-  const [creatingUser, setCreatingUser] = useState(false);
-  const [showCreateUserModal, setShowCreateUserModal] = useState(false);
-  const parsedLimitGb = Number(formLimit);
-  const canSetLimit = Number.isFinite(parsedLimitGb) && parsedLimitGb >= 0;
+  const [modalMode, setModalMode] = useState<UserFormMode>('create');
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [pendingDeleteUser, setPendingDeleteUser] = useState<UserRecord | null>(null);
+  const [busyDelete, setBusyDelete] = useState(false);
 
   const reloadUsers = async () => {
     const usersRes = await fetch('/api/v1/web/users?limit=200', { credentials: 'same-origin' });
@@ -180,12 +468,10 @@ function UsersPage() {
       window.location.replace('/web/login');
       return;
     }
-    if (!usersRes.ok) {
-      throw new Error('load users failed');
-    }
+    if (!usersRes.ok) throw new Error('Unable to load users.');
     const data = (await usersRes.json()) as UsersResponse;
-    setUsers(data.users || []);
-    setTotalUsageBytes(data.total_used_bytes || 0);
+    setUsers(Array.isArray(data.users) ? data.users : []);
+    setTotalUsageBytes(Number(data.total_used_bytes || 0));
   };
 
   useEffect(() => {
@@ -196,23 +482,10 @@ function UsersPage() {
           window.location.replace('/web/login');
           return;
         }
-
-        const [usersRes, servicesRes] = await Promise.all([
-          fetch('/api/v1/web/users?limit=200', { credentials: 'same-origin' }),
-          fetch('/api/v1/web/services', { credentials: 'same-origin' }),
-        ]);
-        if (usersRes.status === 401) {
-          window.location.replace('/web/login');
-          return;
-        }
-        if (!usersRes.ok) {
-          throw new Error('load failed');
-        }
-        const data = (await usersRes.json()) as UsersResponse;
+        const servicesRes = await fetch('/api/v1/web/services', { credentials: 'same-origin' });
         const serviceData = servicesRes.ok ? ((await servicesRes.json()) as ServiceRecord[]) : [];
-        setUsers(Array.isArray(data.users) ? data.users : []);
-        setTotalUsageBytes(Number(data.total_used_bytes || 0));
         setServices(Array.isArray(serviceData) ? serviceData : []);
+        await reloadUsers();
       } catch {
         setError('Unable to load users right now.');
       } finally {
@@ -223,10 +496,11 @@ function UsersPage() {
     void boot();
   }, []);
 
-  const filteredUsers = useMemo(
-    () => users.filter((user) => user.username.toLowerCase().includes(search.trim().toLowerCase())),
-    [search, users],
-  );
+  const filteredUsers = useMemo(() => {
+    const normalized = search.trim().toLowerCase();
+    const result = users.filter((user) => user.username.toLowerCase().includes(normalized));
+    return result.sort((a, b) => a.username.localeCompare(b.username));
+  }, [search, users]);
 
   const stats = useMemo(() => {
     const disabled = users.filter((user) => user.disabled).length;
@@ -241,270 +515,125 @@ function UsersPage() {
     }
   };
 
-  const createUser = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const submitUser = async (payload: {
+    username: string;
+    limitGb: number;
+    durationDays: number;
+    renewDays: number;
+    serviceId: number | null;
+  }) => {
     setError('');
-    if (!createUsername.trim()) {
-      setError('Username is required.');
-      return;
-    }
-
-    const limitGbNumber = Number(createLimitGb || '0');
-    const durationDaysNumber = Number(createDurationDays || '0');
-    if (!Number.isFinite(limitGbNumber) || limitGbNumber < 0) {
-      setError('Traffic limit must be a non-negative number.');
-      return;
-    }
-    if (!Number.isFinite(durationDaysNumber) || durationDaysNumber < 0) {
-      setError('Duration days must be a non-negative number.');
-      return;
-    }
-
-    setCreatingUser(true);
-    try {
-      const res = await fetch('/api/v1/web/users', {
+    if (modalMode === 'create') {
+      const createRes = await fetch('/api/v1/web/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify({
-          username: createUsername.trim(),
-          limit_bytes: Math.round(limitGbNumber * 1024 * 1024 * 1024),
-          duration_days: Math.round(durationDaysNumber),
-          service_id: createServiceId ? Number(createServiceId) : null,
+          username: payload.username,
+          limit_bytes: Math.round(payload.limitGb * 1024 * 1024 * 1024),
+          duration_days: Math.round(payload.durationDays),
+          service_id: payload.serviceId,
         }),
       });
-      if (res.status === 401) {
-        window.location.replace('/web/login');
-        return;
+      if (!createRes.ok) {
+        const detail = await createRes.json().catch(() => ({}));
+        throw new Error(detail.detail || 'Could not create user.');
       }
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(payload.detail || 'Could not create user.');
-        return;
-      }
-      setCreateUsername('');
-      setCreateLimitGb('');
-      setCreateDurationDays('');
-      setCreateServiceId('');
-      setShowCreateUserModal(false);
       await reloadUsers();
-    } catch {
-      setError('Could not create user. Please try again.');
-    } finally {
-      setCreatingUser(false);
+      return;
     }
-  };
 
-  const openManage = (user: UserRecord) => {
-    setSelectedUser(user);
-    setFormLimit('');
-    setFormRenewDays('');
-    setFormServiceId(user.service_id ? String(user.service_id) : '');
-    setSubInfo(null);
-    setError('');
-  };
+    if (!selectedUser) throw new Error('No user selected.');
+    const editRes = await fetch(`/api/v1/web/users/${encodeURIComponent(selectedUser.username)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        limit_bytes: Math.round(payload.limitGb * 1024 * 1024 * 1024),
+        renew_days: Math.round(payload.renewDays),
+        service_id: payload.serviceId,
+      }),
+    });
 
-  const closeManage = () => {
-    setSelectedUser(null);
-    setSubInfo(null);
-    setBusyUser('');
-  };
-
-  const applyAction = async (payload: Record<string, unknown>) => {
-    if (!selectedUser) return;
-    setBusyUser(selectedUser.username);
-    setError('');
-    try {
-      const res = await fetch(`/api/v1/web/users/${encodeURIComponent(selectedUser.username)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error('update failed');
-      const updated = (await res.json()) as UserRecord;
-      setUsers((prev) => prev.map((u) => (u.username === updated.username ? updated : u)));
-      setSelectedUser(updated);
-    } catch {
-      setError('Could not update user. Please try again.');
-    } finally {
-      setBusyUser('');
+    if (!editRes.ok) {
+      const detail = await editRes.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Could not update user.');
     }
+    await reloadUsers();
   };
 
-  const loadQr = async () => {
-    if (!selectedUser) return;
-    setBusyUser(selectedUser.username);
-    setError('');
+  const requestToggleUser = (user: UserRecord) => {
+    setPendingDeleteUser(user);
+    setShowConfirm(true);
+  };
+
+  const confirmToggleUser = async () => {
+    if (!pendingDeleteUser) return;
+    setBusyDelete(true);
     try {
-      const res = await fetch(`/api/v1/web/users/${encodeURIComponent(selectedUser.username)}/subscription`, {
+      const res = await fetch(`/api/v1/web/users/${encodeURIComponent(pendingDeleteUser.username)}?disable=${!pendingDeleteUser.disabled}`, {
+        method: 'DELETE',
         credentials: 'same-origin',
       });
-      if (!res.ok) throw new Error('qr failed');
-      setSubInfo((await res.json()) as SubscriptionResponse);
-    } catch {
-      setError('Could not load QR code for this user.');
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || 'Could not update user status.');
+      }
+      await reloadUsers();
     } finally {
-      setBusyUser('');
+      setBusyDelete(false);
     }
   };
 
   return (
-    <main className="vb-shell vb-users-shell">
-      <section className="vb-users-card">
-        <header className="vb-users-header">
-          <div>
-            <p className="vb-chip">Valhalla Dashboard</p>
-            <h1>Users</h1>
-            <p className="vb-subtitle">Monitor quota usage and account status in one place.</p>
-          </div>
-          <div className="vb-header-actions">
-            <button type="button" onClick={toggleTheme} className="vb-secondary-btn">
-              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            </button>
-            <button type="button" onClick={logout} className="vb-secondary-btn">Logout</button>
-          </div>
-        </header>
-
-        <section className="vb-stat-grid">
-          <article><span>Total users</span><strong>{numberFormatter.format(stats.totalUsers)}</strong></article>
-          <article><span>Disabled users</span><strong>{numberFormatter.format(stats.disabled)}</strong></article>
-          <article><span>Total usage</span><strong>{formatBytes(stats.totalUsage)}</strong></article>
-        </section>
-
-        <div className="vb-table-toolbar">
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search by username"
-            aria-label="Search by username"
-          />
-          <button type="button" onClick={() => setShowCreateUserModal(true)}>Add user</button>
-        </div>
-
-        {error ? <p className="vb-error">{error}</p> : null}
-
-        <div className="vb-table-wrap">
-          <table>
-            <thead>
-              <tr><th>Username</th><th>Plan limit</th><th>Used</th><th>Expires at</th><th>Status</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={6}>Loading users…</td></tr>
-              ) : filteredUsers.length === 0 ? (
-                <tr><td colSpan={6}>No users found.</td></tr>
-              ) : (
-                filteredUsers.map((user) => (
-                  <tr key={user.username}>
-                    <td>{user.username}</td>
-                    <td>{formatBytes(user.plan_limit_bytes)}</td>
-                    <td>{formatBytes(user.used_bytes)}</td>
-                    <td>{parseDate(user.expire_at)}</td>
-                    <td>
-                      <span className={user.disabled ? 'vb-badge danger' : 'vb-badge success'}>
-                        {user.disabled ? 'Disabled' : 'Active'}
-                      </span>
-                    </td>
-                    <td><button type="button" className="vb-secondary-btn" onClick={() => openManage(user)}>Manage</button></td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {showCreateUserModal ? (
-          <div className="vb-modal-overlay" role="presentation" onClick={() => setShowCreateUserModal(false)}>
-            <section className="vb-manage-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-              <div className="vb-modal-head">
-                <h3>Add user</h3>
-                <button type="button" className="vb-secondary-btn" onClick={() => setShowCreateUserModal(false)}>Close</button>
-              </div>
-              <form className="vb-create-user" onSubmit={createUser}>
-                <input
-                  value={createUsername}
-                  onChange={(event) => setCreateUsername(event.target.value)}
-                  placeholder="Username"
-                  aria-label="Create username"
-                  required
-                />
-                <input
-                  value={createLimitGb}
-                  onChange={(event) => setCreateLimitGb(event.target.value)}
-                  placeholder="Limit (GB)"
-                  aria-label="Create traffic limit in GB"
-                />
-                <input
-                  value={createDurationDays}
-                  onChange={(event) => setCreateDurationDays(event.target.value)}
-                  placeholder="Duration (days)"
-                  aria-label="Create duration days"
-                />
-                <select
-                  value={createServiceId}
-                  onChange={(event) => setCreateServiceId(event.target.value)}
-                  aria-label="Create service"
-                >
-                  <option value="">No service</option>
-                  {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
-                </select>
-                <button type="submit" disabled={creatingUser}>{creatingUser ? 'Creating…' : 'Create user'}</button>
-              </form>
-            </section>
-          </div>
-        ) : null}
-
-        {selectedUser ? (
-          <div className="vb-modal-overlay" role="presentation" onClick={closeManage}>
-            <section className="vb-manage-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-            <div className="vb-modal-head">
-            <h3>Manage @{selectedUser.username}</h3>
-            <button type="button" className="vb-secondary-btn" onClick={closeManage}>Close</button>
-            </div>
-            <div className="vb-manage-grid">
-              <label>
-                New traffic limit (GB)
-                <input value={formLimit} onChange={(e) => setFormLimit(e.target.value)} placeholder="e.g. 10" />
-                <button type="button" disabled={busyUser === selectedUser.username || !formLimit.trim() || !canSetLimit} onClick={() => applyAction({ limit_bytes: Math.round(parsedLimitGb * 1024 * 1024 * 1024) })}>Set limit</button>
-              </label>
-              <label>
-                Renew days
-                <input value={formRenewDays} onChange={(e) => setFormRenewDays(e.target.value)} placeholder="e.g. 30" />
-                <button type="button" disabled={busyUser === selectedUser.username || !formRenewDays.trim()} onClick={() => applyAction({ renew_days: Number(formRenewDays) })}>Renew</button>
-              </label>
-              <label>
-                Assign service
-                <select value={formServiceId} onChange={(e) => setFormServiceId(e.target.value)}>
-                  <option value="">Select service</option>
-                  {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
-                </select>
-                <button type="button" disabled={busyUser === selectedUser.username || !formServiceId} onClick={() => applyAction({ service_id: Number(formServiceId) })}>Assign service</button>
-              </label>
-              <label>
-                Reset usage
-                <p className="vb-hint">Sets used traffic to zero for this user.</p>
-                <button type="button" disabled={busyUser === selectedUser.username} onClick={() => applyAction({ reset_used: true })}>Reset usage</button>
-              </label>
-            </div>
-            <div className="vb-qr-wrap">
-              <button type="button" disabled={busyUser === selectedUser.username} onClick={loadQr}>Show QR code</button>
-              {subInfo ? (
-                <div className="vb-qr-list">
-                  {subInfo.urls.map((url, index) => (
-                    <div key={url}>
-                      <p className="vb-hint">{url}</p>
-                      <img src={subInfo.qr_data_uris[index]} alt={`Subscription QR ${index + 1} for ${selectedUser.username}`} className="vb-qr-img" />
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          </section>
-          </div>
-        ) : null}
+    <LayoutShell
+      title="Users"
+      subtitle="Manage users from a dedicated admin panel with fast search and status controls."
+      theme={theme}
+      onToggleTheme={toggleTheme}
+      onLogout={logout}
+      headerAction={<button type="button" onClick={() => { setModalMode('create'); setSelectedUser(null); setShowUserModal(true); }}>Add user</button>}
+    >
+      <section className="vb-stat-grid">
+        <article><span>Total users</span><strong>{numberFormatter.format(stats.totalUsers)}</strong></article>
+        <article><span>Disabled users</span><strong>{numberFormatter.format(stats.disabled)}</strong></article>
+        <article><span>Total usage</span><strong>{formatBytes(stats.totalUsage)}</strong></article>
       </section>
-    </main>
+
+      {error ? <p className="vb-error">{error}</p> : null}
+
+      <UsersTable
+        users={filteredUsers}
+        search={search}
+        onSearchChange={setSearch}
+        loading={loading}
+        onEdit={(user) => {
+          setModalMode('edit');
+          setSelectedUser(user);
+          setShowUserModal(true);
+        }}
+        onDelete={requestToggleUser}
+      />
+
+      <UserModal
+        open={showUserModal}
+        mode={modalMode}
+        user={selectedUser}
+        services={services}
+        onClose={() => setShowUserModal(false)}
+        onSubmit={submitUser}
+      />
+
+      <ConfirmDialog
+        open={showConfirm}
+        title={pendingDeleteUser?.disabled ? 'Enable user' : 'Disable user'}
+        description={pendingDeleteUser ? `Are you sure you want to ${pendingDeleteUser.disabled ? 'enable' : 'disable'} @${pendingDeleteUser.username}?` : ''}
+        confirmLabel={pendingDeleteUser?.disabled ? 'Enable user' : 'Disable user'}
+        busy={busyDelete}
+        onCancel={() => { setShowConfirm(false); setPendingDeleteUser(null); }}
+        onConfirm={confirmToggleUser}
+      />
+    </LayoutShell>
   );
 }
 
