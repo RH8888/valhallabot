@@ -36,7 +36,7 @@ function useTheme() {
   });
 
   useEffect(() => {
-    document.body.dataset.theme = theme;
+    document.documentElement.classList.toggle('dark', theme === 'dark');
     window.localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
@@ -64,6 +64,11 @@ function parseDate(value?: string | null): string {
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
 }
+
+const cardClass = 'rounded-2xl border border-slate-200/80 bg-white/90 p-6 shadow-2xl shadow-slate-900/10 backdrop-blur dark:border-slate-700 dark:bg-slate-900/80 dark:shadow-black/30';
+const inputClass = 'w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100';
+const secondaryButtonClass = 'rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700';
+const primaryButtonClass = 'rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60';
 
 function LoginPage() {
   const { theme, toggleTheme } = useTheme();
@@ -111,41 +116,49 @@ function LoginPage() {
   };
 
   return (
-    <main className="vb-shell">
-      <section className="vb-login-card">
-        <div className="vb-inline-head">
-          <p className="vb-chip">Valhalla Web Console</p>
-          <button type="button" className="vb-secondary-btn" onClick={toggleTheme}>
-            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-          </button>
+    <main className="min-h-screen bg-gradient-to-br from-slate-100 via-indigo-100 to-violet-100 p-4 dark:from-slate-950 dark:via-slate-900 dark:to-indigo-950">
+      <section className="mx-auto mt-12 max-w-md">
+        <div className={cardClass}>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200">
+              Valhalla Web Console
+            </span>
+            <button type="button" className={secondaryButtonClass} onClick={toggleTheme}>
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </button>
+          </div>
+          <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Welcome back</h1>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Sign in to securely manage users, quotas, and expiration dates.</p>
+          <form onSubmit={submit} className="mt-6 space-y-4">
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">
+              Username
+              <input
+                className={inputClass}
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                autoComplete="username"
+                required
+                placeholder="Enter your username"
+              />
+            </label>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">
+              Password
+              <input
+                className={inputClass}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="current-password"
+                type="password"
+                required
+                placeholder="Enter your password"
+              />
+            </label>
+            <button type="submit" disabled={busy} className={`${primaryButtonClass} w-full`}>
+              {busy ? 'Signing in…' : 'Sign in'}
+            </button>
+            {error ? <p className="text-sm font-medium text-rose-500">{error}</p> : <p className="text-sm text-slate-500 dark:text-slate-300">Session is protected with secure HTTP-only cookies.</p>}
+          </form>
         </div>
-        <h1>Welcome back</h1>
-        <p className="vb-subtitle">Sign in to securely manage users, quotas, and expiration dates.</p>
-        <form onSubmit={submit} className="vb-form">
-          <label>
-            Username
-            <input
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              autoComplete="username"
-              required
-              placeholder="Enter your username"
-            />
-          </label>
-          <label>
-            Password
-            <input
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-              type="password"
-              required
-              placeholder="Enter your password"
-            />
-          </label>
-          <button type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-          {error ? <p className="vb-error">{error}</p> : <p className="vb-hint">Session is protected with secure HTTP-only cookies.</p>}
-        </form>
       </section>
     </main>
   );
@@ -350,63 +363,73 @@ function UsersPage() {
   };
 
   return (
-    <main className="vb-shell vb-users-shell">
-      <section className="vb-users-card">
-        <header className="vb-users-header">
+    <main className="min-h-screen bg-gradient-to-br from-slate-100 via-indigo-100 to-violet-100 p-4 dark:from-slate-950 dark:via-slate-900 dark:to-indigo-950">
+      <section className={`mx-auto max-w-6xl ${cardClass}`}>
+        <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p className="vb-chip">Valhalla Dashboard</p>
-            <h1>Users</h1>
-            <p className="vb-subtitle">Monitor quota usage and account status in one place.</p>
+            <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200">Valhalla Dashboard</span>
+            <h1 className="mt-3 text-3xl font-bold text-slate-900 dark:text-white">Users</h1>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Monitor quota usage and account status in one place.</p>
           </div>
-          <div className="vb-header-actions">
-            <button type="button" onClick={toggleTheme} className="vb-secondary-btn">
-              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            </button>
-            <button type="button" onClick={logout} className="vb-secondary-btn">Logout</button>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={toggleTheme} className={secondaryButtonClass}>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</button>
+            <button type="button" onClick={logout} className={secondaryButtonClass}>Logout</button>
           </div>
         </header>
 
-        <section className="vb-stat-grid">
-          <article><span>Total users</span><strong>{numberFormatter.format(stats.totalUsers)}</strong></article>
-          <article><span>Disabled users</span><strong>{numberFormatter.format(stats.disabled)}</strong></article>
-          <article><span>Total usage</span><strong>{formatBytes(stats.totalUsage)}</strong></article>
+        <section className="grid gap-3 md:grid-cols-3">
+          <article className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-300">Total users</p>
+            <p className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{numberFormatter.format(stats.totalUsers)}</p>
+          </article>
+          <article className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-300">Disabled users</p>
+            <p className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{numberFormatter.format(stats.disabled)}</p>
+          </article>
+          <article className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-300">Total usage</p>
+            <p className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{formatBytes(stats.totalUsage)}</p>
+          </article>
         </section>
 
-        <div className="vb-table-toolbar">
+        <div className="mt-5 flex flex-col gap-3 sm:flex-row">
           <input
+            className={inputClass}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search by username"
             aria-label="Search by username"
           />
-          <button type="button" onClick={() => setShowCreateUserModal(true)}>Add user</button>
+          <button type="button" className={primaryButtonClass} onClick={() => setShowCreateUserModal(true)}>Add user</button>
         </div>
 
-        {error ? <p className="vb-error">{error}</p> : null}
+        {error ? <p className="mt-3 text-sm font-medium text-rose-500">{error}</p> : null}
 
-        <div className="vb-table-wrap">
-          <table>
-            <thead>
-              <tr><th>Username</th><th>Plan limit</th><th>Used</th><th>Expires at</th><th>Status</th><th>Actions</th></tr>
+        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+          <table className="min-w-[760px] w-full text-left text-sm">
+            <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+              <tr>
+                <th className="px-4 py-3 font-semibold">Username</th><th className="px-4 py-3 font-semibold">Plan limit</th><th className="px-4 py-3 font-semibold">Used</th><th className="px-4 py-3 font-semibold">Expires at</th><th className="px-4 py-3 font-semibold">Status</th><th className="px-4 py-3 font-semibold">Actions</th>
+              </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={6}>Loading users…</td></tr>
+                <tr><td className="px-4 py-6 text-slate-500 dark:text-slate-300" colSpan={6}>Loading users…</td></tr>
               ) : filteredUsers.length === 0 ? (
-                <tr><td colSpan={6}>No users found.</td></tr>
+                <tr><td className="px-4 py-6 text-slate-500 dark:text-slate-300" colSpan={6}>No users found.</td></tr>
               ) : (
                 filteredUsers.map((user) => (
-                  <tr key={user.username}>
-                    <td>{user.username}</td>
-                    <td>{formatBytes(user.plan_limit_bytes)}</td>
-                    <td>{formatBytes(user.used_bytes)}</td>
-                    <td>{parseDate(user.expire_at)}</td>
-                    <td>
-                      <span className={user.disabled ? 'vb-badge danger' : 'vb-badge success'}>
+                  <tr key={user.username} className="border-t border-slate-200 dark:border-slate-700">
+                    <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-100">{user.username}</td>
+                    <td className="px-4 py-3 text-slate-700 dark:text-slate-200">{formatBytes(user.plan_limit_bytes)}</td>
+                    <td className="px-4 py-3 text-slate-700 dark:text-slate-200">{formatBytes(user.used_bytes)}</td>
+                    <td className="px-4 py-3 text-slate-700 dark:text-slate-200">{parseDate(user.expire_at)}</td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${user.disabled ? 'border-rose-300 bg-rose-100 text-rose-700 dark:border-rose-800 dark:bg-rose-900/40 dark:text-rose-200' : 'border-emerald-300 bg-emerald-100 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'}`}>
                         {user.disabled ? 'Disabled' : 'Active'}
                       </span>
                     </td>
-                    <td><button type="button" className="vb-secondary-btn" onClick={() => openManage(user)}>Manage</button></td>
+                    <td className="px-4 py-3"><button type="button" className={secondaryButtonClass} onClick={() => openManage(user)}>Manage</button></td>
                   </tr>
                 ))
               )}
@@ -415,92 +438,72 @@ function UsersPage() {
         </div>
 
         {showCreateUserModal ? (
-          <div className="vb-modal-overlay" role="presentation" onClick={() => setShowCreateUserModal(false)}>
-            <section className="vb-manage-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-              <div className="vb-modal-head">
-                <h3>Add user</h3>
-                <button type="button" className="vb-secondary-btn" onClick={() => setShowCreateUserModal(false)}>Close</button>
+          <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/60 p-4" role="presentation" onClick={() => setShowCreateUserModal(false)}>
+            <section className={`w-full max-w-3xl ${cardClass}`} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+              <div className="mb-4 flex items-center justify-between gap-2">
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white">Add user</h3>
+                <button type="button" className={secondaryButtonClass} onClick={() => setShowCreateUserModal(false)}>Close</button>
               </div>
-              <form className="vb-create-user" onSubmit={createUser}>
-                <input
-                  value={createUsername}
-                  onChange={(event) => setCreateUsername(event.target.value)}
-                  placeholder="Username"
-                  aria-label="Create username"
-                  required
-                />
-                <input
-                  value={createLimitGb}
-                  onChange={(event) => setCreateLimitGb(event.target.value)}
-                  placeholder="Limit (GB)"
-                  aria-label="Create traffic limit in GB"
-                />
-                <input
-                  value={createDurationDays}
-                  onChange={(event) => setCreateDurationDays(event.target.value)}
-                  placeholder="Duration (days)"
-                  aria-label="Create duration days"
-                />
-                <select
-                  value={createServiceId}
-                  onChange={(event) => setCreateServiceId(event.target.value)}
-                  aria-label="Create service"
-                >
+              <form className="grid gap-3 md:grid-cols-2" onSubmit={createUser}>
+                <input className={inputClass} value={createUsername} onChange={(event) => setCreateUsername(event.target.value)} placeholder="Username" aria-label="Create username" required />
+                <input className={inputClass} value={createLimitGb} onChange={(event) => setCreateLimitGb(event.target.value)} placeholder="Limit (GB)" aria-label="Create traffic limit in GB" />
+                <input className={inputClass} value={createDurationDays} onChange={(event) => setCreateDurationDays(event.target.value)} placeholder="Duration (days)" aria-label="Create duration days" />
+                <select className={inputClass} value={createServiceId} onChange={(event) => setCreateServiceId(event.target.value)} aria-label="Create service">
                   <option value="">No service</option>
                   {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
                 </select>
-                <button type="submit" disabled={creatingUser}>{creatingUser ? 'Creating…' : 'Create user'}</button>
+                <button type="submit" disabled={creatingUser} className={`${primaryButtonClass} md:col-span-2`}>{creatingUser ? 'Creating…' : 'Create user'}</button>
               </form>
             </section>
           </div>
         ) : null}
 
         {selectedUser ? (
-          <div className="vb-modal-overlay" role="presentation" onClick={closeManage}>
-            <section className="vb-manage-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-            <div className="vb-modal-head">
-            <h3>Manage @{selectedUser.username}</h3>
-            <button type="button" className="vb-secondary-btn" onClick={closeManage}>Close</button>
-            </div>
-            <div className="vb-manage-grid">
-              <label>
-                New traffic limit (GB)
-                <input value={formLimit} onChange={(e) => setFormLimit(e.target.value)} placeholder="e.g. 10" />
-                <button type="button" disabled={busyUser === selectedUser.username || !formLimit.trim() || !canSetLimit} onClick={() => applyAction({ limit_bytes: Math.round(parsedLimitGb * 1024 * 1024 * 1024) })}>Set limit</button>
-              </label>
-              <label>
-                Renew days
-                <input value={formRenewDays} onChange={(e) => setFormRenewDays(e.target.value)} placeholder="e.g. 30" />
-                <button type="button" disabled={busyUser === selectedUser.username || !formRenewDays.trim()} onClick={() => applyAction({ renew_days: Number(formRenewDays) })}>Renew</button>
-              </label>
-              <label>
-                Assign service
-                <select value={formServiceId} onChange={(e) => setFormServiceId(e.target.value)}>
-                  <option value="">Select service</option>
-                  {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
-                </select>
-                <button type="button" disabled={busyUser === selectedUser.username || !formServiceId} onClick={() => applyAction({ service_id: Number(formServiceId) })}>Assign service</button>
-              </label>
-              <label>
-                Reset usage
-                <p className="vb-hint">Sets used traffic to zero for this user.</p>
-                <button type="button" disabled={busyUser === selectedUser.username} onClick={() => applyAction({ reset_used: true })}>Reset usage</button>
-              </label>
-            </div>
-            <div className="vb-qr-wrap">
-              <button type="button" disabled={busyUser === selectedUser.username} onClick={loadQr}>Show QR code</button>
-              {subInfo ? (
-                <div className="vb-qr-list">
-                  {subInfo.urls.map((url, index) => (
-                    <div key={url}>
-                      <p className="vb-hint">{url}</p>
-                      <img src={subInfo.qr_data_uris[index]} alt={`Subscription QR ${index + 1} for ${selectedUser.username}`} className="vb-qr-img" />
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          </section>
+          <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/60 p-4" role="presentation" onClick={closeManage}>
+            <section className={`w-full max-w-4xl ${cardClass}`} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+              <div className="mb-4 flex items-center justify-between gap-2">
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white">Manage @{selectedUser.username}</h3>
+                <button type="button" className={secondaryButtonClass} onClick={closeManage}>Close</button>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                  New traffic limit (GB)
+                  <input className={inputClass} value={formLimit} onChange={(e) => setFormLimit(e.target.value)} placeholder="e.g. 10" />
+                  <button type="button" className={primaryButtonClass} disabled={busyUser === selectedUser.username || !formLimit.trim() || !canSetLimit} onClick={() => applyAction({ limit_bytes: Math.round(parsedLimitGb * 1024 * 1024 * 1024) })}>Set limit</button>
+                </label>
+                <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                  Renew days
+                  <input className={inputClass} value={formRenewDays} onChange={(e) => setFormRenewDays(e.target.value)} placeholder="e.g. 30" />
+                  <button type="button" className={primaryButtonClass} disabled={busyUser === selectedUser.username || !formRenewDays.trim()} onClick={() => applyAction({ renew_days: Number(formRenewDays) })}>Renew</button>
+                </label>
+                <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                  Assign service
+                  <select className={inputClass} value={formServiceId} onChange={(e) => setFormServiceId(e.target.value)}>
+                    <option value="">Select service</option>
+                    {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
+                  </select>
+                  <button type="button" className={primaryButtonClass} disabled={busyUser === selectedUser.username || !formServiceId} onClick={() => applyAction({ service_id: Number(formServiceId) })}>Assign service</button>
+                </label>
+                <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                  Reset usage
+                  <p className="text-xs text-slate-500 dark:text-slate-300">Sets used traffic to zero for this user.</p>
+                  <button type="button" className={primaryButtonClass} disabled={busyUser === selectedUser.username} onClick={() => applyAction({ reset_used: true })}>Reset usage</button>
+                </label>
+              </div>
+              <div className="mt-6 space-y-3">
+                <button type="button" className={primaryButtonClass} disabled={busyUser === selectedUser.username} onClick={loadQr}>Show QR code</button>
+                {subInfo ? (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {subInfo.urls.map((url, index) => (
+                      <div key={url} className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+                        <p className="mb-2 break-all text-xs text-slate-500 dark:text-slate-300">{url}</p>
+                        <img src={subInfo.qr_data_uris[index]} alt={`Subscription QR ${index + 1} for ${selectedUser.username}`} className="h-44 w-44 rounded-lg bg-white p-2" />
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </section>
           </div>
         ) : null}
       </section>
