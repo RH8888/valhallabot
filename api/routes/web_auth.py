@@ -98,8 +98,8 @@ class WebServiceOut(BaseModel):
 
 
 class WebSubscriptionOut(BaseModel):
-    url: str
-    qr_data_uri: str
+    urls: list[str]
+    qr_data_uris: list[str]
 
 
 def _to_qr_data_uri(content: str) -> str:
@@ -370,8 +370,10 @@ async def web_user_subscription(
     sub_links = build_sub_links(scoped_owner_id, username, access_key)
     if not sub_links:
         raise HTTPException(status_code=404, detail="Subscription link not found")
-    primary_link = sub_links[0]
-    return WebSubscriptionOut(url=primary_link, qr_data_uri=_to_qr_data_uri(primary_link))
+    return WebSubscriptionOut(
+        urls=sub_links,
+        qr_data_uris=[_to_qr_data_uri(link) for link in sub_links],
+    )
 
 
 __all__ = ["router"]

@@ -21,8 +21,8 @@ type ServiceRecord = {
 };
 
 type SubscriptionResponse = {
-  url: string;
-  qr_data_uri: string;
+  urls: string[];
+  qr_data_uris: string[];
 };
 
 const { useEffect, useMemo, useState } = React;
@@ -140,6 +140,8 @@ function UsersPage() {
   const [formRenewDays, setFormRenewDays] = useState('');
   const [formServiceId, setFormServiceId] = useState('');
   const [subInfo, setSubInfo] = useState<SubscriptionResponse | null>(null);
+  const parsedLimitGb = Number(formLimit);
+  const canSetLimit = Number.isFinite(parsedLimitGb) && parsedLimitGb >= 0;
 
   useEffect(() => {
     const boot = async () => {
@@ -201,6 +203,12 @@ function UsersPage() {
     setFormServiceId(user.service_id ? String(user.service_id) : '');
     setSubInfo(null);
     setError('');
+  };
+
+  const closeManage = () => {
+    setSelectedUser(null);
+    setSubInfo(null);
+    setBusyUser('');
   };
 
   const applyAction = async (payload: Record<string, unknown>) => {
@@ -302,13 +310,17 @@ function UsersPage() {
         </div>
 
         {selectedUser ? (
-          <section className="vb-manage-panel">
+          <div className="vb-modal-overlay" role="presentation" onClick={closeManage}>
+            <section className="vb-manage-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="vb-modal-head">
             <h3>Manage @{selectedUser.username}</h3>
+            <button type="button" className="vb-secondary-btn" onClick={closeManage}>Close</button>
+            </div>
             <div className="vb-manage-grid">
               <label>
-                Add traffic (bytes)
-                <input value={formLimit} onChange={(e) => setFormLimit(e.target.value)} placeholder="e.g. 10737418240" />
-                <button type="button" disabled={busyUser === selectedUser.username || !formLimit.trim()} onClick={() => applyAction({ limit_bytes: Number(formLimit) })}>Edit limit</button>
+                New traffic limit (GB)
+                <input value={formLimit} onChange={(e) => setFormLimit(e.target.value)} placeholder="e.g. 10" />
+                <button type="button" disabled={busyUser === selectedUser.username || !formLimit.trim() || !canSetLimit} onClick={() => applyAction({ limit_bytes: Math.round(parsedLimitGb * 1024 * 1024 * 1024) })}>Set limit</button>
               </label>
               <label>
                 Renew days
@@ -332,13 +344,18 @@ function UsersPage() {
             <div className="vb-qr-wrap">
               <button type="button" disabled={busyUser === selectedUser.username} onClick={loadQr}>Show QR code</button>
               {subInfo ? (
-                <div>
-                  <p className="vb-hint">{subInfo.url}</p>
-                  <img src={subInfo.qr_data_uri} alt={`Subscription QR for ${selectedUser.username}`} className="vb-qr-img" />
+                <div className="vb-qr-list">
+                  {subInfo.urls.map((url, index) => (
+                    <div key={url}>
+                      <p className="vb-hint">{url}</p>
+                      <img src={subInfo.qr_data_uris[index]} alt={`Subscription QR ${index + 1} for ${selectedUser.username}`} className="vb-qr-img" />
+                    </div>
+                  ))}
                 </div>
               ) : null}
             </div>
           </section>
+          </div>
         ) : null}
       </section>
     </main>
