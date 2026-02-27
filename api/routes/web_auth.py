@@ -296,7 +296,7 @@ async def web_me(identity: WebIdentity = Depends(require_web_user)) -> dict[str,
 @router.get("/users", response_model=UserListResponse)
 async def web_list_users(
     offset: int = Query(0, ge=0),
-    limit: int = Query(25, ge=1, le=200),
+    limit: int = Query(25, ge=1, le=500),
     search: str | None = Query(None),
     owner_id: int | None = Query(
         None,
