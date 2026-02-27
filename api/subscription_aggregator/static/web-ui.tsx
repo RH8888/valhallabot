@@ -692,7 +692,7 @@ function UserDetailsDrawer({
 
 function LoadingSkeleton() {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+    <div className="grid gap-4 lg:grid-cols-2">
       {[1,2,3,4,5].map(i => (
         <div key={i} className="animate-pulse rounded-xl border border-slate-100 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-800/50">
           <div className="flex gap-4">
@@ -708,9 +708,58 @@ function LoadingSkeleton() {
   );
 }
 
+function HomePage() {
+  const [showPanelUsageModal, setShowPanelUsageModal] = useState(false);
+  const [panelUsageLoading, setPanelUsageLoading] = useState(false);
+  const [panelUsage, setPanelUsage] = useState<PanelUsageRecord[]>([]);
+  const [totalUsage, setTotalUsage] = useState(0);
+
+  const fetchPanelUsage = useCallback(async () => {
+    try {
+      setPanelUsageLoading(true);
+      const res = await fetch('/api/v1/web/usage-by-panel', { credentials: 'same-origin' });
+      if (res.status === 401) { window.location.replace('/web/login'); return; }
+      if (!res.ok) return;
+      const data = await res.json() as PanelUsageResponse;
+      setPanelUsage(Array.isArray(data.panels) ? data.panels : []);
+      if (typeof data.total_used_bytes === 'number') setTotalUsage(data.total_used_bytes);
+    } finally {
+      setPanelUsageLoading(false);
+    }
+  }, []);
+
+  return (
+    <div className="h-full overflow-y-auto p-4 md:p-6">
+      <div className="mb-4">
+        <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Dashboard Home</h2>
+        <p className="text-sm text-slate-500">Overview and global usage insights.</p>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <InsightCard
+          label="Lifetime Panel Usage"
+          value={formatBytes(totalUsage)}
+          icon="fa-solid fa-database"
+          onClick={() => {
+            setShowPanelUsageModal(true);
+            fetchPanelUsage();
+          }}
+        />
+      </div>
+
+      <PanelUsageModal
+        open={showPanelUsageModal}
+        onClose={() => setShowPanelUsageModal(false)}
+        loading={panelUsageLoading}
+        totalUsedBytes={totalUsage}
+        panels={panelUsage}
+      />
+    </div>
+  );
+}
+
 function UsersPage() {
   const [users, setUsers] = useState<UserRecord[]>([]);
-  const [totalUsage, setTotalUsage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -722,9 +771,6 @@ function UsersPage() {
   const [busy, setBusy] = useState(false);
   const [checkedUsers, setCheckedUsers] = useState<Set<string>>(new Set());
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showPanelUsageModal, setShowPanelUsageModal] = useState(false);
-  const [panelUsageLoading, setPanelUsageLoading] = useState(false);
-  const [panelUsage, setPanelUsage] = useState<PanelUsageRecord[]>([]);
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -733,28 +779,10 @@ function UsersPage() {
       if (res.status === 401) { window.location.replace('/web/login'); return; }
       const data = await res.json() as UsersResponse;
       setUsers(data.users || []);
-      setTotalUsage(data.total_used_bytes || 0);
     } catch {
       setError('Failed to load users.');
     } finally {
       setLoading(false);
-    }
-  }, []);
-
-  const fetchPanelUsage = useCallback(async () => {
-    try {
-      setPanelUsageLoading(true);
-      const res = await fetch('/api/v1/web/usage-by-panel', { credentials: 'same-origin' });
-      if (res.status === 401) { window.location.replace('/web/login'); return; }
-      if (!res.ok) return;
-      const data = await res.json() as PanelUsageResponse;
-      const rows = Array.isArray(data.panels) ? data.panels : [];
-      setPanelUsage(rows);
-      if (typeof data.total_used_bytes === 'number') {
-        setTotalUsage(data.total_used_bytes);
-      }
-    } finally {
-      setPanelUsageLoading(false);
     }
   }, []);
 
@@ -876,15 +904,6 @@ function UsersPage() {
           <InsightCard label="Disabled" value={stats.disabled} icon="fa-solid fa-ban" />
           <InsightCard label="Expiring Soon" value={stats.expiring} icon="fa-solid fa-clock" trend="Urgent" trendUp={false} />
           <InsightCard label="High Usage" value={stats.highUsage} icon="fa-solid fa-chart-line" />
-          <InsightCard
-            label="Lifetime Panel Usage"
-            value={formatBytes(totalUsage)}
-            icon="fa-solid fa-database"
-            onClick={() => {
-              setShowPanelUsageModal(true);
-              fetchPanelUsage();
-            }}
-          />
         </div>
 
         {/* Filters Bar */}
@@ -961,7 +980,7 @@ function UsersPage() {
           </div>
 
           {loading ? <LoadingSkeleton /> : (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+            <div className="grid gap-4 lg:grid-cols-2">
               {filteredUsers.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-center bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
                   <Icon name="fa-solid fa-user-slash" className="text-4xl text-slate-300 mb-4" />
@@ -991,14 +1010,6 @@ function UsersPage() {
         services={services}
         subInfo={subInfo}
         onLoadSub={loadSub}
-      />
-
-      <PanelUsageModal
-        open={showPanelUsageModal}
-        onClose={() => setShowPanelUsageModal(false)}
-        loading={panelUsageLoading}
-        totalUsedBytes={totalUsage}
-        panels={panelUsage}
       />
 
       {showCreateModal && (
@@ -1182,7 +1193,7 @@ function App() {
   const renderContent = () => {
     switch (path) {
       case '/web/users': return <UsersPage />;
-      case '/web/home': return <ComingSoon title="Dashboard Home" />;
+      case '/web/home': return <HomePage />;
       case '/web/services': return <ComingSoon title="Services Management" />;
       case '/web/nodes': return <ComingSoon title="Nodes Monitoring" />;
       case '/web/hosts': return <ComingSoon title="Hosts Configuration" />;
