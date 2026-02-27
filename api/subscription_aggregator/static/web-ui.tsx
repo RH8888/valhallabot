@@ -838,6 +838,8 @@ function HomePage({ role }: { role: 'web_admin' | 'web_agent' }) {
 
   const userPercent = homeUsage?.user_limit ? Math.min(100, Math.round((homeUsage.users_count / homeUsage.user_limit) * 100)) : 0;
   const trafficPercent = homeUsage?.traffic_limit_bytes ? Math.min(100, Math.round((homeUsage.traffic_used_bytes / homeUsage.traffic_limit_bytes) * 100)) : 0;
+  const usagePointsWithData = homeUsage?.data_points.filter((point) => point.used_bytes > 0).length ?? 0;
+  const hasLimitedUsageHistory = (homeUsage?.selected_days ?? 1) > 1 && usagePointsWithData <= 1;
   const isAgent = role === 'web_agent';
   const showLimitsCard = isAgent && Boolean(homeUsage?.user_limit || homeUsage?.traffic_limit_bytes || homeUsage?.max_user_bytes);
 
@@ -852,27 +854,39 @@ function HomePage({ role }: { role: 'web_admin' | 'web_agent' }) {
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className={cardClass + ' p-5'}>
-          <div className="mb-2 flex items-start justify-between gap-3">
-            <div>
-              <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Usage</p>
-              <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{formatBytes(homeUsage?.period_used_bytes || 0)}</p>
-            </div>
+          <div className="mb-3 flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
               <Icon name="fa-solid fa-chart-column" />
             </div>
+            <div>
+              <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Usage</p>
+              <p className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{formatBytes(homeUsage?.period_used_bytes || 0)}</p>
+            </div>
           </div>
-          <label className="text-xs text-slate-500 dark:text-slate-400">
-            Usage range
-            <select
-              value={rangeDays}
-              onChange={(event) => setRangeDays(Number(event.target.value))}
-              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none focus:border-brand-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-            >
-              {[1, 3, 7, 30].map((d) => (
-                <option key={d} value={d}>Last {d === 1 ? '1 day' : `${d} days`}</option>
+          <div>
+            <p className="mb-1 text-[11px] font-medium text-slate-500 dark:text-slate-400">Usage range</p>
+            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800/80">
+              {[1, 3, 7].map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setRangeDays(d)}
+                  className={`rounded-md px-2.5 py-1 text-xs font-semibold transition-colors ${
+                    rangeDays === d
+                      ? 'bg-white text-brand-600 shadow-sm dark:bg-slate-700 dark:text-brand-300'
+                      : 'text-slate-500 hover:text-slate-700 dark:text-slate-300 dark:hover:text-white'
+                  }`}
+                >
+                  {d}d
+                </button>
               ))}
-            </select>
-          </label>
+            </div>
+            {hasLimitedUsageHistory && (
+              <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
+                Limited history available, so longer ranges may match today's usage.
+              </p>
+            )}
+          </div>
         </div>
         <InsightCard
           label="Lifetime Panel Usage"
