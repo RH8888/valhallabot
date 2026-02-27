@@ -887,8 +887,8 @@ function UsersPage() {
   };
 
   return (
-    <div className="flex h-full flex-col md:flex-row overflow-hidden">
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+    <div className="flex flex-col md:h-full md:flex-row md:overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col md:overflow-hidden">
         {/* Workspace Header */}
         <div className="flex flex-col gap-4 border-b border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -946,11 +946,11 @@ function UsersPage() {
               { id: 'disabled', label: 'Disabled' },
               { id: 'usage', label: 'High Usage' },
               { id: 'expiring', label: 'Expiring' },
-            ].map(f => (
+            ].map((f, idx, arr) => (
               <button
                 key={f.id}
                 onClick={() => setFilter(f.id as any)}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${idx === arr.length - 1 ? 'w-full text-center sm:w-auto' : ''} ${
                   filter === f.id
                     ? 'bg-brand-600 text-white dark:bg-brand-500'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
@@ -961,7 +961,7 @@ function UsersPage() {
         </div>
 
         {/* User List Area */}
-        <div className="flex-1 overflow-y-auto bg-slate-50/50 p-4 dark:bg-black/20">
+        <div className="flex-1 overflow-visible bg-slate-50/50 p-4 dark:bg-black/20 md:overflow-y-auto">
           {checkedUsers.size > 0 && (
             <div className="mb-4 flex items-center justify-between rounded-lg bg-brand-600 p-2 text-white shadow-lg dark:bg-brand-500">
               <span className="text-sm font-bold ml-2">{checkedUsers.size} users selected</span>
@@ -1208,7 +1208,7 @@ function App() {
   };
 
   return (
-    <div className="flex h-screen bg-slate-50 transition-colors dark:bg-slate-950">
+    <div className="flex min-h-screen bg-slate-50 transition-colors dark:bg-slate-950 md:h-screen">
       <Sidebar
         collapsed={sidebarCollapsed}
         mobileOpen={mobileSidebarOpen}
@@ -1217,7 +1217,7 @@ function App() {
         onNavigate={navigate}
       />
 
-      <div className={`flex flex-1 flex-col overflow-hidden transition-all duration-300 ${sidebarCollapsed ? 'md:pl-16' : 'md:pl-64'}`}>
+      <div className={`flex flex-1 flex-col overflow-visible transition-all duration-300 md:overflow-hidden ${sidebarCollapsed ? 'md:pl-16' : 'md:pl-64'}`}>
         <TopBar
           onToggleSidebar={() => {
             if (window.innerWidth < 768) setMobileSidebarOpen(true);
@@ -1228,7 +1228,7 @@ function App() {
           onLogout={handleLogout}
         />
 
-        <main className="flex-1 overflow-hidden">
+        <main className="flex-1 overflow-visible md:overflow-hidden">
           {renderContent()}
         </main>
       </div>
