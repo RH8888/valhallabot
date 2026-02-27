@@ -70,6 +70,19 @@ class UserListResponse(BaseModel):
     users: List[UserOut]
 
 
+class PanelUsageOut(BaseModel):
+    panel_id: int
+    panel_name: str
+    panel_type: str | None = None
+    panel_url: str | None = None
+    used_bytes: int
+
+
+class OwnerPanelUsageResponse(BaseModel):
+    total_used_bytes: int = 0
+    panels: List[PanelUsageOut]
+
+
 class UsageOut(BaseModel):
     username: str
     used_bytes: int
@@ -121,6 +134,60 @@ def get_total_usage_by_panel(owner_id: int) -> int:
         )
         row = cur.fetchone() or {}
     return int(row.get("total_used_bytes") or 0)
+
+
+def get_usage_by_panel(owner_id: int) -> OwnerPanelUsageResponse:
+    ids = expand_owner_ids(owner_id)
+    placeholders = ",".join(["%s"] * len(ids))
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT p.id, p.name, p.panel_type, p.panel_url
+            FROM (
+                SELECT sp.panel_id
+                FROM agent_services ags
+                JOIN service_panels sp ON sp.service_id = ags.service_id
+                WHERE ags.agent_tg_id IN ({placeholders})
+
+                UNION
+
+                SELECT apt.panel_id
+                FROM agent_panel_usage_totals apt
+                WHERE apt.agent_tg_id IN ({placeholders})
+            ) owned_panels
+            JOIN panels p ON p.id = owned_panels.panel_id
+            ORDER BY p.id ASC
+            """,
+            tuple(ids) + tuple(ids),
+        )
+        panel_rows = cur.fetchall()
+
+        cur.execute(
+            f"""
+            SELECT panel_id, COALESCE(SUM(total_used_bytes), 0) AS used_bytes
+            FROM agent_panel_usage_totals
+            WHERE agent_tg_id IN ({placeholders})
+            GROUP BY panel_id
+            """,
+            tuple(ids),
+        )
+        usage_rows = cur.fetchall()
+
+    usage_map = {int(r["panel_id"]): int(r["used_bytes"] or 0) for r in usage_rows}
+    panels = [
+        PanelUsageOut(
+            panel_id=int(r["id"]),
+            panel_name=r["name"],
+            panel_type=r.get("panel_type"),
+            panel_url=r.get("panel_url"),
+            used_bytes=usage_map.get(int(r["id"]), 0),
+        )
+        for r in panel_rows
+    ]
+    return OwnerPanelUsageResponse(
+        total_used_bytes=sum(p.used_bytes for p in panels),
+        panels=panels,
+    )
 
 
 def _agent_service_ids(agent_tg_id: int) -> set[int]:

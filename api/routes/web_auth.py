@@ -24,6 +24,7 @@ from api.web_auth import (
 )
 from api.users import (
     MIN_GUARDCORE_CREATE_LIMIT_BYTES,
+    OwnerPanelUsageResponse,
     UserListResponse,
     UserOut,
     _fetch_user,
@@ -32,6 +33,7 @@ from api.users import (
     _set_user_disabled,
     _service_has_guardcore_panel,
     get_total_usage_by_panel,
+    get_usage_by_panel,
 )
 from bot import (
     build_sub_links,
@@ -341,6 +343,25 @@ async def web_list_users(
         total_used_bytes=get_total_usage_by_panel(scoped_owner_id),
         users=users,
     )
+
+
+@router.get("/usage-by-panel", response_model=OwnerPanelUsageResponse)
+async def web_usage_by_panel(
+    owner_id: int | None = Query(
+        None,
+        description="Optional explicit owner scope; defaults to canonical super-admin owner",
+    ),
+    identity: WebIdentity = Depends(require_web_user),
+) -> OwnerPanelUsageResponse:
+    if identity.role == "web_agent":
+        scoped_owner_id = identity.owner_id
+    else:
+        scoped_owner_id = owner_settings_id() if owner_id is None else owner_id
+
+    if scoped_owner_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+    return get_usage_by_panel(scoped_owner_id)
 
 
 @router.patch("/users/{username}", response_model=UserOut)
