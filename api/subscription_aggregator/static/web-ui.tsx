@@ -72,6 +72,12 @@ function isUserExpired(expireAt?: string | null): boolean {
   return !isNaN(d.getTime()) && d < new Date();
 }
 
+function getUserStatus(user: UserRecord): 'Expired' | 'Disabled' | 'Active' {
+  if (isUserExpired(user.expire_at)) return 'Expired';
+  if (user.disabled) return 'Disabled';
+  return 'Active';
+}
+
 function isUserExpiringSoon(expireAt?: string | null): boolean {
   if (!expireAt) return false;
   const d = new Date(expireAt);
@@ -367,9 +373,9 @@ function UserCardRow({
   onCheck: (val: boolean) => void;
 }) {
   const usagePercent = Math.min(100, user.plan_limit_bytes > 0 ? (user.used_bytes / user.plan_limit_bytes) * 100 : 0);
-  const statusColor = user.disabled ? 'bg-rose-500' : 'bg-emerald-500';
-
   const expired = isUserExpired(user.expire_at);
+  const status = getUserStatus(user);
+  const statusColor = status === 'Active' ? 'bg-emerald-500' : 'bg-rose-500';
 
   return (
     <div
@@ -395,7 +401,7 @@ function UserCardRow({
             <h5 className="truncate text-sm font-semibold text-slate-900 dark:text-white">{user.username}</h5>
             <div className="flex items-center gap-2 text-[10px] text-slate-500">
               <span className={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
-              <span>{user.disabled ? 'Disabled' : 'Active'}</span>
+              <span>{status}</span>
               <span>•</span>
               <span>ID: {user.owner_id || 'N/A'}</span>
             </div>
@@ -486,7 +492,11 @@ function UserDetailsDrawer({
           </div>
           <div>
             <h4 className="text-xl font-bold text-slate-900 dark:text-white">@{user.username}</h4>
-            <p className="text-sm text-slate-500">Status: <span className={user.disabled ? 'text-rose-500 font-semibold' : 'text-emerald-500 font-semibold'}>{user.disabled ? 'Disabled' : 'Active'}</span></p>
+            {(() => {
+              const status = getUserStatus(user);
+              const statusClass = status === 'Active' ? 'text-emerald-500 font-semibold' : 'text-rose-500 font-semibold';
+              return <p className="text-sm text-slate-500">Status: <span className={statusClass}>{status}</span></p>;
+            })()}
           </div>
         </div>
 
@@ -662,8 +672,8 @@ function UsersPage() {
 
   const filteredUsers = useMemo(() => {
     let result = users.filter(u => u.username.toLowerCase().includes(search.toLowerCase()));
-    if (filter === 'active') result = result.filter(u => !u.disabled);
-    if (filter === 'disabled') result = result.filter(u => u.disabled);
+    if (filter === 'active') result = result.filter(u => getUserStatus(u) === 'Active');
+    if (filter === 'disabled') result = result.filter(u => getUserStatus(u) !== 'Active');
     if (filter === 'usage') result = result.filter(u => u.plan_limit_bytes > 0 && (u.used_bytes / u.plan_limit_bytes) > 0.8);
     if (filter === 'expiring') {
       result = result.filter(u => isUserExpiringSoon(u.expire_at));
@@ -684,7 +694,7 @@ function UsersPage() {
   }, [users, search, filter, sortBy]);
 
   const stats = useMemo(() => {
-    const active = users.filter(u => !u.disabled).length;
+    const active = users.filter(u => getUserStatus(u) === 'Active').length;
     const expiring = users.filter(u => isUserExpiringSoon(u.expire_at)).length;
     const highUsage = users.filter(u => u.plan_limit_bytes > 0 && (u.used_bytes / u.plan_limit_bytes) > 0.8).length;
     return { total: users.length, active, disabled: users.length - active, expiring, highUsage };
