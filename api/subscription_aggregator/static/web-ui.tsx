@@ -1,4 +1,4 @@
-type PageMode = 'login' | 'users' | 'home' | 'services' | 'nodes' | 'hosts' | 'admins' | 'settings';
+type PageMode = 'login' | 'users' | 'home' | 'panels' | 'services' | 'nodes' | 'hosts' | 'admins' | 'settings';
 
 type UserRecord = {
   username: string;
@@ -178,15 +178,15 @@ function Sidebar({
         {
           title: 'Dashboard',
           items: [
-            { label: 'Users', icon: 'fa-solid fa-users', path: '/web/users' },
             { label: 'Home', icon: 'fa-solid fa-house', path: '/web/home' },
+            { label: 'Users', icon: 'fa-solid fa-users', path: '/web/users' },
           ]
         },
         {
-          title: 'Management',
+          title: 'Server',
           items: [
-            { label: 'Servers', icon: 'fa-solid fa-server', path: '/web/servers' },
-            { label: 'Manage Agents', icon: 'fa-solid fa-user-shield', path: '/web/agents' },
+            { label: 'Panels', icon: 'fa-solid fa-table-cells-large', path: '/web/panels' },
+            { label: 'Services', icon: 'fa-solid fa-server', path: '/web/services' },
             { label: 'Settings', icon: 'fa-solid fa-gear', path: '/web/settings' },
           ]
         },
@@ -1240,8 +1240,8 @@ function App() {
     switch (path) {
       case '/web/users': return <UsersPage />;
       case '/web/home': return <HomePage />;
-      case '/web/servers': return <ComingSoon title="Servers (Services & Panels)" />;
-      case '/web/agents': return <ComingSoon title="Manage Agents" />;
+      case '/web/panels': return <ComingSoon title="Panels" />;
+      case '/web/services': return <ComingSoon title="Services" />;
       case '/web/settings': return <ComingSoon title="System Settings" />;
       default: return role === 'web_agent' ? <HomePage /> : <UsersPage />;
     }
