@@ -2592,6 +2592,19 @@ async def show_user_card(q, owner_id: int, uname: str, notice: str = None):
     exp     = row["expire_at"]
     manual_disabled = bool(row.get("manual_disabled") or 0)
     pushed  = int(row.get("disabled_pushed", 0) or 0)
+    expired = bool(exp and exp <= datetime.utcnow())
+    over_limit = bool(limit_b > 0 and used_b >= limit_b)
+
+    if manual_disabled:
+        effective_state = "Manual Disabled"
+    elif expired:
+        effective_state = "Expired"
+    elif over_limit:
+        effective_state = "Data Limit Reached"
+    elif pushed:
+        effective_state = "Auto Disabled (Pushed)"
+    else:
+        effective_state = "Active"
 
     app_key = get_app_key(owner_id, uname)
     sub_links = build_sub_links(owner_id, uname, app_key)
@@ -2606,6 +2619,7 @@ async def show_user_card(q, owner_id: int, uname: str, notice: str = None):
         f"📊 Used: <b>{fmt_bytes_short(used_b)}</b>",
         f"🧮 Remaining: <b>{'Unlimited' if limit_b==0 else fmt_bytes_short(max(0, limit_b-used_b))}</b>",
         f"⏳ Expires: <b>{(exp.strftime('%Y-%m-%d %H:%M:%S UTC') if exp else '—')}</b>",
+        f"🚦 Status: <b>{effective_state}</b>",
         f"🚫 Manual Disabled: <b>{'Yes' if manual_disabled else 'No'}</b>",
         f"📡 Disabled pushed: <b>{'Yes' if pushed else 'No'}</b>",
         "",
