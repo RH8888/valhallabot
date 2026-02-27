@@ -1023,9 +1023,6 @@ function App() {
       try {
         const res = await fetch('/api/v1/web/me', { credentials: 'same-origin' });
         setIsLoggedIn(res.ok);
-        if (!res.ok && !window.location.pathname.includes('/login')) {
-          window.location.replace('/web/login');
-        }
       } catch {
         setIsLoggedIn(false);
       }
