@@ -277,13 +277,33 @@ function TopBar({
   onToggleSidebar,
   onToggleTheme,
   theme,
-  onLogout
+  onLogout,
+  username,
+  role,
 }: {
   onToggleSidebar: () => void;
   onToggleTheme: () => void;
   theme: 'dark' | 'light';
   onLogout: () => void;
+  username: string;
+  role: 'web_admin' | 'web_agent';
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!profileMenuRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, []);
+
+  const roleLabel = role === 'web_agent' ? 'Agent' : 'Admin';
+
   return (
     <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-slate-200 bg-white/80 px-4 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
       <div className="flex items-center gap-4">
@@ -326,15 +346,35 @@ function TopBar({
         </button>
         <div className="mx-2 h-6 w-px bg-slate-200 dark:bg-slate-700" />
 
-        <div className="flex items-center gap-3 pl-2">
-          <div className="hidden flex-col items-end sm:flex">
-            <span className="text-xs font-semibold text-slate-900 dark:text-white">Admin</span>
-            <span className="text-[10px] text-slate-500 uppercase tracking-tighter">Superuser</span>
-          </div>
+        <div className="flex items-center gap-3 pl-2" ref={profileMenuRef}>
           <div className="group relative cursor-pointer">
-            <div className="h-9 w-9 rounded-full bg-slate-100 p-0.5 ring-2 ring-slate-200 transition-all hover:ring-brand-500 dark:bg-slate-800 dark:ring-slate-700">
-              <img src="https://ui-avatars.com/api/?name=Admin&background=0ea5e9&color=fff" className="h-full w-full rounded-full" alt="Avatar" />
-            </div>
+            <button
+              type="button"
+              onClick={() => setMenuOpen(prev => !prev)}
+              className="flex items-center gap-3"
+              aria-label="Open profile menu"
+            >
+              <div className="hidden flex-col items-end sm:flex">
+                <span className="text-xs font-semibold text-slate-900 dark:text-white">{username || 'Admin'}</span>
+                <span className="text-[10px] text-slate-500 uppercase tracking-tighter">{roleLabel}</span>
+              </div>
+              <div className="h-9 w-9 rounded-full bg-slate-100 p-0.5 ring-2 ring-slate-200 transition-all hover:ring-brand-500 dark:bg-slate-800 dark:ring-slate-700">
+                <img src={`https://ui-avatars.com/api/?name=${encodeURIComponent(username || 'Admin')}&background=0ea5e9&color=fff`} className="h-full w-full rounded-full" alt="Avatar" />
+              </div>
+            </button>
+
+            {menuOpen && (
+              <div className="absolute right-0 top-12 w-40 rounded-xl border border-slate-200 bg-white p-1 shadow-xl dark:border-slate-700 dark:bg-slate-800">
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-900/20"
+                >
+                  <Icon name="fa-solid fa-right-from-bracket" />
+                  Logout
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1200,6 +1240,7 @@ function App() {
   const [path, setPath] = useState(window.location.pathname);
   const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
   const [role, setRole] = useState<'web_admin' | 'web_agent'>('web_admin');
+  const [username, setUsername] = useState('Admin');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const { theme, toggleTheme } = useTheme();
@@ -1213,6 +1254,7 @@ function App() {
       }
       const data = await res.json() as { role?: 'web_admin' | 'web_agent' };
       setRole(data.role === 'web_agent' ? 'web_agent' : 'web_admin');
+      setUsername(data.username?.trim() || 'Admin');
       setIsLoggedIn(true);
     } catch {
       setIsLoggedIn(false);
@@ -1267,6 +1309,8 @@ function App() {
           onToggleTheme={toggleTheme}
           theme={theme}
           onLogout={handleLogout}
+          username={username}
+          role={role}
         />
 
         <main className="flex-1 overflow-visible md:overflow-hidden">
