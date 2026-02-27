@@ -16,6 +16,19 @@ type UsersResponse = {
   users: UserRecord[];
 };
 
+type PanelUsageRecord = {
+  panel_id: number;
+  panel_name: string;
+  panel_type?: string | null;
+  panel_url?: string | null;
+  used_bytes: number;
+};
+
+type PanelUsageResponse = {
+  total_used_bytes?: number;
+  panels: PanelUsageRecord[];
+};
+
 type ServiceRecord = {
   id: number;
   name: string;
@@ -323,9 +336,13 @@ function TopBar({
   );
 }
 
-function InsightCard({ label, value, icon, trend, trendUp }: { label: string; value: string | number; icon: string; trend?: string; trendUp?: boolean }) {
+function InsightCard({ label, value, icon, trend, trendUp, onClick }: { label: string; value: string | number; icon: string; trend?: string; trendUp?: boolean; onClick?: () => void }) {
   return (
-    <div className={cardClass + " p-5"}>
+    <button
+      type="button"
+      onClick={onClick}
+      className={`${cardClass} p-5 text-left ${onClick ? 'cursor-pointer hover:border-brand-400 hover:shadow-md' : ''}`}
+    >
       <div className="flex items-center justify-between">
         <div className="h-10 w-10 rounded-lg bg-slate-50 flex items-center justify-center text-slate-600 dark:bg-slate-800 dark:text-slate-300">
           <Icon name={icon} className="text-lg" />
@@ -339,6 +356,72 @@ function InsightCard({ label, value, icon, trend, trendUp }: { label: string; va
       <div className="mt-4">
         <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{label}</p>
         <h4 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{value}</h4>
+      </div>
+    </button>
+  );
+}
+
+function PanelUsageModal({
+  open,
+  onClose,
+  loading,
+  totalUsedBytes,
+  panels,
+}: {
+  open: boolean;
+  onClose: () => void;
+  loading: boolean;
+  totalUsedBytes: number;
+  panels: PanelUsageRecord[];
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className={cardClass + " w-full max-w-3xl p-6 shadow-2xl"} onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h3 className="text-xl font-bold text-slate-900 dark:text-white">Lifetime panel usage</h3>
+            <p className="text-xs text-slate-500">Usage remains visible even if the panel is no longer assigned to any active service.</p>
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
+            <Icon name="fa-solid fa-xmark" className="text-xl" />
+          </button>
+        </div>
+
+        <div className="mb-4 rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-800">
+          <span className="text-slate-500">Total lifetime usage: </span>
+          <span className="font-semibold text-slate-900 dark:text-white">{formatBytes(totalUsedBytes)}</span>
+        </div>
+
+        {loading ? (
+          <div className="py-12 text-center text-slate-500">Loading panel usage...</div>
+        ) : panels.length === 0 ? (
+          <div className="py-12 text-center text-slate-500">No panel usage found.</div>
+        ) : (
+          <div className="max-h-[60vh] overflow-auto rounded-lg border border-slate-200 dark:border-slate-800">
+            <table className="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-800">
+              <thead className="bg-slate-50 dark:bg-slate-900">
+                <tr>
+                  <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Panel</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Type</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">URL</th>
+                  <th className="px-4 py-2 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Used</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                {panels.map((panel) => (
+                  <tr key={panel.panel_id}>
+                    <td className="px-4 py-2 font-medium text-slate-900 dark:text-white">{panel.panel_name}</td>
+                    <td className="px-4 py-2 text-slate-600 dark:text-slate-300">{panel.panel_type || '-'}</td>
+                    <td className="px-4 py-2 text-slate-500">{panel.panel_url || '-'}</td>
+                    <td className="px-4 py-2 text-right font-semibold text-slate-900 dark:text-white">{formatBytes(panel.used_bytes)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -639,6 +722,9 @@ function UsersPage() {
   const [busy, setBusy] = useState(false);
   const [checkedUsers, setCheckedUsers] = useState<Set<string>>(new Set());
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showPanelUsageModal, setShowPanelUsageModal] = useState(false);
+  const [panelUsageLoading, setPanelUsageLoading] = useState(false);
+  const [panelUsage, setPanelUsage] = useState<PanelUsageRecord[]>([]);
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -652,6 +738,23 @@ function UsersPage() {
       setError('Failed to load users.');
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const fetchPanelUsage = useCallback(async () => {
+    try {
+      setPanelUsageLoading(true);
+      const res = await fetch('/api/v1/web/usage-by-panel', { credentials: 'same-origin' });
+      if (res.status === 401) { window.location.replace('/web/login'); return; }
+      if (!res.ok) return;
+      const data = await res.json() as PanelUsageResponse;
+      const rows = Array.isArray(data.panels) ? data.panels : [];
+      setPanelUsage(rows);
+      if (typeof data.total_used_bytes === 'number') {
+        setTotalUsage(data.total_used_bytes);
+      }
+    } finally {
+      setPanelUsageLoading(false);
     }
   }, []);
 
@@ -773,9 +876,24 @@ function UsersPage() {
           <InsightCard label="Disabled" value={stats.disabled} icon="fa-solid fa-ban" />
           <InsightCard label="Expiring Soon" value={stats.expiring} icon="fa-solid fa-clock" trend="Urgent" trendUp={false} />
           <InsightCard label="High Usage" value={stats.highUsage} icon="fa-solid fa-chart-line" />
+          <InsightCard
+            label="Lifetime Panel Usage"
+            value={formatBytes(totalUsage)}
+            icon="fa-solid fa-database"
+            onClick={() => {
+              setShowPanelUsageModal(true);
+              fetchPanelUsage();
+            }}
+          />
         </div>
 
         {/* Filters Bar */}
+        {error && (
+          <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-600 dark:border-rose-800/40 dark:bg-rose-500/10 dark:text-rose-300">
+            {error}
+          </div>
+        )}
+
         <div className="flex flex-col gap-3 border-b border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:flex-row sm:items-center">
           <div className="relative flex-1">
             <Icon name="fa-solid fa-magnifying-glass" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -873,6 +991,14 @@ function UsersPage() {
         services={services}
         subInfo={subInfo}
         onLoadSub={loadSub}
+      />
+
+      <PanelUsageModal
+        open={showPanelUsageModal}
+        onClose={() => setShowPanelUsageModal(false)}
+        loading={panelUsageLoading}
+        totalUsedBytes={totalUsage}
+        panels={panelUsage}
       />
 
       {showCreateModal && (
