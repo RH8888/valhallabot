@@ -535,7 +535,8 @@ function UserDetailsDrawer({
   busy,
   services,
   subInfo,
-  onLoadSub
+  onLoadSub,
+  variant = 'sidebar'
 }: {
   user: UserRecord | null;
   onClose: () => void;
@@ -544,6 +545,7 @@ function UserDetailsDrawer({
   services: ServiceRecord[];
   subInfo: SubscriptionResponse | null;
   onLoadSub: () => void;
+  variant?: 'sidebar' | 'modal';
 }) {
   const [formLimit, setFormLimit] = useState('');
   const [formRenewDays, setFormRenewDays] = useState('');
@@ -559,8 +561,12 @@ function UserDetailsDrawer({
 
   if (!user) return null;
 
+  const containerClass = variant === 'modal'
+    ? 'flex h-full max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900'
+    : 'flex h-full w-full flex-col overflow-hidden border-l border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 md:w-96';
+
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 w-full md:w-96">
+    <div className={containerClass}>
       <div className="flex items-center justify-between border-b border-slate-200 p-4 dark:border-slate-800">
         <h3 className="text-lg font-bold text-slate-900 dark:text-white">User Details</h3>
         <button onClick={onClose} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
@@ -1006,15 +1012,37 @@ function UsersPage() {
         </div>
       </div>
 
-      <UserDetailsDrawer
-        user={selectedUser}
-        onClose={() => setSelectedUser(null)}
-        onAction={handleAction}
-        busy={busy}
-        services={services}
-        subInfo={subInfo}
-        onLoadSub={loadSub}
-      />
+      <div className="hidden md:block">
+        <UserDetailsDrawer
+          user={selectedUser}
+          onClose={() => setSelectedUser(null)}
+          onAction={handleAction}
+          busy={busy}
+          services={services}
+          subInfo={subInfo}
+          onLoadSub={loadSub}
+        />
+      </div>
+
+      {selectedUser && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm md:hidden"
+          onClick={() => setSelectedUser(null)}
+        >
+          <div className="w-full" onClick={(e) => e.stopPropagation()}>
+            <UserDetailsDrawer
+              user={selectedUser}
+              onClose={() => setSelectedUser(null)}
+              onAction={handleAction}
+              busy={busy}
+              services={services}
+              subInfo={subInfo}
+              onLoadSub={loadSub}
+              variant="modal"
+            />
+          </div>
+        </div>
+      )}
 
       {showCreateModal && (
         <CreateUserModal
