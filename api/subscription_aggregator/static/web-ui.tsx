@@ -154,6 +154,7 @@ function Sidebar({
   setMobileOpen,
   currentPath,
   role,
+  username,
   onNavigate
 }: {
   collapsed: boolean;
@@ -161,6 +162,7 @@ function Sidebar({
   setMobileOpen: (open: boolean) => void;
   currentPath: string;
   role: 'web_admin' | 'web_agent';
+  username: string;
   onNavigate: (path: string) => void;
 }) {
   const groups = role === 'web_agent'
@@ -230,14 +232,18 @@ function Sidebar({
         <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800/50">
           {!collapsed ? (
             <div className="flex items-center gap-3">
-              <div className="h-8 w-8 rounded-full bg-brand-500 text-white flex items-center justify-center font-bold">A</div>
+              <div className="h-8 w-8 rounded-full bg-brand-500 text-white flex items-center justify-center font-bold">
+                {(username || 'Admin').charAt(0).toUpperCase()}
+              </div>
               <div className="flex-1 min-w-0">
-                <p className="truncate text-xs font-medium text-slate-900 dark:text-white">Admin User</p>
-                <p className="truncate text-[10px] text-slate-500">admin@valhalla.io</p>
+                <p className="truncate text-xs font-medium text-slate-900 dark:text-white">{username || 'Admin'}</p>
+                <p className="truncate text-[10px] text-slate-500 uppercase tracking-tighter">{role === 'web_agent' ? 'Agent' : 'Admin'}</p>
               </div>
             </div>
           ) : (
-            <div className="h-8 w-8 rounded-full bg-brand-500 text-white flex items-center justify-center font-bold mx-auto">A</div>
+            <div className="h-8 w-8 rounded-full bg-brand-500 text-white flex items-center justify-center font-bold mx-auto">
+              {(username || 'Admin').charAt(0).toUpperCase()}
+            </div>
           )}
         </div>
       </div>
@@ -1297,6 +1303,7 @@ function App() {
         setMobileOpen={setMobileSidebarOpen}
         currentPath={path}
         role={role}
+        username={username}
         onNavigate={navigate}
       />
 
