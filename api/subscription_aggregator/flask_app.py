@@ -1103,6 +1103,7 @@ def web_login_page():
 
 @app.route("/web/users", methods=["GET"])
 @app.route("/web/home", methods=["GET"])
+@app.route("/web/panels", methods=["GET"])
 @app.route("/web/services", methods=["GET"])
 @app.route("/web/nodes", methods=["GET"])
 @app.route("/web/hosts", methods=["GET"])
