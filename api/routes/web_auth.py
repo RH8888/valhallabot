@@ -34,6 +34,7 @@ from api.users import (
 )
 from bot import (
     build_sub_links,
+    get_app_key,
     list_services_for_owner,
     renew_user,
     reset_used,
@@ -446,10 +447,9 @@ async def web_user_subscription(
     row = _fetch_user(scoped_owner_id, username)
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
-    access_key = row.get("access_key")
-    if not access_key:
-        raise HTTPException(status_code=404, detail="Subscription key not found")
-    sub_links = build_sub_links(scoped_owner_id, username, access_key)
+
+    app_key = get_app_key(scoped_owner_id, username)
+    sub_links = build_sub_links(scoped_owner_id, username, app_key)
     if not sub_links:
         raise HTTPException(status_code=404, detail="Subscription link not found")
     return WebSubscriptionOut(
