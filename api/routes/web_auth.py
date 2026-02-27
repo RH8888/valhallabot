@@ -5,6 +5,7 @@ import base64
 import io
 import logging
 import os
+import shutil
 import time
 from datetime import datetime, timedelta, timezone
 from threading import Lock
@@ -147,6 +148,10 @@ class WebHomeUsageResponse(BaseModel):
     traffic_used_bytes: int
     traffic_limit_bytes: int
     max_user_bytes: int
+    cpu_usage_percent: float | None = None
+    ram_usage_percent: float | None = None
+    disk_usage_percent: float | None = None
+    swap_usage_percent: float | None = None
 
 
 def _to_qr_data_uri(content: str) -> str:
@@ -158,6 +163,60 @@ def _to_qr_data_uri(content: str) -> str:
     img.save(buf, format="PNG")
     encoded = base64.b64encode(buf.getvalue()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def _read_system_usage() -> dict[str, float | None]:
+    cpu_usage_percent: float | None = None
+    ram_usage_percent: float | None = None
+    swap_usage_percent: float | None = None
+    disk_usage_percent: float | None = None
+
+    try:
+        load_1m = os.getloadavg()[0]
+        cpu_count = os.cpu_count() or 1
+        cpu_usage_percent = max(0.0, min(100.0, (load_1m / cpu_count) * 100.0))
+    except Exception:
+        cpu_usage_percent = None
+
+    try:
+        mem_total = 0
+        mem_available = 0
+        swap_total = 0
+        swap_free = 0
+        with open("/proc/meminfo", "r", encoding="utf-8") as meminfo:
+            for line in meminfo:
+                key, value, *_ = line.replace(":", " ").split()
+                num = int(value)
+                if key == "MemTotal":
+                    mem_total = num
+                elif key == "MemAvailable":
+                    mem_available = num
+                elif key == "SwapTotal":
+                    swap_total = num
+                elif key == "SwapFree":
+                    swap_free = num
+
+        if mem_total > 0:
+            ram_usage_percent = max(0.0, min(100.0, ((mem_total - mem_available) / mem_total) * 100.0))
+        if swap_total > 0:
+            swap_usage_percent = max(0.0, min(100.0, ((swap_total - swap_free) / swap_total) * 100.0))
+    except Exception:
+        ram_usage_percent = None
+        swap_usage_percent = None
+
+    try:
+        disk = shutil.disk_usage("/")
+        if disk.total > 0:
+            disk_usage_percent = max(0.0, min(100.0, (disk.used / disk.total) * 100.0))
+    except Exception:
+        disk_usage_percent = None
+
+    return {
+        "cpu_usage_percent": cpu_usage_percent,
+        "ram_usage_percent": ram_usage_percent,
+        "disk_usage_percent": disk_usage_percent,
+        "swap_usage_percent": swap_usage_percent,
+    }
 
 
 def _service_allowed_for_owner(owner_id: int, service_id: int | None) -> bool:
@@ -471,6 +530,8 @@ async def web_home_usage(
         iso_day = d.isoformat()
         points.append(UsageSeriesPoint(date=iso_day, used_bytes=usage_map.get(iso_day, 0)))
 
+    system_usage = _read_system_usage()
+
     return WebHomeUsageResponse(
         selected_days=days,
         period_used_bytes=int(total_row.get("used_bytes") or 0),
@@ -480,6 +541,10 @@ async def web_home_usage(
         traffic_used_bytes=int(limits_row.get("total_used_bytes") or 0),
         traffic_limit_bytes=int(limits_row.get("plan_limit_bytes") or 0),
         max_user_bytes=int(limits_row.get("max_user_bytes") or 0),
+        cpu_usage_percent=system_usage["cpu_usage_percent"],
+        ram_usage_percent=system_usage["ram_usage_percent"],
+        disk_usage_percent=system_usage["disk_usage_percent"],
+        swap_usage_percent=system_usage["swap_usage_percent"],
     )
 
 
