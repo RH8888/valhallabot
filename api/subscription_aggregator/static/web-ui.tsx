@@ -153,38 +153,44 @@ function Sidebar({
   mobileOpen,
   setMobileOpen,
   currentPath,
+  role,
   onNavigate
 }: {
   collapsed: boolean;
   mobileOpen: boolean;
   setMobileOpen: (open: boolean) => void;
   currentPath: string;
+  role: 'web_admin' | 'web_agent';
   onNavigate: (path: string) => void;
 }) {
-  const groups = [
-    {
-      title: 'Dashboard',
-      items: [
-        { label: 'Home', icon: 'fa-solid fa-house', path: '/web/home' },
+  const groups = role === 'web_agent'
+    ? [
+        {
+          title: 'Dashboard',
+          items: [
+            { label: 'Home', icon: 'fa-solid fa-house', path: '/web/home' },
+            { label: 'Users', icon: 'fa-solid fa-users', path: '/web/users' },
+            { label: 'Settings', icon: 'fa-solid fa-gear', path: '/web/settings' },
+          ]
+        },
       ]
-    },
-    {
-      title: 'Management',
-      items: [
-        { label: 'Users', icon: 'fa-solid fa-users', path: '/web/users' },
-        { label: 'Services', icon: 'fa-solid fa-layer-group', path: '/web/services' },
-        { label: 'Nodes', icon: 'fa-solid fa-server', path: '/web/nodes' },
-        { label: 'Hosts', icon: 'fa-solid fa-network-wired', path: '/web/hosts' },
-      ]
-    },
-    {
-      title: 'System',
-      items: [
-        { label: 'Admins', icon: 'fa-solid fa-user-shield', path: '/web/admins' },
-        { label: 'Settings', icon: 'fa-solid fa-gear', path: '/web/settings' },
-      ]
-    }
-  ];
+    : [
+        {
+          title: 'Dashboard',
+          items: [
+            { label: 'Users', icon: 'fa-solid fa-users', path: '/web/users' },
+            { label: 'Home', icon: 'fa-solid fa-house', path: '/web/home' },
+          ]
+        },
+        {
+          title: 'Management',
+          items: [
+            { label: 'Servers', icon: 'fa-solid fa-server', path: '/web/servers' },
+            { label: 'Manage Agents', icon: 'fa-solid fa-user-shield', path: '/web/agents' },
+            { label: 'Settings', icon: 'fa-solid fa-gear', path: '/web/settings' },
+          ]
+        },
+      ];
 
   const sidebarContent = (
     <div className="flex h-full flex-col gap-4 py-4">
@@ -1193,21 +1199,29 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
 function App() {
   const [path, setPath] = useState(window.location.pathname);
   const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
+  const [role, setRole] = useState<'web_admin' | 'web_agent'>('web_admin');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const { theme, toggleTheme } = useTheme();
 
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const res = await fetch('/api/v1/web/me', { credentials: 'same-origin' });
-        setIsLoggedIn(res.ok);
-      } catch {
+  const checkAuth = useCallback(async () => {
+    try {
+      const res = await fetch('/api/v1/web/me', { credentials: 'same-origin' });
+      if (!res.ok) {
         setIsLoggedIn(false);
+        return;
       }
-    };
-    checkAuth();
+      const data = await res.json() as { role?: 'web_admin' | 'web_agent' };
+      setRole(data.role === 'web_agent' ? 'web_agent' : 'web_admin');
+      setIsLoggedIn(true);
+    } catch {
+      setIsLoggedIn(false);
+    }
   }, []);
+
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
 
   const navigate = (newPath: string) => {
     window.history.pushState({}, '', newPath);
@@ -1220,18 +1234,16 @@ function App() {
   };
 
   if (isLoggedIn === null) return <div className="flex h-screen items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-brand-500 border-t-transparent" /></div>;
-  if (!isLoggedIn) return <LoginPage onLogin={() => setIsLoggedIn(true)} />;
+  if (!isLoggedIn) return <LoginPage onLogin={checkAuth} />;
 
   const renderContent = () => {
     switch (path) {
       case '/web/users': return <UsersPage />;
       case '/web/home': return <HomePage />;
-      case '/web/services': return <ComingSoon title="Services Management" />;
-      case '/web/nodes': return <ComingSoon title="Nodes Monitoring" />;
-      case '/web/hosts': return <ComingSoon title="Hosts Configuration" />;
-      case '/web/admins': return <ComingSoon title="Admin Accounts" />;
+      case '/web/servers': return <ComingSoon title="Servers (Services & Panels)" />;
+      case '/web/agents': return <ComingSoon title="Manage Agents" />;
       case '/web/settings': return <ComingSoon title="System Settings" />;
-      default: return <UsersPage />;
+      default: return role === 'web_agent' ? <HomePage /> : <UsersPage />;
     }
   };
 
@@ -1242,6 +1254,7 @@ function App() {
         mobileOpen={mobileSidebarOpen}
         setMobileOpen={setMobileSidebarOpen}
         currentPath={path}
+        role={role}
         onNavigate={navigate}
       />
 
