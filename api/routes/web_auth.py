@@ -29,11 +29,13 @@ from api.users import (
     _fetch_user,
     _is_valid_local_username,
     _list_users,
+    _set_user_disabled,
     _service_has_guardcore_panel,
     get_total_usage_by_panel,
 )
 from bot import (
     build_sub_links,
+    delete_user,
     get_app_key,
     list_services_for_owner,
     renew_user,
@@ -108,6 +110,7 @@ class WebUserUpdateRequest(BaseModel):
     reset_used: bool = Field(False, description="Reset used traffic")
     renew_days: int | None = Field(None, description="Days to add to expiry")
     service_id: int | None = Field(None, description="Assign user to service")
+    disabled: bool | None = Field(None, description="Set manual disabled state")
 
 
 class WebUserCreateRequest(BaseModel):
@@ -358,6 +361,8 @@ async def web_edit_user(
         renew_user(scoped_owner_id, username, payload.renew_days)
     if payload.service_id is not None:
         await set_local_user_service(scoped_owner_id, username, payload.service_id)
+    if payload.disabled is not None:
+        _set_user_disabled(scoped_owner_id, username, payload.disabled)
 
     row = _fetch_user(scoped_owner_id, username)
     if not row:
@@ -373,6 +378,23 @@ async def web_edit_user(
         access_key=row.get("access_key"),
         key_expires_at=row.get("key_expires_at"),
     )
+
+
+@router.delete("/users/{username}")
+async def web_delete_user(
+    username: str,
+    identity: WebIdentity = Depends(require_web_user),
+) -> dict[str, str]:
+    scoped_owner_id = identity.owner_id if identity.role == "web_agent" else owner_settings_id()
+    if scoped_owner_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+    row = _fetch_user(scoped_owner_id, username)
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    delete_user(scoped_owner_id, username)
+    return {"status": "deleted"}
 
 
 @router.post("/users", response_model=UserOut)
