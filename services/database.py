@@ -264,6 +264,20 @@ def ensure_schema() -> None:
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS agent_usage_events(
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                agent_tg_id BIGINT NOT NULL,
+                panel_id BIGINT NULL,
+                delta_bytes BIGINT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_agent_usage_events_agent_created(agent_tg_id, created_at),
+                INDEX idx_agent_usage_events_created(created_at),
+                FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+        )
+        cur.execute(
+            """
             INSERT INTO agent_panel_usage_totals(agent_tg_id, panel_id, total_used_bytes)
             SELECT
                 lup.owner_id,

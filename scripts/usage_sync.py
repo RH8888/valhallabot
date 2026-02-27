@@ -90,6 +90,20 @@ def ensure_agent_panel_usage_totals_table():
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS agent_usage_events(
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                agent_tg_id BIGINT NOT NULL,
+                panel_id BIGINT NULL,
+                delta_bytes BIGINT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_agent_usage_events_agent_created(agent_tg_id, created_at),
+                INDEX idx_agent_usage_events_created(created_at),
+                FOREIGN KEY (panel_id) REFERENCES panels(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+        )
+        cur.execute(
+            """
             INSERT INTO agent_panel_usage_totals(agent_tg_id, panel_id, total_used_bytes)
             SELECT
                 lup.owner_id,
@@ -210,6 +224,20 @@ def add_panel_lifetime_usage(owner_id, panel_id, delta):
             """,
             (int(owner_id), int(panel_id), int(delta)),
         )
+
+
+def add_usage_event(owner_id, panel_id, delta):
+    if delta <= 0:
+        return
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO agent_usage_events(agent_tg_id, panel_id, delta_bytes)
+            VALUES (%s, %s, %s)
+            """,
+            (int(owner_id), int(panel_id), int(delta)),
+        )
+
 
 def update_last(link_id, new_used):
     with with_mysql_cursor() as cur:
@@ -901,6 +929,7 @@ def loop():
                         add_local_usage(owner_id, local_username, weighted_delta)
                         add_agent_usage(owner_id, delta)
                         add_panel_lifetime_usage(owner_id, row["panel_id"], delta)
+                        add_usage_event(owner_id, row["panel_id"], delta)
                         update_last(row["link_id"], used)
                         log.info("owner=%s local=%s +%s bytes (panel_id=%s)",
                                  owner_id, local_username, weighted_delta, row["panel_id"])

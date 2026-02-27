@@ -6,6 +6,7 @@ import io
 import logging
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -130,6 +131,22 @@ class WebServiceOut(BaseModel):
 class WebSubscriptionOut(BaseModel):
     urls: list[str]
     qr_data_uris: list[str]
+
+
+class UsageSeriesPoint(BaseModel):
+    date: str
+    used_bytes: int
+
+
+class WebHomeUsageResponse(BaseModel):
+    selected_days: int
+    period_used_bytes: int
+    data_points: list[UsageSeriesPoint]
+    users_count: int
+    user_limit: int
+    traffic_used_bytes: int
+    traffic_limit_bytes: int
+    max_user_bytes: int
 
 
 def _to_qr_data_uri(content: str) -> str:
@@ -362,6 +379,108 @@ async def web_usage_by_panel(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
     return get_usage_by_panel(scoped_owner_id)
+
+
+@router.get("/home-usage", response_model=WebHomeUsageResponse)
+async def web_home_usage(
+    days: int = Query(1, ge=1, le=30),
+    identity: WebIdentity = Depends(require_web_user),
+) -> WebHomeUsageResponse:
+    now_utc = datetime.now(timezone.utc)
+    since_utc = now_utc - timedelta(days=days)
+
+    with with_mysql_cursor() as cur:
+        if identity.role == "web_agent":
+            cur.execute(
+                """
+                SELECT DATE(created_at) AS day, COALESCE(SUM(delta_bytes), 0) AS used_bytes
+                FROM agent_usage_events
+                WHERE agent_tg_id=%s AND created_at >= %s
+                GROUP BY DATE(created_at)
+                ORDER BY DATE(created_at) ASC
+                """,
+                (identity.owner_id, since_utc.replace(tzinfo=None)),
+            )
+            usage_rows = cur.fetchall()
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(SUM(delta_bytes), 0) AS used_bytes
+                FROM agent_usage_events
+                WHERE agent_tg_id=%s AND created_at >= %s
+                """,
+                (identity.owner_id, since_utc.replace(tzinfo=None)),
+            )
+            total_row = cur.fetchone() or {}
+            cur.execute(
+                """
+                SELECT
+                    a.user_limit,
+                    a.plan_limit_bytes,
+                    a.max_user_bytes,
+                    a.total_used_bytes,
+                    (SELECT COUNT(*) FROM local_users lu WHERE lu.owner_id=a.telegram_user_id) AS users_count
+                FROM agents a
+                WHERE a.telegram_user_id=%s
+                LIMIT 1
+                """,
+                (identity.owner_id,),
+            )
+            limits_row = cur.fetchone() or {}
+        else:
+            cur.execute(
+                """
+                SELECT DATE(created_at) AS day, COALESCE(SUM(delta_bytes), 0) AS used_bytes
+                FROM agent_usage_events
+                WHERE created_at >= %s
+                GROUP BY DATE(created_at)
+                ORDER BY DATE(created_at) ASC
+                """,
+                (since_utc.replace(tzinfo=None),),
+            )
+            usage_rows = cur.fetchall()
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(delta_bytes), 0) AS used_bytes
+                FROM agent_usage_events
+                WHERE created_at >= %s
+                """,
+                (since_utc.replace(tzinfo=None),),
+            )
+            total_row = cur.fetchone() or {}
+            cur.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM local_users) AS users_count,
+                    0 AS user_limit,
+                    0 AS plan_limit_bytes,
+                    0 AS max_user_bytes,
+                    COALESCE(SUM(total_used_bytes), 0) AS total_used_bytes
+                FROM agents
+                """
+            )
+            limits_row = cur.fetchone() or {}
+
+    usage_map = {
+        str((row.get("day") or "")): int(row.get("used_bytes") or 0)
+        for row in usage_rows
+    }
+    points: list[UsageSeriesPoint] = []
+    for i in range(days):
+        d = (since_utc + timedelta(days=i)).date()
+        iso_day = d.isoformat()
+        points.append(UsageSeriesPoint(date=iso_day, used_bytes=usage_map.get(iso_day, 0)))
+
+    return WebHomeUsageResponse(
+        selected_days=days,
+        period_used_bytes=int(total_row.get("used_bytes") or 0),
+        data_points=points,
+        users_count=int(limits_row.get("users_count") or 0),
+        user_limit=int(limits_row.get("user_limit") or 0),
+        traffic_used_bytes=int(limits_row.get("total_used_bytes") or 0),
+        traffic_limit_bytes=int(limits_row.get("plan_limit_bytes") or 0),
+        max_user_bytes=int(limits_row.get("max_user_bytes") or 0),
+    )
 
 
 @router.patch("/users/{username}", response_model=UserOut)
