@@ -946,11 +946,11 @@ function UsersPage() {
               { id: 'disabled', label: 'Disabled' },
               { id: 'usage', label: 'High Usage' },
               { id: 'expiring', label: 'Expiring' },
-            ].map((f, idx, arr) => (
+            ].map((f) => (
               <button
                 key={f.id}
                 onClick={() => setFilter(f.id as any)}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${idx === arr.length - 1 ? 'w-full text-center sm:w-auto' : ''} ${
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${f.id === 'usage' ? 'w-full text-center sm:w-auto' : ''} ${
                   filter === f.id
                     ? 'bg-brand-600 text-white dark:bg-brand-500'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
