@@ -633,7 +633,7 @@ function UsersPage() {
   const fetchUsers = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/v1/web/users?limit=250', { credentials: 'same-origin' });
+      const res = await fetch('/api/v1/web/users?limit=200', { credentials: 'same-origin' });
       if (res.status === 401) { window.location.replace('/web/login'); return; }
       const data = await res.json() as UsersResponse;
       setUsers(data.users || []);
