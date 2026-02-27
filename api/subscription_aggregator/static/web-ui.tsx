@@ -336,12 +336,12 @@ function TopBar({
   );
 }
 
-function InsightCard({ label, value, icon, trend, trendUp, onClick }: { label: string; value: string | number; icon: string; trend?: string; trendUp?: boolean; onClick?: () => void }) {
+function InsightCard({ label, value, icon, trend, trendUp, onClick, className = '' }: { label: string; value: string | number; icon: string; trend?: string; trendUp?: boolean; onClick?: () => void; className?: string }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`${cardClass} p-5 text-left ${onClick ? 'cursor-pointer hover:border-brand-400 hover:shadow-md' : ''}`}
+      className={`${cardClass} p-5 text-left ${onClick ? 'cursor-pointer hover:border-brand-400 hover:shadow-md' : ''} ${className}`}
     >
       <div className="flex items-center justify-between">
         <div className="h-10 w-10 rounded-lg bg-slate-50 flex items-center justify-center text-slate-600 dark:bg-slate-800 dark:text-slate-300">
@@ -907,7 +907,7 @@ function UsersPage() {
           <InsightCard label="Active" value={stats.active} icon="fa-solid fa-check-circle" />
           <InsightCard label="Disabled" value={stats.disabled} icon="fa-solid fa-ban" />
           <InsightCard label="Expiring Soon" value={stats.expiring} icon="fa-solid fa-clock" trend="Urgent" trendUp={false} />
-          <InsightCard label="High Usage" value={stats.highUsage} icon="fa-solid fa-chart-line" />
+          <InsightCard label="High Usage" value={stats.highUsage} icon="fa-solid fa-chart-line" className="col-span-2 md:col-span-1" />
         </div>
 
         {/* Filters Bar */}
@@ -946,11 +946,11 @@ function UsersPage() {
               { id: 'disabled', label: 'Disabled' },
               { id: 'usage', label: 'High Usage' },
               { id: 'expiring', label: 'Expiring' },
-            ].map((f, idx, arr) => (
+            ].map((f) => (
               <button
                 key={f.id}
                 onClick={() => setFilter(f.id as any)}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${idx === arr.length - 1 ? 'w-full text-center sm:w-auto' : ''} ${
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                   filter === f.id
                     ? 'bg-brand-600 text-white dark:bg-brand-500'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
