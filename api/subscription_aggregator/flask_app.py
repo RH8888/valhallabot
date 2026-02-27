@@ -1102,6 +1102,12 @@ def web_login_page():
 
 
 @app.route("/web/users", methods=["GET"])
+@app.route("/web/home", methods=["GET"])
+@app.route("/web/services", methods=["GET"])
+@app.route("/web/nodes", methods=["GET"])
+@app.route("/web/hosts", methods=["GET"])
+@app.route("/web/admins", methods=["GET"])
+@app.route("/web/settings", methods=["GET"])
 def web_users_page():
     return render_template_string(WEB_USERS_TEMPLATE)
 

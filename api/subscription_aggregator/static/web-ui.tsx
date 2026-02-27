@@ -1,4 +1,4 @@
-type PageMode = 'login' | 'users';
+type PageMode = 'login' | 'users' | 'home' | 'services' | 'nodes' | 'hosts' | 'admins' | 'settings';
 
 type UserRecord = {
   username: string;
@@ -7,6 +7,7 @@ type UserRecord = {
   expire_at?: string | null;
   service_id?: number | null;
   disabled: boolean;
+  owner_id?: number;
 };
 
 type UsersResponse = {
@@ -25,7 +26,7 @@ type SubscriptionResponse = {
   qr_data_uris: string[];
 };
 
-const { useEffect, useMemo, useState } = React;
+const { useEffect, useMemo, useState, useCallback, useRef } = React;
 const numberFormatter = new Intl.NumberFormat();
 const THEME_KEY = 'vb-theme';
 
@@ -62,30 +63,896 @@ function parseDate(value?: string | null): string {
   if (!value) return '-';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
+  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
-const cardClass = 'rounded-2xl border border-slate-200/80 bg-white/95 p-6 shadow-2xl shadow-slate-900/10 backdrop-blur dark:border-slate-700 dark:bg-slate-900/90 dark:shadow-black/30';
-const inputClass = 'w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-slate-900 focus:ring-2 focus:ring-slate-400/30 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:focus:border-slate-200 dark:focus:ring-slate-500/30';
-const secondaryButtonClass = 'rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700';
-const primaryButtonClass = 'rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white';
+function isUserExpired(expireAt?: string | null): boolean {
+  if (!expireAt) return false;
+  const d = new Date(expireAt);
+  return !isNaN(d.getTime()) && d < new Date();
+}
 
-function LoginPage() {
+function isUserExpiringSoon(expireAt?: string | null): boolean {
+  if (!expireAt) return false;
+  const d = new Date(expireAt);
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 7); // 7 days window
+  return !isNaN(d.getTime()) && d > new Date() && d < soon;
+}
+
+// Styling Constants
+const inputClass = 'w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/10 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:border-brand-400 dark:focus:ring-brand-400/10';
+const btnBase = 'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50';
+const btnPrimary = `${btnBase} bg-brand-600 text-white hover:bg-brand-700 dark:bg-brand-500 dark:hover:bg-brand-600`;
+const btnSecondary = `${btnBase} border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700`;
+const btnGhost = `${btnBase} text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800`;
+const cardClass = 'rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900';
+
+function Icon({ name, className = "" }: { name: string; className?: string }) {
+  return <i className={`${name} ${className}`} />;
+}
+
+// Components
+
+function SidebarItem({
+  icon,
+  label,
+  active,
+  collapsed,
+  onClick,
+  href
+}: {
+  icon: string;
+  label: string;
+  active?: boolean;
+  collapsed?: boolean;
+  onClick?: () => void;
+  href: string;
+}) {
+  return (
+    <a
+      href={href}
+      onClick={(e) => {
+        e.preventDefault();
+        onClick?.();
+      }}
+      className={`group flex items-center gap-3 rounded-lg px-3 py-2 transition-colors ${
+        active
+          ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-400'
+          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'
+      }`}
+      title={collapsed ? label : undefined}
+    >
+      <Icon name={icon} className={`text-lg ${active ? 'text-brand-600 dark:text-brand-400' : 'text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-300'}`} />
+      {!collapsed && <span className="text-sm font-medium">{label}</span>}
+    </a>
+  );
+}
+
+function Sidebar({
+  collapsed,
+  mobileOpen,
+  setMobileOpen,
+  currentPath,
+  onNavigate
+}: {
+  collapsed: boolean;
+  mobileOpen: boolean;
+  setMobileOpen: (open: boolean) => void;
+  currentPath: string;
+  onNavigate: (path: string) => void;
+}) {
+  const groups = [
+    {
+      title: 'Dashboard',
+      items: [
+        { label: 'Home', icon: 'fa-solid fa-house', path: '/web/home' },
+      ]
+    },
+    {
+      title: 'Management',
+      items: [
+        { label: 'Users', icon: 'fa-solid fa-users', path: '/web/users' },
+        { label: 'Services', icon: 'fa-solid fa-layer-group', path: '/web/services' },
+        { label: 'Nodes', icon: 'fa-solid fa-server', path: '/web/nodes' },
+        { label: 'Hosts', icon: 'fa-solid fa-network-wired', path: '/web/hosts' },
+      ]
+    },
+    {
+      title: 'System',
+      items: [
+        { label: 'Admins', icon: 'fa-solid fa-user-shield', path: '/web/admins' },
+        { label: 'Settings', icon: 'fa-solid fa-gear', path: '/web/settings' },
+      ]
+    }
+  ];
+
+  const sidebarContent = (
+    <div className="flex h-full flex-col gap-4 py-4">
+      <div className={`px-4 pb-2 transition-opacity ${collapsed ? 'opacity-0' : 'opacity-100'}`}>
+        <span className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">Valhalla</span>
+      </div>
+
+      <nav className="flex-1 space-y-6 px-3">
+        {groups.map((group) => (
+          <div key={group.title}>
+            {!collapsed && (
+              <h3 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                {group.title}
+              </h3>
+            )}
+            <div className="space-y-1">
+              {group.items.map((item) => (
+                <SidebarItem
+                  key={item.path}
+                  icon={item.icon}
+                  label={item.label}
+                  href={item.path}
+                  active={currentPath === item.path}
+                  collapsed={collapsed}
+                  onClick={() => {
+                    onNavigate(item.path);
+                    setMobileOpen(false);
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+      </nav>
+
+      <div className="px-3">
+        <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800/50">
+          {!collapsed ? (
+            <div className="flex items-center gap-3">
+              <div className="h-8 w-8 rounded-full bg-brand-500 text-white flex items-center justify-center font-bold">A</div>
+              <div className="flex-1 min-w-0">
+                <p className="truncate text-xs font-medium text-slate-900 dark:text-white">Admin User</p>
+                <p className="truncate text-[10px] text-slate-500">admin@valhalla.io</p>
+              </div>
+            </div>
+          ) : (
+            <div className="h-8 w-8 rounded-full bg-brand-500 text-white flex items-center justify-center font-bold mx-auto">A</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      {/* Desktop Sidebar */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 hidden border-r border-slate-200 bg-white transition-all duration-300 dark:border-slate-800 dark:bg-slate-900 md:block ${
+          collapsed ? 'w-16' : 'w-64'
+        }`}
+      >
+        {sidebarContent}
+      </aside>
+
+      {/* Mobile Drawer */}
+      <div
+        className={`fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm transition-opacity md:hidden ${
+          mobileOpen ? 'opacity-100' : 'pointer-events-none opacity-0'
+        }`}
+        onClick={() => setMobileOpen(false)}
+      />
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 w-64 bg-white transition-transform duration-300 dark:bg-slate-900 md:hidden ${
+          mobileOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        {sidebarContent}
+      </aside>
+    </>
+  );
+}
+
+function TopBar({
+  onToggleSidebar,
+  onToggleTheme,
+  theme,
+  onLogout
+}: {
+  onToggleSidebar: () => void;
+  onToggleTheme: () => void;
+  theme: 'dark' | 'light';
+  onLogout: () => void;
+}) {
+  return (
+    <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-slate-200 bg-white/80 px-4 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
+      <div className="flex items-center gap-4">
+        <button
+          onClick={onToggleSidebar}
+          className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+        >
+          <Icon name="fa-solid fa-bars" className="text-lg" />
+        </button>
+
+        <div className="relative hidden max-w-md md:block">
+          <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
+            <Icon name="fa-solid fa-magnifying-glass" className="text-xs" />
+          </div>
+          <input
+            type="text"
+            className="w-64 rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-10 pr-3 text-xs outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            placeholder="Search everything..."
+            readOnly
+          />
+          <div className="absolute inset-y-0 right-0 flex items-center pr-3">
+            <kbd className="rounded bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-400 shadow-sm dark:bg-slate-700">Ctrl K</kbd>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onToggleTheme}
+          className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+          title="Toggle Theme"
+        >
+          <Icon name={theme === 'dark' ? 'fa-solid fa-sun' : 'fa-solid fa-moon'} />
+        </button>
+        <button
+          className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+          title="Notifications"
+        >
+          <Icon name="fa-regular fa-bell" />
+        </button>
+        <div className="mx-2 h-6 w-px bg-slate-200 dark:bg-slate-700" />
+
+        <div className="flex items-center gap-3 pl-2">
+          <div className="hidden flex-col items-end sm:flex">
+            <span className="text-xs font-semibold text-slate-900 dark:text-white">Admin</span>
+            <span className="text-[10px] text-slate-500 uppercase tracking-tighter">Superuser</span>
+          </div>
+          <div className="group relative cursor-pointer">
+            <div className="h-9 w-9 rounded-full bg-slate-100 p-0.5 ring-2 ring-slate-200 transition-all hover:ring-brand-500 dark:bg-slate-800 dark:ring-slate-700">
+              <img src="https://ui-avatars.com/api/?name=Admin&background=0ea5e9&color=fff" className="h-full w-full rounded-full" alt="Avatar" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function InsightCard({ label, value, icon, trend, trendUp }: { label: string; value: string | number; icon: string; trend?: string; trendUp?: boolean }) {
+  return (
+    <div className={cardClass + " p-5"}>
+      <div className="flex items-center justify-between">
+        <div className="h-10 w-10 rounded-lg bg-slate-50 flex items-center justify-center text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+          <Icon name={icon} className="text-lg" />
+        </div>
+        {trend && (
+          <span className={`text-xs font-medium ${trendUp ? 'text-emerald-600' : 'text-rose-600'}`}>
+            {trend} <Icon name={trendUp ? 'fa-solid fa-arrow-up' : 'fa-solid fa-arrow-down'} className="ml-0.5 text-[10px]" />
+          </span>
+        )}
+      </div>
+      <div className="mt-4">
+        <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{label}</p>
+        <h4 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{value}</h4>
+      </div>
+    </div>
+  );
+}
+
+function ComingSoon({ title }: { title: string }) {
+  return (
+    <div className="flex h-[calc(100vh-12rem)] flex-col items-center justify-center text-center">
+      <div className="mb-4 rounded-full bg-brand-50 p-6 dark:bg-brand-500/10">
+        <Icon name="fa-solid fa-rocket" className="text-4xl text-brand-600 dark:text-brand-400" />
+      </div>
+      <h2 className="text-2xl font-bold text-slate-900 dark:text-white">{title}</h2>
+      <p className="mt-2 max-w-sm text-slate-500">We're working hard to bring you this feature. Stay tuned for updates!</p>
+      <button className={btnPrimary + " mt-6"}>Get Notified</button>
+    </div>
+  );
+}
+
+function UserCardRow({
+  user,
+  selected,
+  onSelect,
+  onManage,
+  checked,
+  onCheck
+}: {
+  user: UserRecord;
+  selected: boolean;
+  onSelect: () => void;
+  onManage: () => void;
+  checked: boolean;
+  onCheck: (val: boolean) => void;
+}) {
+  const usagePercent = Math.min(100, user.plan_limit_bytes > 0 ? (user.used_bytes / user.plan_limit_bytes) * 100 : 0);
+  const statusColor = user.disabled ? 'bg-rose-500' : 'bg-emerald-500';
+
+  const expired = isUserExpired(user.expire_at);
+
+  return (
+    <div
+      onClick={onSelect}
+      className={`group relative flex cursor-pointer flex-col gap-3 rounded-xl border p-4 transition-all hover:shadow-md ${
+        selected
+          ? 'border-brand-500 bg-brand-50/30 ring-1 ring-brand-500 dark:bg-brand-500/5'
+          : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700'
+      }`}
+    >
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-3 min-w-0">
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={(e) => {
+              e.stopPropagation();
+              onCheck(e.target.checked);
+            }}
+            className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 dark:border-slate-700 dark:bg-slate-800"
+          />
+          <div className="min-w-0">
+            <h5 className="truncate text-sm font-semibold text-slate-900 dark:text-white">{user.username}</h5>
+            <div className="flex items-center gap-2 text-[10px] text-slate-500">
+              <span className={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
+              <span>{user.disabled ? 'Disabled' : 'Active'}</span>
+              <span>•</span>
+              <span>ID: {user.owner_id || 'N/A'}</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={(e) => { e.stopPropagation(); onManage(); }}
+            className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+          >
+            <Icon name="fa-solid fa-ellipsis-vertical" />
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between text-[10px]">
+          <span className="text-slate-500">Usage</span>
+          <span className="font-medium text-slate-700 dark:text-slate-300">
+            {formatBytes(user.used_bytes)} / {user.plan_limit_bytes > 0 ? formatBytes(user.plan_limit_bytes) : '∞'}
+          </span>
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+          <div
+            className={`h-full transition-all duration-500 ${usagePercent > 90 ? 'bg-rose-500' : usagePercent > 70 ? 'bg-amber-500' : 'bg-brand-500'}`}
+            style={{ width: `${usagePercent}%` }}
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between text-[10px]">
+        <div className="flex items-center gap-1 text-slate-500">
+          <Icon name="fa-regular fa-calendar" />
+          <span>Expires: {user.expire_at ? parseDate(user.expire_at) : 'Never'}</span>
+        </div>
+        {expired && (
+          <span className="rounded bg-rose-50 px-1.5 py-0.5 font-bold uppercase text-rose-600 dark:bg-rose-500/10">Expired</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UserDetailsDrawer({
+  user,
+  onClose,
+  onAction,
+  busy,
+  services,
+  subInfo,
+  onLoadSub
+}: {
+  user: UserRecord | null;
+  onClose: () => void;
+  onAction: (payload: any) => void;
+  busy: boolean;
+  services: ServiceRecord[];
+  subInfo: SubscriptionResponse | null;
+  onLoadSub: () => void;
+}) {
+  const [formLimit, setFormLimit] = useState('');
+  const [formRenewDays, setFormRenewDays] = useState('');
+  const [formServiceId, setFormServiceId] = useState('');
+
+  useEffect(() => {
+    if (user) {
+      setFormLimit('');
+      setFormRenewDays('');
+      setFormServiceId(user.service_id ? String(user.service_id) : '');
+    }
+  }, [user]);
+
+  if (!user) return null;
+
+  return (
+    <div className="flex h-full flex-col overflow-hidden bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 w-full md:w-96">
+      <div className="flex items-center justify-between border-b border-slate-200 p-4 dark:border-slate-800">
+        <h3 className="text-lg font-bold text-slate-900 dark:text-white">User Details</h3>
+        <button onClick={onClose} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+          <Icon name="fa-solid fa-xmark" className="text-xl" />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+        <div className="flex items-center gap-4">
+          <div className="h-16 w-16 rounded-2xl bg-brand-500 flex items-center justify-center text-white text-2xl font-bold">
+            {user.username.charAt(0).toUpperCase()}
+          </div>
+          <div>
+            <h4 className="text-xl font-bold text-slate-900 dark:text-white">@{user.username}</h4>
+            <p className="text-sm text-slate-500">Status: <span className={user.disabled ? 'text-rose-500 font-semibold' : 'text-emerald-500 font-semibold'}>{user.disabled ? 'Disabled' : 'Active'}</span></p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            disabled={busy}
+            onClick={() => onAction({ disabled: !user.disabled })}
+            className={user.disabled ? btnPrimary : btnSecondary}
+          >
+            <Icon name={user.disabled ? 'fa-solid fa-check' : 'fa-solid fa-ban'} />
+            {user.disabled ? 'Enable' : 'Disable'}
+          </button>
+          <button
+            disabled={busy}
+            onClick={() => confirm('Are you sure?') && onAction({ delete: true })}
+            className={btnSecondary + " text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/20"}
+          >
+            <Icon name="fa-solid fa-trash-can" />
+            Delete
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <h5 className="text-sm font-semibold text-slate-900 dark:text-white border-b border-slate-100 pb-2 dark:border-slate-800">Quotas & Settings</h5>
+
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-500">Update Limit (GB)</label>
+              <div className="flex gap-2">
+                <input className={inputClass} value={formLimit} onChange={e => setFormLimit(e.target.value)} placeholder="e.g. 50" />
+                <button
+                  disabled={busy || !formLimit}
+                  onClick={() => onAction({ limit_bytes: Math.round(Number(formLimit) * 1024 * 1024 * 1024) })}
+                  className={btnPrimary}
+                >Apply</button>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-500">Renew Subscription (Days)</label>
+              <div className="flex gap-2">
+                <input className={inputClass} value={formRenewDays} onChange={e => setFormRenewDays(e.target.value)} placeholder="e.g. 30" />
+                <button
+                   disabled={busy || !formRenewDays}
+                   onClick={() => onAction({ renew_days: Number(formRenewDays) })}
+                   className={btnPrimary}
+                >Renew</button>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-500">Assigned Service</label>
+              <div className="flex gap-2">
+                <select className={inputClass} value={formServiceId} onChange={e => setFormServiceId(e.target.value)}>
+                  <option value="">No Service</option>
+                  {services.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <button
+                  disabled={busy || formServiceId === (user.service_id ? String(user.service_id) : '')}
+                  onClick={() => onAction({ service_id: formServiceId ? Number(formServiceId) : null })}
+                  className={btnPrimary}
+                >Assign</button>
+              </div>
+            </div>
+
+            <button
+              disabled={busy}
+              onClick={() => onAction({ reset_used: true })}
+              className={btnSecondary + " w-full"}
+            >
+              <Icon name="fa-solid fa-rotate-left" />
+              Reset Data Usage
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-4 pt-2">
+          <h5 className="text-sm font-semibold text-slate-900 dark:text-white border-b border-slate-100 pb-2 dark:border-slate-800">Access Info</h5>
+          <button
+            disabled={busy}
+            onClick={onLoadSub}
+            className={btnSecondary + " w-full"}
+          >
+            <Icon name="fa-solid fa-qrcode" />
+            {subInfo ? 'Refresh QR Codes' : 'Show Subscription Info'}
+          </button>
+
+          {subInfo && (
+            <div className="space-y-4">
+              {subInfo.urls.map((url, idx) => (
+                <div key={idx} className="space-y-2 rounded-lg border border-slate-100 p-3 dark:border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold uppercase text-slate-400">Link #{idx+1}</span>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(url); alert('Copied!'); }}
+                      className="text-xs text-brand-600 hover:underline"
+                    >Copy</button>
+                  </div>
+                  <p className="break-all text-[10px] text-slate-500">{url}</p>
+                  <img src={subInfo.qr_data_uris[idx]} className="mx-auto h-40 w-40 rounded-lg bg-white p-2" alt="QR Code" />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoadingSkeleton() {
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+      {[1,2,3,4,5].map(i => (
+        <div key={i} className="animate-pulse rounded-xl border border-slate-100 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-800/50">
+          <div className="flex gap-4">
+            <div className="h-10 w-10 rounded-lg bg-slate-200 dark:bg-slate-700" />
+            <div className="flex-1 space-y-2">
+              <div className="h-4 w-1/4 rounded bg-slate-200 dark:bg-slate-700" />
+              <div className="h-3 w-1/2 rounded bg-slate-200 dark:bg-slate-700" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function UsersPage() {
+  const [users, setUsers] = useState<UserRecord[]>([]);
+  const [totalUsage, setTotalUsage] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<'all' | 'active' | 'disabled' | 'expiring' | 'usage'>('all');
+  const [sortBy, setSortBy] = useState<'username' | 'usage' | 'expiry'>('username');
+  const [selectedUser, setSelectedUser] = useState<UserRecord | null>(null);
+  const [services, setServices] = useState<ServiceRecord[]>([]);
+  const [subInfo, setSubInfo] = useState<SubscriptionResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [checkedUsers, setCheckedUsers] = useState<Set<string>>(new Set());
+  const [showCreateModal, setShowCreateModal] = useState(false);
+
+  const fetchUsers = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await fetch('/api/v1/web/users?limit=250', { credentials: 'same-origin' });
+      if (res.status === 401) { window.location.replace('/web/login'); return; }
+      const data = await res.json() as UsersResponse;
+      setUsers(data.users || []);
+      setTotalUsage(data.total_used_bytes || 0);
+    } catch {
+      setError('Failed to load users.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchServices = useCallback(async () => {
+    try {
+      const res = await fetch('/api/v1/web/services', { credentials: 'same-origin' });
+      if (res.ok) {
+        const data = await res.json();
+        setServices(Array.isArray(data) ? data : []);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchUsers();
+    fetchServices();
+  }, [fetchUsers, fetchServices]);
+
+  const filteredUsers = useMemo(() => {
+    let result = users.filter(u => u.username.toLowerCase().includes(search.toLowerCase()));
+    if (filter === 'active') result = result.filter(u => !u.disabled);
+    if (filter === 'disabled') result = result.filter(u => u.disabled);
+    if (filter === 'usage') result = result.filter(u => u.plan_limit_bytes > 0 && (u.used_bytes / u.plan_limit_bytes) > 0.8);
+    if (filter === 'expiring') {
+      result = result.filter(u => isUserExpiringSoon(u.expire_at));
+    }
+
+    result.sort((a, b) => {
+      if (sortBy === 'username') return a.username.localeCompare(b.username);
+      if (sortBy === 'usage') return b.used_bytes - a.used_bytes;
+      if (sortBy === 'expiry') {
+        if (!a.expire_at) return 1;
+        if (!b.expire_at) return -1;
+        return new Date(a.expire_at).getTime() - new Date(b.expire_at).getTime();
+      }
+      return 0;
+    });
+
+    return result;
+  }, [users, search, filter, sortBy]);
+
+  const stats = useMemo(() => {
+    const active = users.filter(u => !u.disabled).length;
+    const expiring = users.filter(u => isUserExpiringSoon(u.expire_at)).length;
+    const highUsage = users.filter(u => u.plan_limit_bytes > 0 && (u.used_bytes / u.plan_limit_bytes) > 0.8).length;
+    return { total: users.length, active, disabled: users.length - active, expiring, highUsage };
+  }, [users]);
+
+  const handleAction = async (payload: any) => {
+    if (!selectedUser) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/v1/web/users/${encodeURIComponent(selectedUser.username)}`, {
+        method: payload.delete ? 'DELETE' : 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: payload.delete ? undefined : JSON.stringify(payload),
+      });
+      if (res.ok) {
+        if (payload.delete) {
+          setUsers(prev => prev.filter(u => u.username !== selectedUser.username));
+          setSelectedUser(null);
+        } else {
+          const updated = await res.json();
+          setUsers(prev => prev.map(u => u.username === updated.username ? updated : u));
+          setSelectedUser(updated);
+        }
+      }
+    } catch {
+      alert('Action failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadSub = async () => {
+    if (!selectedUser) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/v1/web/users/${encodeURIComponent(selectedUser.username)}/subscription`, { credentials: 'same-origin' });
+      if (res.ok) setSubInfo(await res.json());
+    } catch {
+      alert('Failed to load subscription info');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleCheck = (username: string, val: boolean) => {
+    const next = new Set(checkedUsers);
+    if (val) next.add(username); else next.delete(username);
+    setCheckedUsers(next);
+  };
+
+  const toggleAll = (val: boolean) => {
+    if (val) setCheckedUsers(new Set(filteredUsers.map(u => u.username)));
+    else setCheckedUsers(new Set());
+  };
+
+  return (
+    <div className="flex h-full flex-col md:flex-row overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Workspace Header */}
+        <div className="flex flex-col gap-4 border-b border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Users Workspace</h2>
+            <p className="text-sm text-slate-500">Manage and monitor all your local users and their subscriptions.</p>
+          </div>
+          <button onClick={() => setShowCreateModal(true)} className={btnPrimary}>
+            <Icon name="fa-solid fa-plus" />
+            Create User
+          </button>
+        </div>
+
+        {/* Insights */}
+        <div className="grid grid-cols-2 gap-4 border-b border-slate-200 bg-slate-50/30 p-4 dark:border-slate-800 dark:bg-slate-900/50 md:grid-cols-3 lg:grid-cols-5">
+          <InsightCard label="Total Users" value={stats.total} icon="fa-solid fa-users" />
+          <InsightCard label="Active" value={stats.active} icon="fa-solid fa-check-circle" />
+          <InsightCard label="Disabled" value={stats.disabled} icon="fa-solid fa-ban" />
+          <InsightCard label="Expiring Soon" value={stats.expiring} icon="fa-solid fa-clock" trend="Urgent" trendUp={false} />
+          <InsightCard label="High Usage" value={stats.highUsage} icon="fa-solid fa-chart-line" />
+        </div>
+
+        {/* Filters Bar */}
+        <div className="flex flex-col gap-3 border-b border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:flex-row sm:items-center">
+          <div className="relative flex-1">
+            <Icon name="fa-solid fa-magnifying-glass" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              className={inputClass + " pl-10"}
+              placeholder="Filter by username..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <label className="text-xs font-semibold text-slate-400 uppercase">Sort:</label>
+            <select
+              className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+              value={sortBy}
+              onChange={e => setSortBy(e.target.value as any)}
+            >
+              <option value="username">Name</option>
+              <option value="usage">Usage</option>
+              <option value="expiry">Expiry</option>
+            </select>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { id: 'all', label: 'All' },
+              { id: 'active', label: 'Active' },
+              { id: 'disabled', label: 'Disabled' },
+              { id: 'usage', label: 'High Usage' },
+              { id: 'expiring', label: 'Expiring' },
+            ].map(f => (
+              <button
+                key={f.id}
+                onClick={() => setFilter(f.id as any)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  filter === f.id
+                    ? 'bg-brand-600 text-white dark:bg-brand-500'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
+                }`}
+              >{f.label}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* User List Area */}
+        <div className="flex-1 overflow-y-auto bg-slate-50/50 p-4 dark:bg-black/20">
+          {checkedUsers.size > 0 && (
+            <div className="mb-4 flex items-center justify-between rounded-lg bg-brand-600 p-2 text-white shadow-lg dark:bg-brand-500">
+              <span className="text-sm font-bold ml-2">{checkedUsers.size} users selected</span>
+              <div className="flex gap-2">
+                <button className="rounded bg-white/20 px-3 py-1 text-xs hover:bg-white/30">Disable All</button>
+                <button className="rounded bg-white/20 px-3 py-1 text-xs hover:bg-white/30">Extend (30d)</button>
+                <button className="rounded bg-rose-500 px-3 py-1 text-xs font-bold shadow-sm" onClick={() => setCheckedUsers(new Set())}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          <div className="mb-4 flex items-center gap-2">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-slate-300 text-brand-600"
+              onChange={e => toggleAll(e.target.checked)}
+              checked={filteredUsers.length > 0 && checkedUsers.size === filteredUsers.length}
+            />
+            <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Select All Visible</span>
+          </div>
+
+          {loading ? <LoadingSkeleton /> : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+              {filteredUsers.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-center bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
+                  <Icon name="fa-solid fa-user-slash" className="text-4xl text-slate-300 mb-4" />
+                  <p className="text-slate-500">No users found matching your filters.</p>
+                </div>
+              ) : filteredUsers.map(user => (
+                <UserCardRow
+                  key={user.username}
+                  user={user}
+                  selected={selectedUser?.username === user.username}
+                  onSelect={() => { setSelectedUser(user); setSubInfo(null); }}
+                  onManage={() => { setSelectedUser(user); setSubInfo(null); }}
+                  checked={checkedUsers.has(user.username)}
+                  onCheck={v => toggleCheck(user.username, v)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <UserDetailsDrawer
+        user={selectedUser}
+        onClose={() => setSelectedUser(null)}
+        onAction={handleAction}
+        busy={busy}
+        services={services}
+        subInfo={subInfo}
+        onLoadSub={loadSub}
+      />
+
+      {showCreateModal && (
+        <CreateUserModal
+          services={services}
+          onClose={() => setShowCreateModal(false)}
+          onSuccess={() => { setShowCreateModal(false); fetchUsers(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CreateUserModal({ services, onClose, onSuccess }: { services: ServiceRecord[]; onClose: () => void; onSuccess: () => void }) {
+  const [username, setUsername] = useState('');
+  const [limitGb, setLimitGb] = useState('');
+  const [days, setDays] = useState('');
+  const [serviceId, setServiceId] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const res = await fetch('/api/v1/web/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          username,
+          limit_bytes: limitGb ? Math.round(Number(limitGb) * 1024 * 1024 * 1024) : 0,
+          duration_days: days ? Number(days) : 0,
+          service_id: serviceId ? Number(serviceId) : null,
+        }),
+      });
+      if (res.ok) onSuccess(); else alert('Failed to create user');
+    } catch {
+      alert('Error occurred');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+      <div className={cardClass + " w-full max-w-md p-6 shadow-2xl"} onClick={e => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-xl font-bold text-slate-900 dark:text-white">Create New User</h3>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
+            <Icon name="fa-solid fa-xmark" className="text-xl" />
+          </button>
+        </div>
+        <form onSubmit={submit} className="space-y-4">
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Username</label>
+            <input required className={inputClass} value={username} onChange={e => setUsername(e.target.value)} placeholder="e.g. john_doe" />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Traffic Limit (GB)</label>
+              <input className={inputClass} value={limitGb} onChange={e => setLimitGb(e.target.value)} placeholder="e.g. 50" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Duration (Days)</label>
+              <input className={inputClass} value={days} onChange={e => setDays(e.target.value)} placeholder="e.g. 30" />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Assign Service</label>
+            <select className={inputClass} value={serviceId} onChange={e => setServiceId(e.target.value)}>
+              <option value="">No Service</option>
+              {services.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose} className={btnSecondary + " flex-1"}>Cancel</button>
+            <button type="submit" disabled={busy} className={btnPrimary + " flex-1"}>{busy ? 'Creating...' : 'Create User'}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function LoginPage({ onLogin }: { onLogin: () => void }) {
   const { theme, toggleTheme } = useTheme();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    fetch('/api/v1/web/me', { credentials: 'same-origin' })
-      .then((res) => {
-        if (res.ok) {
-          window.location.replace('/web/users');
-        }
-      })
-      .catch(() => undefined);
-  }, []);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -99,447 +966,126 @@ function LoginPage() {
         body: JSON.stringify({ username, password }),
       });
 
-      if (res.ok) {
-        window.location.replace('/web/users');
-        return;
-      }
-      if (res.status === 429) {
-        setError('Too many login attempts. Please wait a bit and try again.');
-        return;
-      }
-      setError('Invalid username or password.');
+      if (res.ok) { onLogin(); return; }
+      setError(res.status === 429 ? 'Too many attempts.' : 'Invalid credentials.');
     } catch {
-      setError('Unable to login right now. Please try again.');
+      setError('Unable to login.');
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-white via-slate-100 to-slate-200 p-4 dark:from-slate-950 dark:via-slate-900 dark:to-black">
-      <section className="mx-auto mt-12 max-w-md">
-        <div className={cardClass}>
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-semibold text-slate-800 dark:bg-slate-700 dark:text-slate-100">
-              Valhalla Web Console
-            </span>
-            <button type="button" className={secondaryButtonClass} onClick={toggleTheme}>
-              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            </button>
+    <main className="flex min-h-screen items-center justify-center bg-slate-50 p-4 dark:bg-slate-950">
+      <div className={cardClass + " w-full max-w-md p-8 shadow-2xl"}>
+        <div className="mb-8 text-center">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-lg dark:bg-brand-500">
+            <Icon name="fa-solid fa-shield-halved" className="text-3xl" />
           </div>
-          <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Welcome back</h1>
-          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Sign in to securely manage users, quotas, and expiration dates.</p>
-          <form onSubmit={submit} className="mt-6 space-y-4">
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">
-              Username
-              <input
-                className={inputClass}
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                autoComplete="username"
-                required
-                placeholder="Enter your username"
-              />
-            </label>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">
-              Password
-              <input
-                className={inputClass}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                autoComplete="current-password"
-                type="password"
-                required
-                placeholder="Enter your password"
-              />
-            </label>
-            <button type="submit" disabled={busy} className={`${primaryButtonClass} w-full`}>
-              {busy ? 'Signing in…' : 'Sign in'}
-            </button>
-            {error ? <p className="text-sm font-medium text-rose-500">{error}</p> : <p className="text-sm text-slate-500 dark:text-slate-300">Session is protected with secure HTTP-only cookies.</p>}
-          </form>
-        </div>
-      </section>
-    </main>
-  );
-}
-
-function UsersPage() {
-  const { theme, toggleTheme } = useTheme();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [users, setUsers] = useState<UserRecord[]>([]);
-  const [totalUsageBytes, setTotalUsageBytes] = useState(0);
-  const [search, setSearch] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [services, setServices] = useState<ServiceRecord[]>([]);
-  const [busyUser, setBusyUser] = useState<string>('');
-  const [selectedUser, setSelectedUser] = useState<UserRecord | null>(null);
-  const [formLimit, setFormLimit] = useState('');
-  const [formRenewDays, setFormRenewDays] = useState('');
-  const [formServiceId, setFormServiceId] = useState('');
-  const [subInfo, setSubInfo] = useState<SubscriptionResponse | null>(null);
-  const [createUsername, setCreateUsername] = useState('');
-  const [createLimitGb, setCreateLimitGb] = useState('');
-  const [createDurationDays, setCreateDurationDays] = useState('');
-  const [createServiceId, setCreateServiceId] = useState('');
-  const [creatingUser, setCreatingUser] = useState(false);
-  const [showCreateUserModal, setShowCreateUserModal] = useState(false);
-  const parsedLimitGb = Number(formLimit);
-  const canSetLimit = Number.isFinite(parsedLimitGb) && parsedLimitGb >= 0;
-
-  const reloadUsers = async () => {
-    const usersRes = await fetch('/api/v1/web/users?limit=200', { credentials: 'same-origin' });
-    if (usersRes.status === 401) {
-      window.location.replace('/web/login');
-      return;
-    }
-    if (!usersRes.ok) {
-      throw new Error('load users failed');
-    }
-    const data = (await usersRes.json()) as UsersResponse;
-    setUsers(data.users || []);
-    setTotalUsageBytes(data.total_used_bytes || 0);
-  };
-
-  useEffect(() => {
-    const boot = async () => {
-      try {
-        const meRes = await fetch('/api/v1/web/me', { credentials: 'same-origin' });
-        if (!meRes.ok) {
-          window.location.replace('/web/login');
-          return;
-        }
-
-        const [usersRes, servicesRes] = await Promise.all([
-          fetch('/api/v1/web/users?limit=200', { credentials: 'same-origin' }),
-          fetch('/api/v1/web/services', { credentials: 'same-origin' }),
-        ]);
-        if (usersRes.status === 401) {
-          window.location.replace('/web/login');
-          return;
-        }
-        if (!usersRes.ok) {
-          throw new Error('load failed');
-        }
-        const data = (await usersRes.json()) as UsersResponse;
-        const serviceData = servicesRes.ok ? ((await servicesRes.json()) as ServiceRecord[]) : [];
-        setUsers(Array.isArray(data.users) ? data.users : []);
-        setTotalUsageBytes(Number(data.total_used_bytes || 0));
-        setServices(Array.isArray(serviceData) ? serviceData : []);
-      } catch {
-        setError('Unable to load users right now.');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    void boot();
-  }, []);
-
-  const filteredUsers = useMemo(
-    () => users.filter((user) => user.username.toLowerCase().includes(search.trim().toLowerCase())),
-    [search, users],
-  );
-
-  const stats = useMemo(() => {
-    const disabled = users.filter((user) => user.disabled).length;
-    return { totalUsers: users.length, disabled, totalUsage: totalUsageBytes };
-  }, [users, totalUsageBytes]);
-
-  const logout = async () => {
-    try {
-      await fetch('/api/v1/web/logout', { method: 'POST', credentials: 'same-origin' });
-    } finally {
-      window.location.replace('/web/login');
-    }
-  };
-
-  const createUser = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setError('');
-    if (!createUsername.trim()) {
-      setError('Username is required.');
-      return;
-    }
-
-    const limitGbNumber = Number(createLimitGb || '0');
-    const durationDaysNumber = Number(createDurationDays || '0');
-    if (!Number.isFinite(limitGbNumber) || limitGbNumber < 0) {
-      setError('Traffic limit must be a non-negative number.');
-      return;
-    }
-    if (!Number.isFinite(durationDaysNumber) || durationDaysNumber < 0) {
-      setError('Duration days must be a non-negative number.');
-      return;
-    }
-
-    setCreatingUser(true);
-    try {
-      const res = await fetch('/api/v1/web/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({
-          username: createUsername.trim(),
-          limit_bytes: Math.round(limitGbNumber * 1024 * 1024 * 1024),
-          duration_days: Math.round(durationDaysNumber),
-          service_id: createServiceId ? Number(createServiceId) : null,
-        }),
-      });
-      if (res.status === 401) {
-        window.location.replace('/web/login');
-        return;
-      }
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(payload.detail || 'Could not create user.');
-        return;
-      }
-      setCreateUsername('');
-      setCreateLimitGb('');
-      setCreateDurationDays('');
-      setCreateServiceId('');
-      setShowCreateUserModal(false);
-      await reloadUsers();
-    } catch {
-      setError('Could not create user. Please try again.');
-    } finally {
-      setCreatingUser(false);
-    }
-  };
-
-  const openManage = (user: UserRecord) => {
-    setSelectedUser(user);
-    setFormLimit('');
-    setFormRenewDays('');
-    setFormServiceId(user.service_id ? String(user.service_id) : '');
-    setSubInfo(null);
-    setError('');
-  };
-
-  const closeManage = () => {
-    setSelectedUser(null);
-    setSubInfo(null);
-    setBusyUser('');
-  };
-
-  const applyAction = async (payload: Record<string, unknown>) => {
-    if (!selectedUser) return;
-    setBusyUser(selectedUser.username);
-    setError('');
-    try {
-      const res = await fetch(`/api/v1/web/users/${encodeURIComponent(selectedUser.username)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error('update failed');
-      const updated = (await res.json()) as UserRecord;
-      setUsers((prev) => prev.map((u) => (u.username === updated.username ? updated : u)));
-      setSelectedUser(updated);
-    } catch {
-      setError('Could not update user. Please try again.');
-    } finally {
-      setBusyUser('');
-    }
-  };
-
-  const loadQr = async () => {
-    if (!selectedUser) return;
-    setBusyUser(selectedUser.username);
-    setError('');
-    try {
-      const res = await fetch(`/api/v1/web/users/${encodeURIComponent(selectedUser.username)}/subscription`, {
-        credentials: 'same-origin',
-      });
-      if (!res.ok) throw new Error('qr failed');
-      setSubInfo((await res.json()) as SubscriptionResponse);
-    } catch {
-      setError('Could not load QR code for this user.');
-    } finally {
-      setBusyUser('');
-    }
-  };
-
-  return (
-    <main className="min-h-screen bg-gradient-to-br from-white via-slate-100 to-slate-200 p-4 dark:from-slate-950 dark:via-slate-900 dark:to-black">
-      <section className={`mx-auto max-w-6xl ${cardClass}`}>
-        <div className="flex gap-4">
-          <aside className={`fixed inset-y-0 left-0 z-40 w-64 border-r border-slate-200 bg-white/95 p-4 shadow-xl transition-transform duration-200 dark:border-slate-700 dark:bg-slate-900/95 md:static md:translate-x-0 md:rounded-xl md:shadow-none ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-            <div className="mb-5 flex items-center justify-between md:justify-start">
-              <p className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">Navigation</p>
-              <button type="button" className="md:hidden rounded-lg border border-slate-300 px-2 py-1 text-slate-700 dark:border-slate-600 dark:text-slate-100" onClick={() => setSidebarOpen(false)}>✕</button>
-            </div>
-            <nav className="space-y-2">
-              <a href="#" className="block rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white dark:bg-slate-100 dark:text-slate-900">Users</a>
-              <span className="block rounded-lg border border-dashed border-slate-300 px-3 py-2 text-sm text-slate-500 dark:border-slate-600 dark:text-slate-300">Add future section</span>
-            </nav>
-          </aside>
-          {sidebarOpen ? <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={() => setSidebarOpen(false)} /> : null}
-
-          <div className="w-full">
-        <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <button type="button" onClick={() => setSidebarOpen((prev) => !prev)} className="mb-3 inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 md:hidden">
-              <span className="space-y-1">
-                <span className="block h-0.5 w-4 bg-current" />
-                <span className="block h-0.5 w-4 bg-current" />
-                <span className="block h-0.5 w-4 bg-current" />
-              </span>
-              Menu
-            </button>
-            <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-semibold text-slate-800 dark:bg-slate-700 dark:text-slate-100">Valhalla Dashboard</span>
-            <h1 className="mt-3 text-3xl font-bold text-slate-900 dark:text-white">Users</h1>
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Monitor quota usage and account status in one place.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={toggleTheme} className={secondaryButtonClass}>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</button>
-            <button type="button" onClick={logout} className={secondaryButtonClass}>Logout</button>
-          </div>
-        </header>
-
-        <section className="grid gap-3 md:grid-cols-3">
-          <article className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-300">Total users</p>
-            <p className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{numberFormatter.format(stats.totalUsers)}</p>
-          </article>
-          <article className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-300">Disabled users</p>
-            <p className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{numberFormatter.format(stats.disabled)}</p>
-          </article>
-          <article className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-300">Total usage</p>
-            <p className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{formatBytes(stats.totalUsage)}</p>
-          </article>
-        </section>
-
-        <div className="mt-5 flex flex-col gap-3 sm:flex-row">
-          <input
-            className={inputClass}
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search by username"
-            aria-label="Search by username"
-          />
-          <button type="button" className={primaryButtonClass} onClick={() => setShowCreateUserModal(true)}>Add user</button>
+          <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Valhalla Admin</h1>
+          <p className="mt-2 text-sm text-slate-500">Sign in to manage your aggregator console.</p>
         </div>
 
-        {error ? <p className="mt-3 text-sm font-medium text-rose-500">{error}</p> : null}
+        <form onSubmit={submit} className="space-y-5">
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Username</label>
+            <input required className={inputClass} value={username} onChange={e => setUsername(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Password</label>
+            <input required type="password" className={inputClass} value={password} onChange={e => setPassword(e.target.value)} />
+          </div>
+          <button disabled={busy} type="submit" className={btnPrimary + " w-full py-3 text-base shadow-lg"}>
+            {busy ? 'Signing in...' : 'Sign In'}
+          </button>
+          {error && <p className="text-center text-sm font-medium text-rose-500">{error}</p>}
+        </form>
 
-        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-          <table className="min-w-[760px] w-full text-left text-sm">
-            <thead className="bg-slate-50 text-slate-600 dark:bg-slate-900 dark:text-slate-300">
-              <tr>
-                <th className="px-4 py-3 font-semibold">Username</th><th className="px-4 py-3 font-semibold">Plan limit</th><th className="px-4 py-3 font-semibold">Used</th><th className="px-4 py-3 font-semibold">Expires at</th><th className="px-4 py-3 font-semibold">Status</th><th className="px-4 py-3 font-semibold">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td className="px-4 py-6 text-slate-500 dark:text-slate-300" colSpan={6}>Loading users…</td></tr>
-              ) : filteredUsers.length === 0 ? (
-                <tr><td className="px-4 py-6 text-slate-500 dark:text-slate-300" colSpan={6}>No users found.</td></tr>
-              ) : (
-                filteredUsers.map((user) => (
-                  <tr key={user.username} className="border-t border-slate-200 dark:border-slate-700">
-                    <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-100">{user.username}</td>
-                    <td className="px-4 py-3 text-slate-700 dark:text-slate-200">{formatBytes(user.plan_limit_bytes)}</td>
-                    <td className="px-4 py-3 text-slate-700 dark:text-slate-200">{formatBytes(user.used_bytes)}</td>
-                    <td className="px-4 py-3 text-slate-700 dark:text-slate-200">{parseDate(user.expire_at)}</td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${user.disabled ? 'border-rose-300 bg-rose-100 text-rose-700 dark:border-rose-800 dark:bg-rose-900/40 dark:text-rose-200' : 'border-emerald-300 bg-emerald-100 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'}`}>
-                        {user.disabled ? 'Disabled' : 'Active'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3"><button type="button" className={secondaryButtonClass} onClick={() => openManage(user)}>Manage</button></td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+        <div className="mt-8 flex justify-center">
+           <button onClick={toggleTheme} className="text-xs text-slate-400 hover:text-slate-600">
+             {theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+           </button>
         </div>
-
-        {showCreateUserModal ? (
-          <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/60 p-4" role="presentation" onClick={() => setShowCreateUserModal(false)}>
-            <section className={`w-full max-w-3xl ${cardClass}`} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-              <div className="mb-4 flex items-center justify-between gap-2">
-                <h3 className="text-xl font-bold text-slate-900 dark:text-white">Add user</h3>
-                <button type="button" className={secondaryButtonClass} onClick={() => setShowCreateUserModal(false)}>Close</button>
-              </div>
-              <form className="grid gap-3 md:grid-cols-2" onSubmit={createUser}>
-                <input className={inputClass} value={createUsername} onChange={(event) => setCreateUsername(event.target.value)} placeholder="Username" aria-label="Create username" required />
-                <input className={inputClass} value={createLimitGb} onChange={(event) => setCreateLimitGb(event.target.value)} placeholder="Limit (GB)" aria-label="Create traffic limit in GB" />
-                <input className={inputClass} value={createDurationDays} onChange={(event) => setCreateDurationDays(event.target.value)} placeholder="Duration (days)" aria-label="Create duration days" />
-                <select className={inputClass} value={createServiceId} onChange={(event) => setCreateServiceId(event.target.value)} aria-label="Create service">
-                  <option value="">No service</option>
-                  {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
-                </select>
-                <button type="submit" disabled={creatingUser} className={`${primaryButtonClass} md:col-span-2`}>{creatingUser ? 'Creating…' : 'Create user'}</button>
-              </form>
-            </section>
-          </div>
-        ) : null}
-
-        {selectedUser ? (
-          <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/60 p-4" role="presentation" onClick={closeManage}>
-            <section className={`w-full max-w-4xl ${cardClass}`} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-              <div className="mb-4 flex items-center justify-between gap-2">
-                <h3 className="text-xl font-bold text-slate-900 dark:text-white">Manage @{selectedUser.username}</h3>
-                <button type="button" className={secondaryButtonClass} onClick={closeManage}>Close</button>
-              </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                  New traffic limit (GB)
-                  <input className={inputClass} value={formLimit} onChange={(e) => setFormLimit(e.target.value)} placeholder="e.g. 10" />
-                  <button type="button" className={primaryButtonClass} disabled={busyUser === selectedUser.username || !formLimit.trim() || !canSetLimit} onClick={() => applyAction({ limit_bytes: Math.round(parsedLimitGb * 1024 * 1024 * 1024) })}>Set limit</button>
-                </label>
-                <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                  Renew days
-                  <input className={inputClass} value={formRenewDays} onChange={(e) => setFormRenewDays(e.target.value)} placeholder="e.g. 30" />
-                  <button type="button" className={primaryButtonClass} disabled={busyUser === selectedUser.username || !formRenewDays.trim()} onClick={() => applyAction({ renew_days: Number(formRenewDays) })}>Renew</button>
-                </label>
-                <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                  Assign service
-                  <select className={inputClass} value={formServiceId} onChange={(e) => setFormServiceId(e.target.value)}>
-                    <option value="">Select service</option>
-                    {services.map((service) => <option key={service.id} value={service.id}>{service.name} (#{service.id})</option>)}
-                  </select>
-                  <button type="button" className={primaryButtonClass} disabled={busyUser === selectedUser.username || !formServiceId} onClick={() => applyAction({ service_id: Number(formServiceId) })}>Assign service</button>
-                </label>
-                <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                  Reset usage
-                  <p className="text-xs text-slate-500 dark:text-slate-300">Sets used traffic to zero for this user.</p>
-                  <button type="button" className={primaryButtonClass} disabled={busyUser === selectedUser.username} onClick={() => applyAction({ reset_used: true })}>Reset usage</button>
-                </label>
-              </div>
-              <div className="mt-6 space-y-3">
-                <button type="button" className={primaryButtonClass} disabled={busyUser === selectedUser.username} onClick={loadQr}>Show QR code</button>
-                {subInfo ? (
-                  <div className="grid gap-3 md:grid-cols-2">
-                    {subInfo.urls.map((url, index) => (
-                      <div key={url} className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
-                        <p className="mb-2 break-all text-xs text-slate-500 dark:text-slate-300">{url}</p>
-                        <img src={subInfo.qr_data_uris[index]} alt={`Subscription QR ${index + 1} for ${selectedUser.username}`} className="h-44 w-44 rounded-lg bg-white p-2" />
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </section>
-          </div>
-        ) : null}
-          </div>
-        </div>
-      </section>
+      </div>
     </main>
   );
 }
 
 function App() {
-  const page = document.body.dataset.page as PageMode;
-  if (page === 'users') return <UsersPage />;
-  return <LoginPage />;
+  const [path, setPath] = useState(window.location.pathname);
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const { theme, toggleTheme } = useTheme();
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const res = await fetch('/api/v1/web/me', { credentials: 'same-origin' });
+        setIsLoggedIn(res.ok);
+        if (!res.ok && !window.location.pathname.includes('/login')) {
+          window.location.replace('/web/login');
+        }
+      } catch {
+        setIsLoggedIn(false);
+      }
+    };
+    checkAuth();
+  }, []);
+
+  const navigate = (newPath: string) => {
+    window.history.pushState({}, '', newPath);
+    setPath(newPath);
+  };
+
+  const handleLogout = async () => {
+    await fetch('/api/v1/web/logout', { method: 'POST', credentials: 'same-origin' });
+    window.location.replace('/web/login');
+  };
+
+  if (isLoggedIn === null) return <div className="flex h-screen items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-brand-500 border-t-transparent" /></div>;
+  if (!isLoggedIn) return <LoginPage onLogin={() => setIsLoggedIn(true)} />;
+
+  const renderContent = () => {
+    switch (path) {
+      case '/web/users': return <UsersPage />;
+      case '/web/home': return <ComingSoon title="Dashboard Home" />;
+      case '/web/services': return <ComingSoon title="Services Management" />;
+      case '/web/nodes': return <ComingSoon title="Nodes Monitoring" />;
+      case '/web/hosts': return <ComingSoon title="Hosts Configuration" />;
+      case '/web/admins': return <ComingSoon title="Admin Accounts" />;
+      case '/web/settings': return <ComingSoon title="System Settings" />;
+      default: return <UsersPage />;
+    }
+  };
+
+  return (
+    <div className="flex h-screen bg-slate-50 transition-colors dark:bg-slate-950">
+      <Sidebar
+        collapsed={sidebarCollapsed}
+        mobileOpen={mobileSidebarOpen}
+        setMobileOpen={setMobileSidebarOpen}
+        currentPath={path}
+        onNavigate={navigate}
+      />
+
+      <div className={`flex flex-1 flex-col overflow-hidden transition-all duration-300 ${sidebarCollapsed ? 'md:pl-16' : 'md:pl-64'}`}>
+        <TopBar
+          onToggleSidebar={() => {
+            if (window.innerWidth < 768) setMobileSidebarOpen(true);
+            else setSidebarCollapsed(!sidebarCollapsed);
+          }}
+          onToggleTheme={toggleTheme}
+          theme={theme}
+          onLogout={handleLogout}
+        />
+
+        <main className="flex-1 overflow-hidden">
+          {renderContent()}
+        </main>
+      </div>
+    </div>
+  );
 }
 
 const rootNode = document.getElementById('root');
