@@ -797,7 +797,6 @@ function HomePage({ role }: { role: 'web_admin' | 'web_agent' }) {
   const [panelUsage, setPanelUsage] = useState<PanelUsageRecord[]>([]);
   const [totalUsage, setTotalUsage] = useState(0);
   const [rangeDays, setRangeDays] = useState(1);
-  const [homeLoading, setHomeLoading] = useState(false);
   const [homeUsage, setHomeUsage] = useState<HomeUsageResponse | null>(null);
 
   const fetchPanelUsage = useCallback(async () => {
@@ -815,16 +814,11 @@ function HomePage({ role }: { role: 'web_admin' | 'web_agent' }) {
   }, []);
 
   const fetchHomeUsage = useCallback(async (days: number) => {
-    setHomeLoading(true);
-    try {
-      const res = await fetch(`/api/v1/web/home-usage?days=${days}`, { credentials: 'same-origin' });
-      if (res.status === 401) { window.location.replace('/web/login'); return; }
-      if (!res.ok) return;
-      const data = await res.json() as HomeUsageResponse;
-      setHomeUsage(data);
-    } finally {
-      setHomeLoading(false);
-    }
+    const res = await fetch(`/api/v1/web/home-usage?days=${days}`, { credentials: 'same-origin' });
+    if (res.status === 401) { window.location.replace('/web/login'); return; }
+    if (!res.ok) return;
+    const data = await res.json() as HomeUsageResponse;
+    setHomeUsage(data);
   }, []);
 
   useEffect(() => {
@@ -835,7 +829,13 @@ function HomePage({ role }: { role: 'web_admin' | 'web_agent' }) {
     fetchHomeUsage(rangeDays);
   }, [fetchHomeUsage, rangeDays]);
 
-  const maxPoint = Math.max(1, ...(homeUsage?.data_points || []).map((p) => p.used_bytes || 0));
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      fetchHomeUsage(rangeDays);
+    }, 25000);
+    return () => window.clearInterval(intervalId);
+  }, [fetchHomeUsage, rangeDays]);
+
   const userPercent = homeUsage?.user_limit ? Math.min(100, Math.round((homeUsage.users_count / homeUsage.user_limit) * 100)) : 0;
   const trafficPercent = homeUsage?.traffic_limit_bytes ? Math.min(100, Math.round((homeUsage.traffic_used_bytes / homeUsage.traffic_limit_bytes) * 100)) : 0;
   const isAgent = role === 'web_agent';
@@ -850,25 +850,30 @@ function HomePage({ role }: { role: 'web_admin' | 'web_agent' }) {
         </p>
       </div>
 
-      <div className="flex items-center gap-2 flex-wrap">
-        {[1, 3, 7, 30].map((d) => (
-          <button
-            key={d}
-            type="button"
-            onClick={() => setRangeDays(d)}
-            className={`${btnSecondary} ${rangeDays === d ? '!bg-brand-600 !text-white !border-brand-600' : ''}`}
-          >
-            Usage last {d === 1 ? '1 day' : `${d} days`}
-          </button>
-        ))}
-      </div>
-
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <InsightCard
-          label={`Usage last ${rangeDays} ${rangeDays === 1 ? 'day' : 'days'}`}
-          value={formatBytes(homeUsage?.period_used_bytes || 0)}
-          icon="fa-solid fa-chart-column"
-        />
+        <div className={cardClass + ' p-5'}>
+          <div className="mb-2 flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Usage</p>
+              <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{formatBytes(homeUsage?.period_used_bytes || 0)}</p>
+            </div>
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              <Icon name="fa-solid fa-chart-column" />
+            </div>
+          </div>
+          <label className="text-xs text-slate-500 dark:text-slate-400">
+            Usage range
+            <select
+              value={rangeDays}
+              onChange={(event) => setRangeDays(Number(event.target.value))}
+              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none focus:border-brand-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              {[1, 3, 7, 30].map((d) => (
+                <option key={d} value={d}>Last {d === 1 ? '1 day' : `${d} days`}</option>
+              ))}
+            </select>
+          </label>
+        </div>
         <InsightCard
           label="Lifetime Panel Usage"
           value={formatBytes(totalUsage)}
@@ -902,45 +907,26 @@ function HomePage({ role }: { role: 'web_admin' | 'web_agent' }) {
         )}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className={cardClass + ' p-4 lg:col-span-2'}>
-          <h3 className="font-semibold text-slate-900 dark:text-white mb-3">Usage trend</h3>
-          {homeLoading ? <p className="text-sm text-slate-500">Loading...</p> : (
-            <div className="flex items-end gap-2 h-48">
-              {(homeUsage?.data_points || []).map((point) => {
-                const h = Math.max(8, Math.round((point.used_bytes / maxPoint) * 160));
-                return (
-                  <div key={point.date} className="flex-1 min-w-0 flex flex-col items-center gap-2">
-                    <div title={`${point.date}: ${formatBytes(point.used_bytes)}`} className="w-full rounded-t bg-brand-500/80" style={{ height: `${h}px` }} />
-                    <span className="text-[10px] text-slate-500">{point.date.slice(5)}</span>
-                  </div>
-                );
-              })}
+      {showLimitsCard && (
+        <div className={cardClass + ' p-4 space-y-4'}>
+          <h3 className="font-semibold text-slate-900 dark:text-white">Limits</h3>
+          {!!homeUsage?.user_limit && (
+            <div>
+              <p className="text-xs text-slate-500 mb-1">Users ({homeUsage?.users_count || 0}/{homeUsage?.user_limit})</p>
+              <div className="h-2 rounded bg-slate-200 dark:bg-slate-700"><div className="h-full rounded bg-brand-500" style={{ width: `${userPercent}%` }} /></div>
             </div>
           )}
+          {!!homeUsage?.traffic_limit_bytes && (
+            <div>
+              <p className="text-xs text-slate-500 mb-1">Traffic ({formatBytes(homeUsage?.traffic_used_bytes || 0)}/{formatBytes(homeUsage?.traffic_limit_bytes)})</p>
+              <div className="h-2 rounded bg-slate-200 dark:bg-slate-700"><div className="h-full rounded bg-emerald-500" style={{ width: `${trafficPercent}%` }} /></div>
+            </div>
+          )}
+          {!!homeUsage?.max_user_bytes && (
+            <p className="text-xs text-slate-500">Per-user cap: {formatBytes(homeUsage.max_user_bytes)}</p>
+          )}
         </div>
-
-        {showLimitsCard && (
-          <div className={cardClass + ' p-4 space-y-4'}>
-            <h3 className="font-semibold text-slate-900 dark:text-white">Limits</h3>
-            {!!homeUsage?.user_limit && (
-              <div>
-                <p className="text-xs text-slate-500 mb-1">Users ({homeUsage?.users_count || 0}/{homeUsage?.user_limit})</p>
-                <div className="h-2 rounded bg-slate-200 dark:bg-slate-700"><div className="h-full rounded bg-brand-500" style={{ width: `${userPercent}%` }} /></div>
-              </div>
-            )}
-            {!!homeUsage?.traffic_limit_bytes && (
-              <div>
-                <p className="text-xs text-slate-500 mb-1">Traffic ({formatBytes(homeUsage?.traffic_used_bytes || 0)}/{formatBytes(homeUsage?.traffic_limit_bytes)})</p>
-                <div className="h-2 rounded bg-slate-200 dark:bg-slate-700"><div className="h-full rounded bg-emerald-500" style={{ width: `${trafficPercent}%` }} /></div>
-              </div>
-            )}
-            {!!homeUsage?.max_user_bytes && (
-              <p className="text-xs text-slate-500">Per-user cap: {formatBytes(homeUsage.max_user_bytes)}</p>
-            )}
-          </div>
-        )}
-      </div>
+      )}
 
       <PanelUsageModal
         open={showPanelUsageModal}
