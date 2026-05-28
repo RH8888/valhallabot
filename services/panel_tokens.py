@@ -124,8 +124,9 @@ def _panel_refresh_message(panel_id, panel_type: str, panel_url: str, status: st
     )
 
 
-def _authenticator_for_panel_type(panel_type: str):
+def _authenticator_for_panel_type(panel_type: str, panel_row: dict | None = None):
     panel_type = (panel_type or "").lower()
+    panel_row = panel_row or {}
     if panel_type == "marzneshin":
         from apis import marzneshin
 
@@ -141,7 +142,12 @@ def _authenticator_for_panel_type(panel_type: str):
     if panel_type == "sanaei":
         from apis import sanaei
 
-        return sanaei.get_admin_token
+        panel_version = panel_row.get("panel_api_version")
+
+        def _sanaei_auth(panel_url: str, username: str, password: str):
+            return sanaei.get_admin_token(panel_url, username, password, panel_version=panel_version)
+
+        return _sanaei_auth
     return None
 
 
@@ -225,7 +231,7 @@ def ensure_panel_access_token(panel_row: dict, *, force: bool = False, reason: s
     """
 
     panel_type = (panel_row.get("panel_type") or "").lower()
-    auth_fn = _authenticator_for_panel_type(panel_type)
+    auth_fn = _authenticator_for_panel_type(panel_type, panel_row)
     if not auth_fn:
         return panel_row
 
@@ -399,7 +405,7 @@ def refresh_panel_access_token_for_request(panel_url: str, current_token: str, p
             cur.execute(
                 """
                 SELECT id, panel_url, panel_type, access_token, admin_username,
-                       admin_password_encrypted, token_refreshed_at
+                       admin_password_encrypted, panel_api_version, token_refreshed_at
                 FROM panels
                 WHERE panel_url=%s AND panel_type=%s
                 ORDER BY id DESC
@@ -415,7 +421,7 @@ def refresh_panel_access_token_for_request(panel_url: str, current_token: str, p
                 cur.execute(
                     """
                     SELECT id, panel_url, panel_type, access_token, admin_username,
-                           admin_password_encrypted, token_refreshed_at
+                           admin_password_encrypted, panel_api_version, token_refreshed_at
                     FROM panels
                     WHERE panel_url=%s
                     ORDER BY (access_token=%s) DESC, id DESC
@@ -428,7 +434,7 @@ def refresh_panel_access_token_for_request(panel_url: str, current_token: str, p
             cur.execute(
                 """
                 SELECT id, panel_url, panel_type, access_token, admin_username,
-                       admin_password_encrypted, token_refreshed_at
+                       admin_password_encrypted, panel_api_version, token_refreshed_at
                 FROM panels
                 WHERE panel_url=%s
                 ORDER BY (access_token=%s) DESC, id DESC

@@ -283,12 +283,39 @@ def fetch_subscription_links(sub_url: str) -> List[str]:
         return []
 
 
-def get_admin_token(panel_url: str, username: str, password: str) -> Tuple[Optional[str], Optional[str]]:
+def _is_modern_version(panel_version: str | None) -> bool:
+    text = (panel_version or "").strip()
+    if not text:
+        return False
+    major_text = text.split(".", 1)[0].strip()
+    try:
+        major = int(major_text)
+    except (TypeError, ValueError):
+        return False
+    return major >= 3
+
+
+def get_admin_token(
+    panel_url: str,
+    username: str,
+    password: str,
+    *,
+    panel_version: str | None = None,
+) -> Tuple[Optional[str], Optional[str]]:
     login_url = urljoin(panel_url.rstrip('/') + '/', 'login')
     try:
         resp = SESSION.post(login_url, data={"username": username, "password": password}, timeout=15)
         if resp.status_code != 200:
             return None, f"{resp.status_code} {resp.text[:200]}"
+        if _is_modern_version(panel_version):
+            data = resp.json() if "application/json" in (resp.headers.get("content-type", "").lower()) else {}
+            token = (
+                (data or {}).get("access_token")
+                or (data or {}).get("token")
+                or ((data or {}).get("obj") or {}).get("token")
+            )
+            if token:
+                return f"api_token:{token}", None
         jar = resp.cookies.get_dict()
         cookie_name = None
         cookie_val = None
