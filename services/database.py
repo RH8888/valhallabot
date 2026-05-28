@@ -135,6 +135,7 @@ def ensure_schema() -> None:
                 access_token VARCHAR(2048) NOT NULL,
                 admin_password_encrypted TEXT NULL,
                 panel_api_version VARCHAR(8) NULL,
+                panel_api_mode VARCHAR(16) NULL,
                 token_refreshed_at DATETIME NULL,
                 template_username VARCHAR(64) NULL,
                 sub_url VARCHAR(2048) NULL,
@@ -174,7 +175,26 @@ def ensure_schema() -> None:
             pass
         try:
             cur.execute(
+                "ALTER TABLE panels ADD COLUMN panel_api_mode VARCHAR(16) NULL AFTER panel_api_version"
+            )
+        except MySQLError:
+            pass
+        try:
+            cur.execute(
                 "ALTER TABLE panels ADD COLUMN token_refreshed_at DATETIME NULL AFTER admin_password_encrypted"
+            )
+        except MySQLError:
+            pass
+        # Keep existing behavior default-safe: any missing mode should behave as legacy (<3).
+        # Only backfill sanaei rows, leaving all other panel types unchanged.
+        try:
+            cur.execute(
+                """
+                UPDATE panels
+                SET panel_api_mode = 'legacy_lt3'
+                WHERE panel_type = 'sanaei'
+                  AND (panel_api_mode IS NULL OR panel_api_mode = '')
+                """
             )
         except MySQLError:
             pass
