@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Helper functions for interacting with MHSanaei/3x-ui panel API.
-
-This implementation provides a minimal subset of the behaviour exposed by
-:mod:`marzneshin` and :mod:`marzban` so that other modules can treat the
-3x-ui panel in a similar fashion.  The 3x-ui panel differs from Marzban and
-Marzneshin in that it does not expose subscription endpoints.  As such,
-configuration links are assembled directly from inbound information
-retrieved via the API and the client's UUID.
-
-The functions favour best-effort behaviour – network failures or unexpected
-payloads are surfaced as error strings instead of raising exceptions.
-"""
+"""Helper functions for interacting with MHSanaei/3x-ui panel API."""
 
 from __future__ import annotations
 
@@ -19,70 +8,92 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import json
-import requests
-SESSION = requests.Session()
 import os
-from cachetools import TTLCache, cached
 from threading import RLock
+
+import requests
+from cachetools import TTLCache, cached
+
 from services.panel_tokens import refresh_panel_access_token_for_request
 
+SESSION = requests.Session()
 ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
-
 FETCH_CACHE_TTL = int(os.getenv("FETCH_CACHE_TTL", "300"))
 _links_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
 _links_lock = RLock()
 
 
-def get_headers(token: str) -> Dict[str, str]:
-    """Return headers (cookie based) for the given session token."""
+def _normalize_token(token: str) -> str:
+    return (token or "").strip()
+
+
+def _parse_token_auth(token: str) -> Tuple[str, str]:
+    """Return ``(mode, raw_token)`` where mode is ``legacy`` or ``modern``.
+
+    Unknown/empty markers default to legacy mode for safe backward compatibility.
+    """
+    t = _normalize_token(token)
+    if not t:
+        return "legacy", ""
+    low = t.lower()
+    if low.startswith("bearer "):
+        return "modern", t.split(" ", 1)[1].strip()
+    if low.startswith("bearer:"):
+        return "modern", t.split(":", 1)[1].strip()
+    if low.startswith("api_token:"):
+        return "modern", t.split(":", 1)[1].strip()
+    # safe fallback for unknown markers
+    return "legacy", t
+
+
+def legacy_get_headers(token: str) -> Dict[str, str]:
     return {"Cookie": token}
 
 
+def modern_get_headers(token: str) -> Dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
-def _request_with_reauth(method: str, panel_url: str, token: str, path: str, **kwargs):
+def _request_with_reauth(
+    method: str,
+    panel_url: str,
+    token: str,
+    path: str,
+    *,
+    auth_mode: str = "legacy",
+    **kwargs,
+):
     url = urljoin(panel_url.rstrip('/') + '/', path)
     extra_headers = kwargs.pop("headers", {}) or {}
-    response = SESSION.request(method, url, headers={**get_headers(token), **extra_headers}, **kwargs)
+    auth_headers = modern_get_headers(token) if auth_mode == "modern" else legacy_get_headers(token)
+    response = SESSION.request(method, url, headers={**auth_headers, **extra_headers}, **kwargs)
     if response.status_code not in (401, 403):
         return response
     new_token = refresh_panel_access_token_for_request(panel_url, token, panel_type="sanaei")
     if not new_token:
         return response
-    return SESSION.request(method, url, headers={**get_headers(new_token), **extra_headers}, **kwargs)
-
-def fetch_user_services(panel_url: str, token: str, username: str) -> Tuple[Optional[List[int]], Optional[str]]:
-    """3x-ui does not expose service identifiers; return an empty list."""
-    return [], None
+    _, new_raw = _parse_token_auth(new_token)
+    auth_headers = modern_get_headers(new_raw) if auth_mode == "modern" else legacy_get_headers(new_token)
+    return SESSION.request(method, url, headers={**auth_headers, **extra_headers}, **kwargs)
 
 
-def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dict], Optional[str]]:
-    """Create a user on the remote panel.
-
-    The 3x-ui API requires the inbound ID and the client object.  Because
-    configuration details vary widely, callers must supply the appropriate
-    payload.  This helper simply forwards the payload to the
-    ``/panel/api/inbounds/addClient`` endpoint.
-    """
-    try:
-        r = _request_with_reauth(
-            "POST", panel_url, token, 'panel/api/inbounds/addClient',
-            json=payload,
-            headers={'Content-Type': 'application/json'},
-            timeout=20,
-        )
-        if r.status_code == 200:
-            return r.json(), None
-        return None, f"{r.status_code} {r.text[:300]}"
-    except Exception as e:  # pragma: no cover - network errors
-        return None, str(e)[:200]
+def _coerce_settings(settings) -> Dict:
+    if isinstance(settings, dict):
+        return settings
+    if isinstance(settings, str):
+        try:
+            obj = json.loads(settings)
+            return obj if isinstance(obj, dict) else {}
+        except Exception:
+            return {}
+    return {}
 
 
-def _list_inbounds(panel_url: str, token: str) -> Tuple[Optional[List[Dict]], Optional[str]]:
-    """Return list of inbounds or an error message."""
+def _list_inbounds(panel_url: str, token: str, auth_mode: str) -> Tuple[Optional[List[Dict]], Optional[str]]:
     try:
         r = _request_with_reauth(
             "GET", panel_url, token, 'panel/api/inbounds/list',
+            auth_mode=auth_mode,
             headers={"accept": "application/json"},
             timeout=15,
         )
@@ -91,18 +102,13 @@ def _list_inbounds(panel_url: str, token: str) -> Tuple[Optional[List[Dict]], Op
         data = r.json() or {}
         inbounds = data.get('obj') or data.get('inbounds') or []
         return inbounds, None
-    except Exception as e:  # pragma: no cover - network errors
+    except Exception as e:
         return None, str(e)[:200]
 
 
 def _find_client(inbounds: List[Dict], username: str) -> Tuple[Optional[Dict], Optional[Dict]]:
-    """Return ``(inbound, client)`` pair for *username* if present."""
     for inbound in inbounds:
-        settings = inbound.get('settings') or '{}'
-        try:
-            settings_obj = json.loads(settings) if isinstance(settings, str) else settings
-        except Exception:
-            settings_obj = {}
+        settings_obj = _coerce_settings(inbound.get('settings') or '{}')
         clients = settings_obj.get('clients') or []
         for cl in clients:
             email = cl.get('email') or cl.get('Email') or cl.get('username')
@@ -111,9 +117,24 @@ def _find_client(inbounds: List[Dict], username: str) -> Tuple[Optional[Dict], O
     return None, None
 
 
+def fetch_user_services(panel_url: str, token: str, username: str) -> Tuple[Optional[List[int]], Optional[str]]:
+    return [], None
+
+
+def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dict], Optional[str]]:
+    mode, raw = _parse_token_auth(token)
+    try:
+        r = _request_with_reauth("POST", panel_url, raw, 'panel/api/inbounds/addClient', auth_mode=mode, json=payload, headers={'Content-Type': 'application/json'}, timeout=20)
+        if r.status_code == 200:
+            return r.json(), None
+        return None, f"{r.status_code} {r.text[:300]}"
+    except Exception as e:
+        return None, str(e)[:200]
+
+
 def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict], Optional[str]]:
-    """Fetch user details from the panel."""
-    inbounds, err = _list_inbounds(panel_url, token)
+    mode, raw = _parse_token_auth(token)
+    inbounds, err = _list_inbounds(panel_url, raw, mode)
     if err:
         return None, err
     inbound, client = _find_client(inbounds, username)
@@ -121,11 +142,7 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
         return None, 'not found'
     uuid = client.get('id') or client.get('uuid')
     try:
-        r = SESSION.get(
-            urljoin(panel_url.rstrip('/') + '/', f"panel/api/inbounds/getClientTraffics/{username}"),
-            headers={"accept": "application/json", **get_headers(token)},
-            timeout=15,
-        )
+        r = _request_with_reauth("GET", panel_url, raw, f"panel/api/inbounds/getClientTraffics/{username}", auth_mode=mode, headers={"accept": "application/json"}, timeout=15)
         if r.status_code != 200:
             return None, f"{r.status_code} {r.text[:200]}"
         data = r.json() or {}
@@ -134,37 +151,19 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
         down = int(obj.get('down', 0) or 0)
         enabled = bool(obj.get('enable', True))
         used = up + down
-        exp = (
-            obj.get('expiryTime')
-            or obj.get('expiry_time')
-            or client.get('expiryTime')
-            or client.get('expiry_time')
-        )
-    except Exception as e:  # pragma: no cover - network errors
+        exp = obj.get('expiryTime') or obj.get('expiry_time') or client.get('expiryTime') or client.get('expiry_time')
+    except Exception as e:
         return None, str(e)[:200]
-    res = {
-        'uuid': uuid,
-        'enabled': enabled,
-        'used_traffic': used,
-        'expiryTime': exp,
-        'expiry_time': exp,
-        'protocol': inbound.get('protocol'),
-        'port': inbound.get('port'),
-        'listen': inbound.get('listen'),
-        'remark': inbound.get('remark'),
-    }
-    return res, None
+    return {
+        'uuid': uuid, 'enabled': enabled, 'used_traffic': used,
+        'expiryTime': exp, 'expiry_time': exp,
+        'protocol': inbound.get('protocol'), 'port': inbound.get('port'),
+        'listen': inbound.get('listen'), 'remark': inbound.get('remark'),
+    }, None
 
 
 @cached(cache=_links_cache, lock=_links_lock)
 def fetch_links_from_panel(panel_url: str, token: str, username: str) -> Tuple[List[str], Optional[str]]:
-    """Return list of config links for *username*.
-
-    Since the panel does not offer subscription endpoints, configuration
-    links are constructed from the inbound information and the client's
-    UUID.  Only a very small subset of link parameters is produced which is
-    sufficient for most standard deployments.
-    """
     user, err = get_user(panel_url, token, username)
     if err or not user:
         return [], err
@@ -181,121 +180,81 @@ def fetch_links_from_panel(panel_url: str, token: str, username: str) -> Tuple[L
     return [link], None
 
 
+def _toggle_user(panel_url: str, token: str, username: str, enabled: bool):
+    mode, raw = _parse_token_auth(token)
+    inbounds, err = _list_inbounds(panel_url, raw, mode)
+    if err:
+        return False, err
+    inbound, client = _find_client(inbounds, username)
+    if not client or not inbound:
+        return False, 'not found'
+    client['enable'] = enabled
+    settings_obj = _coerce_settings(inbound.get('settings') or '{}')
+    clients = settings_obj.get('clients') or []
+    for idx, cl in enumerate(clients):
+        email = cl.get('email') or cl.get('Email') or cl.get('username')
+        if email == username:
+            clients[idx] = client
+            break
+    settings_obj['clients'] = clients
+    inbound['settings'] = json.dumps(settings_obj, separators=(',', ':'))
+    r = _request_with_reauth("POST", panel_url, raw, f"panel/api/inbound/update/{inbound.get('id')}", auth_mode=mode, json=inbound, headers={'Content-Type': 'application/json'}, timeout=20)
+    return r.status_code == 200, (None if r.status_code == 200 else f"{r.status_code} {r.text[:200]}")
+
+
 def disable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
-    """Disable (enable=false) a user on the panel."""
     try:
-        inbounds, err = _list_inbounds(panel_url, token)
-        if err:
-            return False, err
-        inbound, client = _find_client(inbounds, username)
-        if not client or not inbound:
-            return False, 'not found'
-        client['enable'] = False
-        settings = inbound.get('settings') or '{}'
-        settings_obj = json.loads(settings) if isinstance(settings, str) else settings
-        clients = settings_obj.get('clients') or []
-        for idx, cl in enumerate(clients):
-            email = cl.get('email') or cl.get('Email') or cl.get('username')
-            if email == username:
-                clients[idx] = client
-                break
-        settings_obj['clients'] = clients
-        inbound['settings'] = json.dumps(settings_obj, separators=(',', ':'))
-        r = SESSION.post(
-            urljoin(panel_url.rstrip('/') + '/', f"panel/api/inbound/update/{inbound.get('id')}")
-            ,json=inbound,
-            headers={**get_headers(token), 'Content-Type': 'application/json'},
-            timeout=20,
-        )
-        return r.status_code == 200, (None if r.status_code == 200 else f"{r.status_code} {r.text[:200]}")
-    except Exception as e:  # pragma: no cover - network errors
+        return _toggle_user(panel_url, token, username, False)
+    except Exception as e:
         return False, str(e)[:200]
 
 
 def enable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
-    """Enable (enable=true) a user on the panel."""
     try:
-        inbounds, err = _list_inbounds(panel_url, token)
-        if err:
-            return False, err
-        inbound, client = _find_client(inbounds, username)
-        if not client or not inbound:
-            return False, 'not found'
-        client['enable'] = True
-        settings = inbound.get('settings') or '{}'
-        settings_obj = json.loads(settings) if isinstance(settings, str) else settings
-        clients = settings_obj.get('clients') or []
-        for idx, cl in enumerate(clients):
-            email = cl.get('email') or cl.get('Email') or cl.get('username')
-            if email == username:
-                clients[idx] = client
-                break
-        settings_obj['clients'] = clients
-        inbound['settings'] = json.dumps(settings_obj, separators=(',', ':'))
-        r = SESSION.post(
-            urljoin(panel_url.rstrip('/') + '/', f"panel/api/inbound/update/{inbound.get('id')}")
-            ,json=inbound,
-            headers={**get_headers(token), 'Content-Type': 'application/json'},
-            timeout=20,
-        )
-        return r.status_code == 200, (None if r.status_code == 200 else f"{r.status_code} {r.text[:200]}")
-    except Exception as e:  # pragma: no cover - network errors
+        return _toggle_user(panel_url, token, username, True)
+    except Exception as e:
         return False, str(e)[:200]
 
 
 def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
-    """Delete a user (client) from the panel."""
+    mode, raw = _parse_token_auth(token)
     try:
-        inbounds, err = _list_inbounds(panel_url, token)
+        inbounds, err = _list_inbounds(panel_url, raw, mode)
         if err:
             return False, err
         inbound, client = _find_client(inbounds, username)
         if not client or not inbound:
             return False, 'not found'
         uuid = client.get('id') or client.get('uuid')
-        url = urljoin(
-            panel_url.rstrip('/') + '/',
-            f"panel/api/inbounds/{inbound.get('id')}/delClient/{uuid}",
-        )
-        r = SESSION.post(url, headers=get_headers(token), timeout=20)
+        r = _request_with_reauth("POST", panel_url, raw, f"panel/api/inbounds/{inbound.get('id')}/delClient/{uuid}", auth_mode=mode, timeout=20)
         if r.status_code == 200:
             return True, None
         return False, f"{r.status_code} {r.text[:200]}"
-    except Exception as e:  # pragma: no cover - network errors
+    except Exception as e:
         return False, str(e)[:200]
 
 
 def reset_remote_user_usage(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
-    """Reset traffic statistics for *username* on the panel."""
+    mode, raw = _parse_token_auth(token)
     try:
-        inbounds, err = _list_inbounds(panel_url, token)
+        inbounds, err = _list_inbounds(panel_url, raw, mode)
         if err:
             return False, err
         inbound, client = _find_client(inbounds, username)
         if not inbound or not client:
             return False, 'not found'
-        url = urljoin(
-            panel_url.rstrip('/') + '/',
-            f"panel/api/inbounds/{inbound.get('id')}/resetClientTraffic/{username}",
-        )
-        r = SESSION.post(url, headers=get_headers(token), timeout=20)
+        r = _request_with_reauth("POST", panel_url, raw, f"panel/api/inbounds/{inbound.get('id')}/resetClientTraffic/{username}", auth_mode=mode, timeout=20)
         if r.status_code == 200:
             return True, None
         return False, f"{r.status_code} {r.text[:200]}"
-    except Exception as e:  # pragma: no cover - network errors
+    except Exception as e:
         return False, str(e)[:200]
 
 
-def update_remote_user(
-    panel_url: str,
-    token: str,
-    username: str,
-    data_limit: Optional[int] = None,
-    expire: Optional[int] = None,
-) -> Tuple[bool, Optional[str]]:
-    """Update quota or expiry for *username* on the panel."""
+def update_remote_user(panel_url: str, token: str, username: str, data_limit: Optional[int] = None, expire: Optional[int] = None) -> Tuple[bool, Optional[str]]:
+    mode, raw = _parse_token_auth(token)
     try:
-        inbounds, err = _list_inbounds(panel_url, token)
+        inbounds, err = _list_inbounds(panel_url, raw, mode)
         if err:
             return False, err
         inbound, client = _find_client(inbounds, username)
@@ -305,58 +264,34 @@ def update_remote_user(
             client['totalGB'] = int(data_limit)
         if expire is not None:
             client['expiryTime'] = int(expire) * 1000
-        payload = {
-            'id': inbound.get('id'),
-            'settings': json.dumps({'clients': [client]}, separators=(',', ':')),
-        }
-        r = SESSION.post(
-            urljoin(panel_url.rstrip('/') + '/', f"panel/api/inbounds/updateClient/{client.get('id')}")
-            ,json=payload,
-            headers={**get_headers(token), 'Content-Type': 'application/json'},
-            timeout=20,
-        )
+        payload = {'id': inbound.get('id'), 'settings': json.dumps({'clients': [client]}, separators=(',', ':'))}
+        r = _request_with_reauth("POST", panel_url, raw, f"panel/api/inbounds/updateClient/{client.get('id')}", auth_mode=mode, json=payload, headers={'Content-Type': 'application/json'}, timeout=20)
         if r.status_code == 200:
             return True, None
         return False, f"{r.status_code} {r.text[:200]}"
-    except Exception as e:  # pragma: no cover - network errors
+    except Exception as e:
         return False, str(e)[:200]
 
 
 def fetch_subscription_links(sub_url: str) -> List[str]:
-    """Return links from a subscription URL if provided.
-
-    3x-ui does not natively support subscription URLs, but some operators may
-    expose one via custom means.  This function performs a simple GET and
-    returns any plain-text links.
-    """
     try:
         r = SESSION.get(sub_url, headers={"accept": "text/plain"}, timeout=20)
         if r.status_code != 200:
             return []
-        return [
-            ln.strip()
-            for ln in (r.text or '').splitlines()
-            if ln.strip() and ln.strip().lower().startswith(ALLOWED_SCHEMES)
-        ]
-    except Exception:  # pragma: no cover - network errors
+        return [ln.strip() for ln in (r.text or '').splitlines() if ln.strip() and ln.strip().lower().startswith(ALLOWED_SCHEMES)]
+    except Exception:
         return []
 
 
 def get_admin_token(panel_url: str, username: str, password: str) -> Tuple[Optional[str], Optional[str]]:
-    """Authenticate against the panel and return a session token."""
     login_url = urljoin(panel_url.rstrip('/') + '/', 'login')
     try:
-        resp = SESSION.post(
-            login_url,
-            data={"username": username, "password": password},
-            timeout=15,
-        )
+        resp = SESSION.post(login_url, data={"username": username, "password": password}, timeout=15)
         if resp.status_code != 200:
             return None, f"{resp.status_code} {resp.text[:200]}"
         jar = resp.cookies.get_dict()
         cookie_name = None
         cookie_val = None
-        # Prefer known cookie names but fall back to any provided cookie.
         if '3x-ui' in jar:
             cookie_name, cookie_val = '3x-ui', jar['3x-ui']
         elif 'session' in jar:
@@ -366,5 +301,5 @@ def get_admin_token(panel_url: str, username: str, password: str) -> Tuple[Optio
         if not cookie_name or not cookie_val:
             return None, 'no session cookie'
         return f"{cookie_name}={cookie_val}", None
-    except Exception as e:  # pragma: no cover - network errors
+    except Exception as e:
         return None, str(e)[:200]
