@@ -143,7 +143,7 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
 
 # ---------- states ----------
 (
-    ASK_PANEL_NAME, ASK_PANEL_TYPE, ASK_PANEL_URL, ASK_PANEL_USER, ASK_PANEL_PASS,
+    ASK_PANEL_NAME, ASK_PANEL_TYPE, ASK_PANEL_SANAEI_VERSION, ASK_PANEL_URL, ASK_PANEL_USER, ASK_PANEL_PASS,
     ASK_NEWUSER_NAME, ASK_PRESET_CHOICE, ASK_LIMIT_GB, ASK_DURATION,
     ASK_SEARCH_USER, ASK_PANEL_TEMPLATE,
     ASK_EDIT_LIMIT, ASK_RENEW_DAYS,
@@ -176,7 +176,7 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
     ASK_NORMAL_SYNC_INTERVAL,
     ASK_WEBUI_USERNAME,
     ASK_WEBUI_PASSWORD,
-) = range(42)
+) = range(43)
 
 # ---------- helpers ----------
 UNIT = 1024
@@ -2511,6 +2511,8 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         lines.append(f"🏷️ Append ratio to config name: <b>{'ON' if append_ratio_enabled else 'OFF'}</b>")
     if supports_api_key:
         lines.append(f"🔐 API Key: <b>{api_key_state}</b>")
+    if is_sanaei:
+        lines.append(f"🧭 Sanaei API mode: <b>{p.get('panel_api_version') or '-'}</b>")
     if not is_sanaei:
         lines.append(f"🔗 Sub URL: <code>{p.get('sub_url') or '-'}</code>")
     lines += [
@@ -3075,6 +3077,38 @@ async def got_panel_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ASK_PANEL_TYPE
     context.user_data["panel_type"] = t
+    if t == "sanaei":
+        await update.message.reply_text(
+            "نسخه API سانایی را مشخص کن: <3 یا >3 (مثال: lt3 / gt3 / 3+)",
+            reply_markup=_back_kb("servers_panels"),
+        )
+        return ASK_PANEL_SANAEI_VERSION
+
+    context.user_data["panel_api_version"] = None
+    await update.message.reply_text("🌐 URL پنل (مثال https://panel.example.com):", reply_markup=_back_kb("servers_panels"))
+    return ASK_PANEL_URL
+
+async def got_panel_sanaei_version(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+
+    raw = (update.message.text or "").strip().lower().replace(" ", "")
+    aliases = {
+        "<3": "<3",
+        "lt3": "<3",
+        "lessthan3": "<3",
+        ">3": ">3",
+        "gt3": ">3",
+        "3+": ">3",
+        "3plus": ">3",
+        "morethan3": ">3",
+    }
+    normalized = aliases.get(raw)
+    if not normalized:
+        await update.message.reply_text("❌ فقط <3 یا >3 قابل قبول است (مثال: lt3 / gt3 / 3+):")
+        return ASK_PANEL_SANAEI_VERSION
+
+    context.user_data["panel_api_version"] = normalized
     await update.message.reply_text("🌐 URL پنل (مثال https://panel.example.com):", reply_markup=_back_kb("servers_panels"))
     return ASK_PANEL_URL
 
@@ -3107,6 +3141,7 @@ async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
     panel_user = context.user_data.get("panel_user")
     panel_name = context.user_data.get("panel_name") or make_panel_name(panel_url, panel_user)
     panel_type = context.user_data.get("panel_type", "marzneshin")
+    panel_api_version = context.user_data.get("panel_api_version")
     password = (update.message.text or "").strip()
     try:
         api = get_api(panel_type)
@@ -3129,8 +3164,9 @@ async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     panel_type,
                     admin_username,
                     access_token,
-                    admin_password_encrypted
-                ) VALUES(%s,%s,%s,%s,%s,%s,%s)
+                    admin_password_encrypted,
+                    panel_api_version
+                ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     update.effective_user.id,
@@ -3140,6 +3176,7 @@ async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     panel_user,
                     tok,
                     encrypted_password,
+                    panel_api_version,
                 ),
             )
         msg = f"✅ پنل اضافه شد: {panel_name}"
@@ -3154,7 +3191,7 @@ async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.exception("add panel")
         await update.message.reply_text(f"❌ خطا: {e}", reply_markup=_back_kb("servers_panels"))
     finally:
-        for k in ("panel_name", "panel_url", "panel_user", "panel_type"):
+        for k in ("panel_name", "panel_url", "panel_user", "panel_type", "panel_api_version"):
             context.user_data.pop(k, None)
     return ConversationHandler.END
 
@@ -4131,6 +4168,7 @@ def build_app():
             # add panel (admin)
             ASK_PANEL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_name)],
             ASK_PANEL_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_type)],
+            ASK_PANEL_SANAEI_VERSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_sanaei_version)],
             ASK_PANEL_URL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_url)],
             ASK_PANEL_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_user)],
             ASK_PANEL_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_pass)],
