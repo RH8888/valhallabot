@@ -42,7 +42,7 @@ import qrcode
 
 from apis import marzneshin, marzban, rebecca, sanaei, pasarguard, guardcore
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, ConversationHandler,
     MessageHandler, ContextTypes, filters,
@@ -3114,9 +3114,14 @@ async def got_panel_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ASK_PANEL_TYPE
     context.user_data["panel_type"] = t
     if t == "sanaei":
+        sanaei_version_kb = ReplyKeyboardMarkup(
+            [["<3", ">3"], ["⬅️ Back"]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
         await update.message.reply_text(
-            "نسخه API سانایی را مشخص کن: <3 یا >3 (مثال: lt3 / gt3 / 3+)",
-            reply_markup=_back_kb("servers_panels"),
+            "نسخه API سانایی را با دکمه انتخاب کن:",
+            reply_markup=sanaei_version_kb,
         )
         return ASK_PANEL_SANAEI_VERSION
 
