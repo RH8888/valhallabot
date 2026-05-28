@@ -75,3 +75,22 @@ concurrent requests. A common starting point is allocating roughly 5–10
 connections per worker process while staying within the MySQL server's
 `max_connections` limit. The application logs an error when the pool is
 exhausted; configure your monitoring to alert on this condition.
+
+## Automatic Let's Encrypt renewal (Docker)
+
+When HTTPS is enabled (`FLASK_PORT=443` and `SSL_DOMAIN` is set), the Compose stack
+includes a `certbot-renew` service that:
+
+- stores certificates under `./certs` on the host,
+- checks renewal every 12 hours by default,
+- renews only when the certificate is near expiration,
+- restarts `valhalla-app` after a successful renewal so Uvicorn reloads the new cert.
+
+Relevant environment variables in `.env`:
+
+- `SSL_DOMAIN` (required for HTTPS renewal)
+- `LETSENCRYPT_EMAIL` (optional but recommended)
+- `CERTBOT_RENEW_INTERVAL_SECONDS` (default `43200` = 12h)
+
+The renewal service uses Dockerized Certbot and survives app container recreation
+because certificate state is persisted on the host volume (`./certs`).
