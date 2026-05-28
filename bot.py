@@ -3200,9 +3200,19 @@ async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
     password = (update.message.text or "").strip()
     try:
         api = get_api(panel_type)
-        tok, err = api.get_admin_token(panel_url, panel_user, password)
+        auth_kwargs = {}
+        if panel_type == "sanaei":
+            auth_kwargs["panel_version"] = panel_api_version
+        tok, err = api.get_admin_token(panel_url, panel_user, password, **auth_kwargs)
         if not tok:
-            await update.message.reply_text(f"❌ لاگین ناموفق: {err}")
+            if panel_type == "sanaei":
+                await update.message.reply_text(
+                    f"❌ لاگین ناموفق: {err}\n"
+                    f"🧭 API mode انتخاب‌شده: {panel_api_version or 'نامشخص'}\n"
+                    "اگر پنل شما 3x-ui جدید است، mode را روی >3 بگذار؛ برای نسخه‌های قدیمی <3."
+                )
+            else:
+                await update.message.reply_text(f"❌ لاگین ناموفق: {err}")
             return ConversationHandler.END
         encrypted_password = None
         try:
@@ -3330,15 +3340,23 @@ async def got_edit_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE
         placeholders = ",".join(["%s"] * len(ids))
         with with_mysql_cursor() as cur:
             cur.execute(
-                f"SELECT panel_url, panel_type FROM panels WHERE id=%s AND telegram_user_id IN ({placeholders})",
+                f"SELECT panel_url, panel_type, panel_api_version FROM panels WHERE id=%s AND telegram_user_id IN ({placeholders})",
                 tuple([pid] + ids),
             )
             row = cur.fetchone()
         if not row:
             raise RuntimeError("panel not found")
         api = get_api(row.get("panel_type"))
-        tok, err = api.get_admin_token(row["panel_url"], new_user, new_pass)
+        auth_kwargs = {}
+        if row.get("panel_type") == "sanaei":
+            auth_kwargs["panel_version"] = row.get("panel_api_version")
+        tok, err = api.get_admin_token(row["panel_url"], new_user, new_pass, **auth_kwargs)
         if not tok:
+            if row.get("panel_type") == "sanaei":
+                raise RuntimeError(
+                    f"login failed: {err} | API mode={row.get('panel_api_version') or 'unknown'} "
+                    "(new 3x-ui=> >3, old=> <3)"
+                )
             raise RuntimeError(f"login failed: {err}")
         encrypted_password = None
         try:

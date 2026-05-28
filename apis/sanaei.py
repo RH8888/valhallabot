@@ -72,8 +72,8 @@ def _request_with_reauth(
     new_token = refresh_panel_access_token_for_request(panel_url, token, panel_type="sanaei")
     if not new_token:
         return response
-    _, new_raw = _parse_token_auth(new_token)
-    auth_headers = modern_get_headers(new_raw) if auth_mode == "modern" else legacy_get_headers(new_token)
+    new_mode, new_raw = _parse_token_auth(new_token)
+    auth_headers = modern_get_headers(new_raw) if new_mode == "modern" else legacy_get_headers(new_token)
     return SESSION.request(method, url, headers={**auth_headers, **extra_headers}, **kwargs)
 
 
@@ -316,6 +316,8 @@ def get_admin_token(
             )
             if token:
                 return f"api_token:{token}", None
+            body_preview = (resp.text or "")[:200]
+            return None, f"modern login selected but no access token in response (status={resp.status_code}, body={body_preview})"
         jar = resp.cookies.get_dict()
         cookie_name = None
         cookie_val = None
