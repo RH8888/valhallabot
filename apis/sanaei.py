@@ -336,7 +336,20 @@ def get_admin_token(
 ) -> Tuple[Optional[str], Optional[str]]:
     login_url = urljoin(panel_url.rstrip('/') + '/', 'login')
     try:
-        resp = SESSION.post(login_url, data={"username": username, "password": password}, timeout=15)
+        # 3x-ui modern API expects JSON payload on /login. Some older deployments
+        # still accept (or only accept) form-encoded data, so we fallback to form
+        # only when JSON login fails with auth/content related status codes.
+        payload = {"username": username, "password": password}
+        resp = SESSION.post(
+            login_url,
+            json=payload,
+            headers={"accept": "application/json"},
+            timeout=15,
+        )
+        if resp.status_code in (400, 401, 403, 415, 422):
+            legacy_resp = SESSION.post(login_url, data=payload, timeout=15)
+            if legacy_resp.status_code == 200:
+                resp = legacy_resp
         if resp.status_code != 200:
             return None, _format_http_error(resp, context="login request failed")
         if _is_modern_version(panel_version):
