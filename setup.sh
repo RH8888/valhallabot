@@ -243,6 +243,7 @@ fi
 [ -n "$(get_kv WORKERS)" ] || set_kv "WORKERS" "$((2 * $(nproc 2>/dev/null || echo 1) + 1))"
 [ -n "$(get_kv USAGE_SYNC_INTERVAL)" ] || set_kv "USAGE_SYNC_INTERVAL" "60"
 [ -n "$(get_kv IMAGE)" ] || set_kv "IMAGE" "ghcr.io/rh8888/valhallabot:latest"
+[ -n "$(get_kv CERTBOT_RENEW_INTERVAL_SECONDS)" ] || set_kv "CERTBOT_RENEW_INTERVAL_SECONDS" "43200"
 
 # ---------- ask user ----------
 echo "---- Telegram ----"
@@ -255,14 +256,22 @@ ask_required "PUBLIC_BASE_URL" "What is your public base URL (e.g. https://examp
 ask_required "FLASK_PORT" "Which port should the app listen on"
 if [ "$(get_kv FLASK_PORT)" = "443" ]; then
   ask_required "SSL_DOMAIN" "What domain should be used for HTTPS"
+  printf "Let's Encrypt email (recommended, blank = no email): "
+  IFS= read -r le_email || true
+  set_kv "LETSENCRYPT_EMAIL" "$le_email"
+
   domain="$(get_kv SSL_DOMAIN)"
   echo "Obtaining SSL certificate for $domain ..."
   mkdir -p "$APP_DIR/certs"
-  # stop anything on :80 first (best effort)
-  (have_cmd systemctl && sudo systemctl stop nginx apache2 httpd 2>/dev/null) || true
+
+  certbot_email_flag="--register-unsafely-without-email"
+  if [ -n "$le_email" ]; then
+    certbot_email_flag="--email $le_email"
+  fi
+
   $RUNTIME run --rm -p 80:80 -v "$APP_DIR/certs:/etc/letsencrypt" \
     docker.io/certbot/certbot certonly --standalone --non-interactive \
-    --agree-tos --register-unsafely-without-email -d "$domain" || true
+    --agree-tos $certbot_email_flag -d "$domain"
   set_kv "SSL_CERT_PATH" "/app/certs/live/$domain/fullchain.pem"
   set_kv "SSL_KEY_PATH" "/app/certs/live/$domain/privkey.pem"
 fi

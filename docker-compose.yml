@@ -65,6 +65,26 @@ services:
       USAGE_SYNC_INTERVAL: ${USAGE_SYNC_INTERVAL}
       SERVICE: bot
 
+
+  certbot-renew:
+    image: docker.io/certbot/certbot:latest
+    container_name: valhalla-certbot-renew
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    environment:
+      SSL_DOMAIN: ${SSL_DOMAIN}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
+      APP_CONTAINER_NAME: valhalla-app
+      CERTBOT_RENEW_INTERVAL_SECONDS: ${CERTBOT_RENEW_INTERVAL_SECONDS:-43200}
+    network_mode: host
+    volumes:
+      - ./certs:/etc/letsencrypt
+      - ./scripts/certbot-renew.sh:/usr/local/bin/certbot-renew.sh:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint: ["/usr/local/bin/certbot-renew.sh"]
+
   usage:
     build: .
     image: ${IMAGE:-ghcr.io/rh8888/valhallabot:latest}
