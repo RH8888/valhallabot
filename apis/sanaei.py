@@ -42,7 +42,8 @@ def _describe_request_exception(exc: Exception) -> str:
 
 def _format_http_error(resp, *, context: str) -> str:
     ct = (resp.headers.get("content-type") or "").lower()
-    body_preview = (resp.text or "")[:250].replace("\n", " ").strip()
+    body_preview = _response_body_preview(resp)
+    content_length = resp.headers.get("content-length")
     detail = ""
     if "application/json" in ct:
         try:
@@ -52,7 +53,24 @@ def _format_http_error(resp, *, context: str) -> str:
                 detail = f" | api_message={msg}"
         except Exception:
             pass
-    return f"{context}: status={resp.status_code}{detail} | body={body_preview}"
+    length_hint = f"content_length={content_length}" if content_length else f"content_length={len(resp.content or b'')}"
+    return f"{context}: status={resp.status_code}{detail} | {length_hint} | body={body_preview}"
+
+
+def _response_body_preview(resp, *, limit: int = 500) -> str:
+    text = (resp.text or "").replace("\n", " ").strip()
+    if text:
+        return text[:limit]
+    raw = resp.content or b""
+    if not raw:
+        return "<empty>"
+    try:
+        decoded = raw.decode(resp.encoding or "utf-8", errors="replace").replace("\n", " ").strip()
+    except Exception:
+        decoded = ""
+    if decoded:
+        return decoded[:limit]
+    return raw[: min(limit, len(raw))].hex()
 
 
 def _normalize_token(token: str) -> str:
@@ -366,7 +384,7 @@ def get_admin_token(
             if jar:
                 cookie_name, cookie_val = next(iter(jar.items()))
                 return f"{cookie_name}={cookie_val}", None
-            body_preview = (resp.text or "")[:200]
+            body_preview = _response_body_preview(resp, limit=200)
             return None, f"modern login selected but no access token in response (status={resp.status_code}, body={body_preview})"
         jar = resp.cookies.get_dict()
         cookie_name = None
