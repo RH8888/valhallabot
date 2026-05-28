@@ -358,14 +358,30 @@ def get_admin_token(
         # still accept (or only accept) form-encoded data, so we fallback to form
         # only when JSON login fails with auth/content related status codes.
         payload = {"username": username, "password": password}
+        payload_with_2fa = {"username": username, "password": password, "twoFactorCode": ""}
         resp = SESSION.post(
             login_url,
             json=payload,
             headers={"accept": "application/json"},
             timeout=15,
         )
+        if resp.status_code == 403:
+            # Some modern 3x-ui builds validate the request schema strictly and
+            # require the twoFactorCode field to exist (empty when 2FA disabled).
+            resp_2fa = SESSION.post(
+                login_url,
+                json=payload_with_2fa,
+                headers={"accept": "application/json"},
+                timeout=15,
+            )
+            if resp_2fa.status_code == 200:
+                resp = resp_2fa
         if resp.status_code in (400, 401, 403, 415, 422):
             legacy_resp = SESSION.post(login_url, data=payload, timeout=15)
+            if legacy_resp.status_code != 200 and resp.status_code == 403:
+                # keep parity with JSON fallback by trying form payload with
+                # explicit empty twoFactorCode.
+                legacy_resp = SESSION.post(login_url, data=payload_with_2fa, timeout=15)
             if legacy_resp.status_code == 200:
                 resp = legacy_resp
         if resp.status_code != 200:
