@@ -186,6 +186,20 @@ GUARDCORE_TEST_PRESET_DAYS = 1
 USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{2,19}$")
 WEBUI_USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{2,31}$")
 
+def normalize_sanaei_api_version(value: str):
+    raw = (value or "").strip().lower().replace(" ", "")
+    aliases = {
+        "<3": "<3",
+        "lt3": "<3",
+        "lessthan3": "<3",
+        ">3": ">3",
+        "gt3": ">3",
+        "3+": ">3",
+        "3plus": ">3",
+        "morethan3": ">3",
+    }
+    return aliases.get(raw)
+
 def fmt_bytes_short(n: int) -> str:
     if n <= 0:
         return "0 MB"
@@ -1899,6 +1913,23 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
         await q.edit_message_text("API Key را بفرست (برای حذف، '-'):", reply_markup=_back_kb(f"panel_sel:{pid}"))
         return ASK_PANEL_API_KEY
+    if data == "p_set_sanaei_api_version":
+        if not is_admin(uid):
+            return ConversationHandler.END
+        pid = context.user_data.get("edit_panel_id")
+        info = get_panel(uid, pid) if pid else None
+        if not info:
+            await q.edit_message_text("پنل پیدا نشد.")
+            return ConversationHandler.END
+        if (info.get("panel_type") or "").lower() != "sanaei":
+            await q.edit_message_text("این گزینه فقط برای پنل Sanaei فعال است.")
+            return ConversationHandler.END
+        context.user_data["editing_sanaei_api_version_panel_id"] = pid
+        await q.edit_message_text(
+            "نسخه API سانایی را مشخص کن: <3 یا >3 (مثال: lt3 / gt3 / 3+)",
+            reply_markup=_back_kb(f"panel_sel:{pid}"),
+        )
+        return ASK_PANEL_SANAEI_VERSION
     if data == "p_filter_cfgs":
         if not is_admin(uid): return ConversationHandler.END
         pid = context.user_data.get("edit_panel_id")
@@ -2483,7 +2514,7 @@ async def show_panel_cfgnum_selector(q, context: ContextTypes.DEFAULT_TYPE, owne
     return ConversationHandler.END
 
 # ---------- cards ----------
-async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, panel_id: int):
+async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, panel_id: int, notice: str = None):
     p = get_panel(owner_id, panel_id)
     if not p:
         await q.edit_message_text("پنل پیدا نشد.")
@@ -2499,7 +2530,10 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
     api_key_state = None
     if supports_api_key:
         api_key_state = "set" if (p.get("access_token") or "").strip() else "unset"
-    lines = [
+    lines = []
+    if notice:
+        lines.append(notice)
+    lines += [
         f"🧩 <b>{p['name']}</b>",
         f"📦 Type: <b>{p.get('panel_type', 'marzneshin')}</b>",
         f"🌐 URL: <code>{p['panel_url']}</code>",
@@ -2530,6 +2564,8 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         kb.append([InlineKeyboardButton(toggle_label, callback_data="p_toggle_ratio_name")])
     if supports_api_key:
         kb.append([InlineKeyboardButton("🧾 Set/Clear API Key", callback_data="p_set_api_key")])
+    if is_sanaei:
+        kb.append([InlineKeyboardButton("🧭 Set API Version", callback_data="p_set_sanaei_api_version")])
     if not is_sanaei:
         kb.append([InlineKeyboardButton("🔗 Set/Clear Sub URL", callback_data="p_set_sub")])
         kb.append([InlineKeyboardButton("🧷 فیلتر کانفیگ‌های پنل", callback_data="p_filter_cfgs")])
@@ -3092,21 +3128,35 @@ async def got_panel_sanaei_version(update: Update, context: ContextTypes.DEFAULT
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
 
-    raw = (update.message.text or "").strip().lower().replace(" ", "")
-    aliases = {
-        "<3": "<3",
-        "lt3": "<3",
-        "lessthan3": "<3",
-        ">3": ">3",
-        "gt3": ">3",
-        "3+": ">3",
-        "3plus": ">3",
-        "morethan3": ">3",
-    }
-    normalized = aliases.get(raw)
+    normalized = normalize_sanaei_api_version(update.message.text or "")
     if not normalized:
         await update.message.reply_text("❌ فقط <3 یا >3 قابل قبول است (مثال: lt3 / gt3 / 3+):")
         return ASK_PANEL_SANAEI_VERSION
+
+    edit_pid = context.user_data.get("editing_sanaei_api_version_panel_id")
+    if edit_pid:
+        try:
+            ids = expand_owner_ids(update.effective_user.id)
+            placeholders = ",".join(["%s"] * len(ids))
+            with with_mysql_cursor() as cur:
+                cur.execute(
+                    f"UPDATE panels SET panel_api_version=%s WHERE id=%s AND telegram_user_id IN ({placeholders})",
+                    tuple([normalized, edit_pid] + ids),
+                )
+            context.user_data.pop("editing_sanaei_api_version_panel_id", None)
+            class FakeCQ:
+                async def edit_message_text(self, *args, **kwargs):
+                    await update.message.reply_text(*args, **kwargs)
+            return await show_panel_card(
+                FakeCQ(),
+                context,
+                update.effective_user.id,
+                edit_pid,
+                notice="✅ نسخه API سانایی با موفقیت بروزرسانی شد.",
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطا: {e}", reply_markup=_back_kb("servers_panels"))
+            return ConversationHandler.END
 
     context.user_data["panel_api_version"] = normalized
     await update.message.reply_text("🌐 URL پنل (مثال https://panel.example.com):", reply_markup=_back_kb("servers_panels"))
