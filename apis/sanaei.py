@@ -12,6 +12,7 @@ import os
 from threading import RLock
 
 import requests
+from requests import exceptions as req_exc
 from cachetools import TTLCache, cached
 
 from services.panel_tokens import refresh_panel_access_token_for_request
@@ -21,6 +22,37 @@ ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
 FETCH_CACHE_TTL = int(os.getenv("FETCH_CACHE_TTL", "300"))
 _links_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
 _links_lock = RLock()
+
+
+def _describe_request_exception(exc: Exception) -> str:
+    if isinstance(exc, req_exc.ConnectTimeout):
+        return f"connection timeout: {exc}"
+    if isinstance(exc, req_exc.ReadTimeout):
+        return f"read timeout: {exc}"
+    if isinstance(exc, req_exc.ConnectionError):
+        return f"panel unreachable: {exc}"
+    if isinstance(exc, req_exc.SSLError):
+        return f"ssl error: {exc}"
+    if isinstance(exc, req_exc.TooManyRedirects):
+        return f"too many redirects: {exc}"
+    if isinstance(exc, req_exc.RequestException):
+        return f"http request error: {exc}"
+    return str(exc)
+
+
+def _format_http_error(resp, *, context: str) -> str:
+    ct = (resp.headers.get("content-type") or "").lower()
+    body_preview = (resp.text or "")[:250].replace("\n", " ").strip()
+    detail = ""
+    if "application/json" in ct:
+        try:
+            payload = resp.json() or {}
+            msg = payload.get("msg") or payload.get("message") or payload.get("detail")
+            if msg:
+                detail = f" | api_message={msg}"
+        except Exception:
+            pass
+    return f"{context}: status={resp.status_code}{detail} | body={body_preview}"
 
 
 def _normalize_token(token: str) -> str:
@@ -98,12 +130,12 @@ def _list_inbounds(panel_url: str, token: str, auth_mode: str) -> Tuple[Optional
             timeout=15,
         )
         if r.status_code != 200:
-            return None, f"{r.status_code} {r.text[:200]}"
+            return None, _format_http_error(r, context="list inbounds failed")
         data = r.json() or {}
         inbounds = data.get('obj') or data.get('inbounds') or []
         return inbounds, None
     except Exception as e:
-        return None, str(e)[:200]
+        return None, _describe_request_exception(e)[:300]
 
 
 def _find_client(inbounds: List[Dict], username: str) -> Tuple[Optional[Dict], Optional[Dict]]:
@@ -129,7 +161,7 @@ def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dic
             return r.json(), None
         return None, f"{r.status_code} {r.text[:300]}"
     except Exception as e:
-        return None, str(e)[:200]
+        return None, _describe_request_exception(e)[:300]
 
 
 def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict], Optional[str]]:
@@ -144,7 +176,7 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
     try:
         r = _request_with_reauth("GET", panel_url, raw, f"panel/api/inbounds/getClientTraffics/{username}", auth_mode=mode, headers={"accept": "application/json"}, timeout=15)
         if r.status_code != 200:
-            return None, f"{r.status_code} {r.text[:200]}"
+            return None, _format_http_error(r, context="list inbounds failed")
         data = r.json() or {}
         obj = data.get('obj') or data
         up = int(obj.get('up', 0) or 0)
@@ -153,7 +185,7 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
         used = up + down
         exp = obj.get('expiryTime') or obj.get('expiry_time') or client.get('expiryTime') or client.get('expiry_time')
     except Exception as e:
-        return None, str(e)[:200]
+        return None, _describe_request_exception(e)[:300]
     return {
         'uuid': uuid, 'enabled': enabled, 'used_traffic': used,
         'expiryTime': exp, 'expiry_time': exp,
@@ -206,14 +238,14 @@ def disable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool
     try:
         return _toggle_user(panel_url, token, username, False)
     except Exception as e:
-        return False, str(e)[:200]
+        return False, _describe_request_exception(e)[:300]
 
 
 def enable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
     try:
         return _toggle_user(panel_url, token, username, True)
     except Exception as e:
-        return False, str(e)[:200]
+        return False, _describe_request_exception(e)[:300]
 
 
 def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
@@ -231,7 +263,7 @@ def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
             return True, None
         return False, f"{r.status_code} {r.text[:200]}"
     except Exception as e:
-        return False, str(e)[:200]
+        return False, _describe_request_exception(e)[:300]
 
 
 def reset_remote_user_usage(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
@@ -248,7 +280,7 @@ def reset_remote_user_usage(panel_url: str, token: str, username: str) -> Tuple[
             return True, None
         return False, f"{r.status_code} {r.text[:200]}"
     except Exception as e:
-        return False, str(e)[:200]
+        return False, _describe_request_exception(e)[:300]
 
 
 def update_remote_user(panel_url: str, token: str, username: str, data_limit: Optional[int] = None, expire: Optional[int] = None) -> Tuple[bool, Optional[str]]:
@@ -270,7 +302,7 @@ def update_remote_user(panel_url: str, token: str, username: str, data_limit: Op
             return True, None
         return False, f"{r.status_code} {r.text[:200]}"
     except Exception as e:
-        return False, str(e)[:200]
+        return False, _describe_request_exception(e)[:300]
 
 
 def fetch_subscription_links(sub_url: str) -> List[str]:
@@ -306,7 +338,7 @@ def get_admin_token(
     try:
         resp = SESSION.post(login_url, data={"username": username, "password": password}, timeout=15)
         if resp.status_code != 200:
-            return None, f"{resp.status_code} {resp.text[:200]}"
+            return None, _format_http_error(resp, context="login request failed")
         if _is_modern_version(panel_version):
             data = resp.json() if "application/json" in (resp.headers.get("content-type", "").lower()) else {}
             token = (
@@ -316,6 +348,11 @@ def get_admin_token(
             )
             if token:
                 return f"api_token:{token}", None
+            # Some mixed deployments still issue cookie sessions even when modern mode is selected.
+            jar = resp.cookies.get_dict()
+            if jar:
+                cookie_name, cookie_val = next(iter(jar.items()))
+                return f"{cookie_name}={cookie_val}", None
             body_preview = (resp.text or "")[:200]
             return None, f"modern login selected but no access token in response (status={resp.status_code}, body={body_preview})"
         jar = resp.cookies.get_dict()
@@ -331,4 +368,4 @@ def get_admin_token(
             return None, 'no session cookie'
         return f"{cookie_name}={cookie_val}", None
     except Exception as e:
-        return None, str(e)[:200]
+        return None, _describe_request_exception(e)[:300]
