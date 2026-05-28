@@ -143,7 +143,7 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
 
 # ---------- states ----------
 (
-    ASK_PANEL_NAME, ASK_PANEL_TYPE, ASK_PANEL_SANAEI_VERSION, ASK_PANEL_URL, ASK_PANEL_USER, ASK_PANEL_PASS,
+    ASK_PANEL_NAME, ASK_PANEL_TYPE, ASK_PANEL_SANAEI_VERSION, ASK_PANEL_AUTH_MODE, ASK_PANEL_URL, ASK_PANEL_USER, ASK_PANEL_PASS,
     ASK_NEWUSER_NAME, ASK_PRESET_CHOICE, ASK_LIMIT_GB, ASK_DURATION,
     ASK_SEARCH_USER, ASK_PANEL_TEMPLATE,
     ASK_EDIT_LIMIT, ASK_RENEW_DAYS,
@@ -176,7 +176,7 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
     ASK_NORMAL_SYNC_INTERVAL,
     ASK_WEBUI_USERNAME,
     ASK_WEBUI_PASSWORD,
-) = range(43)
+) = range(44)
 
 # ---------- helpers ----------
 UNIT = 1024
@@ -3164,8 +3164,36 @@ async def got_panel_sanaei_version(update: Update, context: ContextTypes.DEFAULT
             return ConversationHandler.END
 
     context.user_data["panel_api_version"] = normalized
+    if normalized == "gt3":
+        auth_mode_kb = ReplyKeyboardMarkup(
+            [["User/Pass (Auto Rotate)", "Bearer Token"], ["⬅️ Back"]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+        await update.message.reply_text(
+            "روش احراز هویت Modern را انتخاب کن:",
+            reply_markup=auth_mode_kb,
+        )
+        return ASK_PANEL_AUTH_MODE
+
+    context.user_data["panel_auth_mode"] = "userpass"
     await update.message.reply_text("🌐 URL پنل (مثال https://panel.example.com):", reply_markup=_back_kb("servers_panels"))
     return ASK_PANEL_URL
+
+async def got_panel_auth_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    choice = (update.message.text or "").strip().lower()
+    if choice in {"user/pass (auto rotate)", "user/pass", "userpass"}:
+        context.user_data["panel_auth_mode"] = "userpass"
+        await update.message.reply_text("🌐 URL پنل (مثال https://panel.example.com):", reply_markup=_back_kb("servers_panels"))
+        return ASK_PANEL_URL
+    if choice in {"bearer token", "bearer"}:
+        context.user_data["panel_auth_mode"] = "bearer"
+        await update.message.reply_text("🌐 URL پنل (مثال https://panel.example.com):", reply_markup=_back_kb("servers_panels"))
+        return ASK_PANEL_URL
+    await update.message.reply_text("❌ یکی از گزینه‌های User/Pass یا Bearer Token را انتخاب کن.")
+    return ASK_PANEL_AUTH_MODE
 
 async def got_panel_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -3186,7 +3214,10 @@ async def got_panel_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ خالیه. دوباره بفرست:")
         return ASK_PANEL_USER
     context.user_data["panel_user"] = u
-    await update.message.reply_text("🔒 پسورد ادمین:", reply_markup=_back_kb("servers_panels"))
+    if context.user_data.get("panel_type") == "sanaei" and context.user_data.get("panel_auth_mode") == "bearer":
+        await update.message.reply_text("🔑 Bearer Token را بفرست:", reply_markup=_back_kb("servers_panels"))
+    else:
+        await update.message.reply_text("🔒 پسورد ادمین:", reply_markup=_back_kb("servers_panels"))
     return ASK_PANEL_PASS
 
 async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3197,13 +3228,30 @@ async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
     panel_name = context.user_data.get("panel_name") or make_panel_name(panel_url, panel_user)
     panel_type = context.user_data.get("panel_type", "marzneshin")
     panel_api_version = context.user_data.get("panel_api_version")
+    panel_auth_mode = context.user_data.get("panel_auth_mode", "userpass")
     password = (update.message.text or "").strip()
     try:
         api = get_api(panel_type)
-        auth_kwargs = {}
-        if panel_type == "sanaei":
-            auth_kwargs["panel_version"] = panel_api_version
-        tok, err = api.get_admin_token(panel_url, panel_user, password, **auth_kwargs)
+        if panel_type == "sanaei" and panel_auth_mode == "bearer":
+            raw_bearer = password
+            if raw_bearer.lower().startswith("bearer "):
+                raw_bearer = raw_bearer.split(" ", 1)[1].strip()
+            if not raw_bearer:
+                await update.message.reply_text("❌ Bearer token خالی است.")
+                return ConversationHandler.END
+            tok, err = (f"api_token:{raw_bearer}", None)
+            encrypted_password = None
+        else:
+            auth_kwargs = {}
+            if panel_type == "sanaei":
+                auth_kwargs["panel_version"] = panel_api_version
+            tok, err = api.get_admin_token(panel_url, panel_user, password, **auth_kwargs)
+            encrypted_password = None
+            if tok:
+                try:
+                    encrypted_password = encrypt_panel_password(password)
+                except PanelTokenEncryptionError as exc:
+                    log.warning("Failed to encrypt panel password for %s: %s", panel_url, exc)
         if not tok:
             if panel_type == "sanaei":
                 await update.message.reply_text(
@@ -3214,11 +3262,6 @@ async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text(f"❌ لاگین ناموفق: {err}")
             return ConversationHandler.END
-        encrypted_password = None
-        try:
-            encrypted_password = encrypt_panel_password(password)
-        except PanelTokenEncryptionError as exc:
-            log.warning("Failed to encrypt panel password for %s: %s", panel_url, exc)
         with with_mysql_cursor() as cur:
             cur.execute(
                 """
@@ -3256,7 +3299,7 @@ async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.exception("add panel")
         await update.message.reply_text(f"❌ خطا: {e}", reply_markup=_back_kb("servers_panels"))
     finally:
-        for k in ("panel_name", "panel_url", "panel_user", "panel_type", "panel_api_version"):
+        for k in ("panel_name", "panel_url", "panel_user", "panel_type", "panel_api_version", "panel_auth_mode"):
             context.user_data.pop(k, None)
     return ConversationHandler.END
 
@@ -4242,6 +4285,7 @@ def build_app():
             ASK_PANEL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_name)],
             ASK_PANEL_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_type)],
             ASK_PANEL_SANAEI_VERSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_sanaei_version)],
+            ASK_PANEL_AUTH_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_auth_mode)],
             ASK_PANEL_URL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_url)],
             ASK_PANEL_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_user)],
             ASK_PANEL_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_pass)],
