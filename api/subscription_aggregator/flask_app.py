@@ -29,7 +29,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from services import ensure_panel_tokens, init_mysql_pool, with_mysql_cursor
 from services.database import errorcode, mysql_errors
 from services.settings import get_setting as get_owner_setting
-from apis import sanaei, pasarguard, rebecca, guardcore
+from apis import sanaei, sanaei_modern, pasarguard, rebecca, guardcore
 from .ownership import expand_owner_ids, canonical_owner_id
 
 logging.basicConfig(
@@ -67,6 +67,11 @@ _fetch_links_cache = TTLCache(maxsize=256, ttl=FETCH_CACHE_TTL)
 _fetch_links_lock = RLock()
 
 _settings_table_missing_logged = False
+
+def get_sanaei_api(sanaei_api_version: str | None = None):
+    if (sanaei_api_version or "").lower() == "modern":
+        return sanaei_modern
+    return sanaei
 
 
 def get_setting(owner_id: int, key: str):
@@ -122,6 +127,7 @@ def list_mapped_links(owner_id, local_username):
             f"""
             SELECT lup.panel_id, lup.remote_username,
                    p.panel_url, p.access_token, p.panel_type,
+                   p.sanaei_api_version,
                    p.admin_username, p.admin_password_encrypted,
                    p.usage_multiplier, p.append_ratio_to_name
             FROM local_user_panel_links lup
@@ -146,6 +152,7 @@ def list_all_panels(owner_id):
         cur.execute(
             f"""
             SELECT id, panel_url, access_token, panel_type,
+                   sanaei_api_version,
                    admin_username, admin_password_encrypted,
                    usage_multiplier, append_ratio_to_name
             FROM panels
@@ -216,13 +223,14 @@ def send_owner_limit_notification(owner_id: int, message: str):
         log.warning("failed sending limit event notification to %s: %s", owner_id, exc)
 
 
-def disable_remote(panel_type, panel_url, token, remote_username):
+def disable_remote(panel_type, panel_url, token, remote_username, sanaei_api_version=None):
     try:
         if panel_type == "sanaei":
+            api = get_sanaei_api(sanaei_api_version)
             remotes = [r.strip() for r in remote_username.split(",") if r.strip()]
             all_ok, last_msg = True, None
             for rn in remotes:
-                ok, msg = sanaei.disable_remote_user(panel_url, token, rn)
+                ok, msg = api.disable_remote_user(panel_url, token, rn)
                 if not ok:
                     all_ok = False
                     last_msg = msg
@@ -377,15 +385,16 @@ def collect_links(mapped, local_username: str, want_html: bool):
         disabled_nums = di_map.get(l["panel_id"], set())
         links, errs, rinfo = [], [], None
         if l.get("panel_type") == "sanaei":
+            api = get_sanaei_api(l.get("sanaei_api_version"))
             remotes = [r.strip() for r in l["remote_username"].split(",") if r.strip()]
 
             def remote_worker(rn: str):
                 info = None
                 if want_html:
-                    u, uerr = sanaei.get_user(l["panel_url"], l["access_token"], rn)
+                    u, uerr = api.get_user(l["panel_url"], l["access_token"], rn)
                     if not uerr:
                         info = u
-                ls, err = sanaei.fetch_links_from_panel(l["panel_url"], l["access_token"], rn)
+                ls, err = api.fetch_links_from_panel(l["panel_url"], l["access_token"], rn)
                 if err:
                     err = f"{rn}@{l['panel_url']}: {err}"
                 return ls, err, info
@@ -637,7 +646,8 @@ def list_all_agent_links(owner_id: int):
     with with_mysql_cursor() as cur:
         cur.execute(
             f"""
-            SELECT lup.local_username, lup.remote_username, p.panel_url, p.access_token, p.panel_type
+            SELECT lup.local_username, lup.remote_username, p.panel_url, p.access_token, p.panel_type,
+                   p.sanaei_api_version
             FROM local_user_panel_links lup
             JOIN panels p ON p.id = lup.panel_id
             WHERE lup.owner_id IN ({placeholders})
@@ -934,7 +944,7 @@ def unified_links(local_username, app_key):
             agent_blocked = True
             if not pushed_a:
                 for l in list_all_agent_links(owner_id):
-                    code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
+                    code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"], l.get("sanaei_api_version"))
                     if code and code != 200:
                         log.warning("AGENT disable on %s@%s -> %s %s",
                                     l["remote_username"], l["panel_url"], code, msg)
@@ -959,10 +969,11 @@ def unified_links(local_username, app_key):
                 panels = list_all_panels(owner_id)
                 links = [{"panel_id": p["id"], "remote_username": local_username,
                           "panel_url": p["panel_url"], "access_token": p["access_token"],
-                          "panel_type": p["panel_type"]} for p in panels]
+                          "panel_type": p["panel_type"],
+                          "sanaei_api_version": p.get("sanaei_api_version")} for p in panels]
             for l in links:
                 code, msg = disable_remote(
-                    l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"]
+                    l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"], l.get("sanaei_api_version")
                 )
                 if code and code != 200:
                     log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
@@ -986,9 +997,10 @@ def unified_links(local_username, app_key):
                     panels = list_all_panels(owner_id)
                     links = [{"panel_id": p["id"], "remote_username": local_username,
                               "panel_url": p["panel_url"], "access_token": p["access_token"],
-                              "panel_type": p["panel_type"]} for p in panels]
+                              "panel_type": p["panel_type"],
+                          "sanaei_api_version": p.get("sanaei_api_version")} for p in panels]
                 for l in links:
-                    code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
+                    code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"], l.get("sanaei_api_version"))
                     if code and code != 200:
                         log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
                 mark_user_disabled(owner_id, local_username)
@@ -1011,9 +1023,10 @@ def unified_links(local_username, app_key):
                     panels = list_all_panels(owner_id)
                     links = [{"panel_id": p["id"], "remote_username": local_username,
                               "panel_url": p["panel_url"], "access_token": p["access_token"],
-                              "panel_type": p["panel_type"]} for p in panels]
+                              "panel_type": p["panel_type"],
+                          "sanaei_api_version": p.get("sanaei_api_version")} for p in panels]
                 for l in links:
-                    code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
+                    code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"], l.get("sanaei_api_version"))
                     if code and code != 200:
                         log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
                 mark_user_disabled(owner_id, local_username)
@@ -1053,6 +1066,7 @@ def unified_links(local_username, app_key):
                     "panel_url": p["panel_url"],
                     "access_token": p["access_token"],
                     "panel_type": p["panel_type"],
+                    "sanaei_api_version": p.get("sanaei_api_version"),
                 }
                 for p in panels
             ]

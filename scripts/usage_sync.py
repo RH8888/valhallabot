@@ -14,7 +14,7 @@ from services.database import mysql_errors
 from services.panel_tokens import ensure_panel_tokens
 from services.settings import get_setting as get_owner_setting
 
-from apis import marzneshin, marzban, rebecca, sanaei, pasarguard, guardcore
+from apis import marzneshin, marzban, rebecca, sanaei, sanaei_modern, pasarguard, guardcore
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | usage_sync | %(message)s",
@@ -44,9 +44,12 @@ AGENT_INTERVAL_SETTING_KEYS = {
 }
 
 
-def get_api(panel_type: str):
-    """Return API module for the given panel type."""
-    return API_MODULES.get(panel_type or "marzneshin", marzneshin)
+def get_api(panel_type: str, sanaei_api_version: str | None = None):
+    """Return API module for the given panel type and Sanaei API generation."""
+    panel_type = (panel_type or "marzneshin").lower()
+    if panel_type == "sanaei" and (sanaei_api_version or "").lower() == "modern":
+        return sanaei_modern
+    return API_MODULES.get(panel_type, marzneshin)
 
 # ---------------- existing per-link / per-user logic ----------------
 
@@ -133,6 +136,7 @@ def fetch_all_links():
                        p.panel_url,
                        p.access_token,
                        p.panel_type,
+                       p.sanaei_api_version,
                        p.usage_multiplier,
                        p.admin_username,
                        p.admin_password_encrypted,
@@ -165,10 +169,10 @@ def fetch_all_links():
             return []
         raise
 
-def fetch_used_traffic(panel_type, panel_url, bearer, remote_username):
+def fetch_used_traffic(panel_type, panel_url, bearer, remote_username, sanaei_api_version=None):
     """Return used traffic for a remote user via appropriate panel API."""
     try:
-        api = get_api(panel_type)
+        api = get_api(panel_type, sanaei_api_version)
         if panel_type == "sanaei" and "," in remote_username:
             total = 0
             for rn in [r.strip() for r in remote_username.split(",") if r.strip()]:
@@ -561,7 +565,8 @@ def send_nightly_panel_usage_report_if_due(now_utc: datetime, last_sent_local_da
 def list_links_of_local_user(owner_id, local_username):
     with with_mysql_cursor() as cur:
         cur.execute("""
-            SELECT lup.panel_id, lup.remote_username, p.panel_url, p.access_token, p.panel_type
+            SELECT lup.panel_id, lup.remote_username, p.panel_url, p.access_token, p.panel_type,
+                   p.sanaei_api_version
             FROM local_user_panel_links lup
             JOIN panels p ON p.id = lup.panel_id
             WHERE lup.owner_id=%s AND lup.local_username=%s
@@ -576,8 +581,8 @@ def mark_user_disabled(owner_id, local_username):
             WHERE owner_id=%s AND username=%s
         """, (owner_id, local_username))
 
-def disable_remote(panel_type, panel_url, token, remote_username):
-    api = get_api(panel_type)
+def disable_remote(panel_type, panel_url, token, remote_username, sanaei_api_version=None):
+    api = get_api(panel_type, sanaei_api_version)
     remotes = remote_username.split(",") if panel_type == "sanaei" else [remote_username]
     all_ok, last_msg = True, None
     for rn in remotes:
@@ -588,8 +593,8 @@ def disable_remote(panel_type, panel_url, token, remote_username):
     return (200 if all_ok else None), last_msg
 
 
-def enable_remote(panel_type, panel_url, token, remote_username):
-    api = get_api(panel_type)
+def enable_remote(panel_type, panel_url, token, remote_username, sanaei_api_version=None):
+    api = get_api(panel_type, sanaei_api_version)
     remotes = remote_username.split(",") if panel_type == "sanaei" else [remote_username]
     all_ok, last_msg = True, None
     for rn in remotes:
@@ -630,7 +635,7 @@ def try_disable_if_user_exceeded(owner_id, local_username):
         if not pushed:
             links = list_links_of_local_user(owner_id, local_username)
             for l in links:
-                code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
+                code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"], l.get("sanaei_api_version"))
                 if code and code != 200:
                     log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
                 else:
@@ -651,7 +656,7 @@ def try_enable_if_user_ok(owner_id, local_username):
     if pushed and (limit == 0 or used < limit):
         links = list_links_of_local_user(owner_id, local_username)
         for l in links:
-            code, msg = enable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
+            code, msg = enable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"], l.get("sanaei_api_version"))
             if code and code != 200:
                 log.warning("enable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
             else:
@@ -698,7 +703,7 @@ def list_agent_assigned_panels(owner_id: int):
     """پنل‌هایی که به نماینده assign شده‌اند (agent_panels)."""
     with with_mysql_cursor() as cur:
         cur.execute("""
-            SELECT p.id, p.panel_url, p.access_token, p.panel_type
+            SELECT p.id, p.panel_url, p.access_token, p.panel_type, p.sanaei_api_version
             FROM agent_panels ap
             JOIN panels p ON p.id = ap.panel_id
             WHERE ap.agent_tg_id=%s
@@ -725,7 +730,7 @@ def disable_user_on_assigned_panels(owner_id: int, username: str):
     """اگر مپ مستقیمی نبود، روی پنل‌های assign‌شده هم با همان username دیزیبل کن."""
     panels = list_agent_assigned_panels(owner_id)
     for p in panels:
-        code, msg = disable_remote(p["panel_type"], p["panel_url"], p["access_token"], username)
+        code, msg = disable_remote(p["panel_type"], p["panel_url"], p["access_token"], username, p.get("sanaei_api_version"))
         if code and code != 200:
             log.warning("disable (assigned) on %s@%s -> %s %s", username, p["panel_url"], code, msg)
         else:
@@ -735,7 +740,7 @@ def enable_user_on_assigned_panels(owner_id: int, username: str):
     """اگر مپ مستقیمی نبود، روی پنل‌های assign‌شده هم با همان username فعال کن."""
     panels = list_agent_assigned_panels(owner_id)
     for p in panels:
-        code, msg = enable_remote(p["panel_type"], p["panel_url"], p["access_token"], username)
+        code, msg = enable_remote(p["panel_type"], p["panel_url"], p["access_token"], username, p.get("sanaei_api_version"))
         if code and code != 200:
             log.warning("enable (assigned) on %s@%s -> %s %s", username, p["panel_url"], code, msg)
         else:
@@ -810,7 +815,7 @@ def try_disable_agent_if_exceeded(owner_id: int):
             # 1) disable روی مپ‌های مستقیم کاربر
             links = list_links_of_local_user(owner_id, uname)
             for l in links:
-                code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
+                code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"], l.get("sanaei_api_version"))
                 if code and code != 200:
                     log.warning("[AGENT] disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
                 else:
@@ -856,7 +861,7 @@ def try_enable_agent_if_ok(owner_id: int):
                 continue
             links = list_links_of_local_user(owner_id, uname)
             for l in links:
-                code, msg = enable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"])
+                code, msg = enable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"], l.get("sanaei_api_version"))
                 if code and code != 200:
                     log.warning("[AGENT] enable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
                 else:
@@ -902,7 +907,7 @@ def loop():
 
                 user_failed = False
                 for row in user_links:
-                    used, err = fetch_used_traffic(row["panel_type"], row["panel_url"], row["access_token"], row["remote_username"])
+                    used, err = fetch_used_traffic(row["panel_type"], row["panel_url"], row["access_token"], row["remote_username"], row.get("sanaei_api_version"))
                     if used is None:
                         log.warning("fetch_used_traffic failed for %s@%s: %s",
                                     row["remote_username"], row["panel_url"], err)
