@@ -120,9 +120,48 @@ def panel_username(panel_type: str, username: str) -> str:
     return value
 
 
+def is_modern_sanaei_panel(panel: dict | None = None, sanaei_api_version: str | None = None) -> bool:
+    """Return True when a Sanaei panel is configured for the modern client API."""
+
+    if panel is not None:
+        return (panel.get("panel_type") or "").lower() == "sanaei" and (
+            panel.get("sanaei_api_version") or ""
+        ).lower() == "modern"
+    return (sanaei_api_version or "").lower() == "modern"
+
+
+def remote_names_for_panel(panel: dict | None, remote_username: str) -> list[str]:
+    """Return remote client names to operate on for a stored panel link.
+
+    Legacy Sanaei links may store comma-separated client names because each
+    inbound receives a separate client. Modern Sanaei stores one client that is
+    natively attached to all selected inbounds, so it must be operated on once.
+    """
+
+    if not remote_username:
+        return []
+    if (panel or {}).get("panel_type") == "sanaei" and not is_modern_sanaei_panel(panel):
+        return [r.strip() for r in remote_username.split(",") if r.strip()]
+    return [remote_username]
+
+
+def _normalise_sanaei_inbound_ids(inbound_ids: int | str | list | tuple | set) -> list[int]:
+    if isinstance(inbound_ids, (list, tuple, set)):
+        values = inbound_ids
+    else:
+        values = [inbound_ids]
+    normalised: list[int] = []
+    for value in values:
+        try:
+            normalised.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return list(dict.fromkeys(normalised))
+
+
 def build_sanaei_create_payload(
     remote_name: str,
-    inbound_id: int | str,
+    inbound_id: int | str | list | tuple | set,
     limit_bytes: int = 0,
     expire_ts: int = 0,
     sanaei_api_version: str | None = None,
@@ -143,7 +182,7 @@ def build_sanaei_create_payload(
     if expire_ts > 0:
         client["expiryTime"] = expire_ts * 1000
 
-    inbound_id = int(inbound_id)
+    inbound_ids = _normalise_sanaei_inbound_ids(inbound_id)
     if (sanaei_api_version or "").lower() == "modern":
         return {
             "client": {
@@ -151,9 +190,10 @@ def build_sanaei_create_payload(
                 "tgId": 0,
                 "limitIp": 0,
             },
-            "inboundIds": [inbound_id],
+            "inboundIds": inbound_ids,
         }
 
+    inbound_id = inbound_ids[0] if inbound_ids else 0
     legacy_client = {
         "id": str(uuid.uuid4()),
         **client,
@@ -920,11 +960,7 @@ def update_limit(owner_id: int, username: str, new_limit_bytes: int):
             )
     for row in list_user_links(owner_id, username):
         api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
-        remotes = (
-            row["remote_username"].split(",")
-            if row.get("panel_type") == "sanaei"
-            else [row["remote_username"]]
-        )
+        remotes = remote_names_for_panel(row, row["remote_username"])
         for rn in remotes:
             remote_limit = guardcore_remote_limit(effective_limit, row.get("panel_type"))
             ok, err = api.update_remote_user(
@@ -986,11 +1022,7 @@ def set_user_disabled(owner_id: int, username: str, disabled: bool):
 
     for row in list_user_links(owner_id, username):
         api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
-        remotes = (
-            row["remote_username"].split(",")
-            if row.get("panel_type") == "sanaei"
-            else [row["remote_username"]]
-        )
+        remotes = remote_names_for_panel(row, row["remote_username"])
         for rn in remotes:
             if disabled:
                 ok, err = api.disable_remote_user(
@@ -1030,11 +1062,7 @@ def reset_used(owner_id: int, username: str):
         )
     for row in list_user_links(owner_id, username):
         api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
-        remotes = (
-            row["remote_username"].split(",")
-            if row.get("panel_type") == "sanaei"
-            else [row["remote_username"]]
-        )
+        remotes = remote_names_for_panel(row, row["remote_username"])
         for rn in remotes:
             ok, err = api.reset_remote_user_usage(
                 row["panel_url"], row["access_token"], rn
@@ -1083,11 +1111,7 @@ def renew_user(owner_id: int, username: str, add_days: int):
             )
     for r in list_user_links(owner_id, username):
         api = get_api(r.get("panel_type"), r.get("sanaei_api_version"))
-        remotes = (
-            r["remote_username"].split(",")
-            if r.get("panel_type") == "sanaei"
-            else [r["remote_username"]]
-        )
+        remotes = remote_names_for_panel(r, r["remote_username"])
         for rn in remotes:
             ok, err = api.update_remote_user(
                 r["panel_url"], r["access_token"], rn, expire=expire_ts
@@ -1149,11 +1173,7 @@ def delete_user(owner_id: int, username: str):
     for r in rows:
         try:
             api = get_api(r.get("panel_type"), r.get("sanaei_api_version"))
-            remotes = (
-                r["remote_username"].split(",")
-                if r.get("panel_type") == "sanaei"
-                else [r["remote_username"]]
-            )
+            remotes = remote_names_for_panel(r, r["remote_username"])
             for rn in remotes:
                 log.info("remote delete started on %s@%s", rn, r["panel_url"])
                 ok, err = api.remove_remote_user(r["panel_url"], r["access_token"], rn)
@@ -1298,11 +1318,7 @@ def delete_panel_and_cleanup(owner_id: int, panel_id: int):
     for r in rows:
         try:
             api = get_api(r.get("panel_type"), r.get("sanaei_api_version"))
-            remotes = (
-                r["remote_username"].split(",")
-                if r.get("panel_type") == "sanaei"
-                else [r["remote_username"]]
-            )
+            remotes = remote_names_for_panel(r, r["remote_username"])
             for rn in remotes:
                 ok, err = api.disable_remote_user(r["panel_url"], r["access_token"], rn)
                 if not ok:
@@ -3805,6 +3821,31 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
         elif r.get("panel_type") == "sanaei":
             expire_ts = 0 if usage_sec <= 0 else int(datetime.now(timezone.utc).timestamp()) + usage_sec
             inbound_ids = per_panel.get(r["id"], {}).get("inbound_ids", [])
+            if is_modern_sanaei_panel(r):
+                remote_name = panel_username(r.get("panel_type"), app_username)
+                payload = build_sanaei_create_payload(
+                    remote_name,
+                    inbound_ids,
+                    limit_bytes=limit_bytes,
+                    expire_ts=expire_ts,
+                    sanaei_api_version=r.get("sanaei_api_version"),
+                )
+                obj, e = api.create_user(r["panel_url"], r["access_token"], payload)
+                if not obj:
+                    obj, g = api.get_user(r["panel_url"], r["access_token"], remote_name)
+                    if not obj:
+                        failed.append(f"{r['panel_url']} (inbounds {','.join(map(str, inbound_ids))}): {e or g or 'unknown error'}")
+                        continue
+                created_remotes.append((r, [remote_name]))
+                if not obj.get("enabled", True):
+                    ok_en, err_en = api.enable_remote_user(r["panel_url"], r["access_token"], remote_name)
+                    if not ok_en:
+                        failed.append(f"{r['panel_url']}: enable failed - {err_en or 'unknown'}")
+                        continue
+                save_link(owner_id, app_username, r["id"], remote_name)
+                ok += 1
+                continue
+
             remote_names = []
             panel_failed = False
             for inb in inbound_ids:
@@ -3926,11 +3967,7 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                 if not panel:
                     continue
                 api = get_api(panel.get("panel_type"), panel.get("sanaei_api_version"))
-                remotes = (
-                    remote.split(",")
-                    if panel.get("panel_type") == "sanaei"
-                    else [remote]
-                )
+                remotes = remote_names_for_panel(panel, remote)
                 for rn in remotes:
                     ok, err = api.remove_remote_user(
                         panel["panel_url"], panel["access_token"], rn
@@ -4101,6 +4138,31 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                 if not inb_ids:
                     added_errs.append(f"{p['panel_url']}: inbound missing")
                     continue
+                if is_modern_sanaei_panel(p):
+                    remote_name = panel_username(p.get("panel_type"), username)
+                    payload = build_sanaei_create_payload(
+                        remote_name,
+                        inb_ids,
+                        limit_bytes=limit_bytes_default,
+                        expire_ts=expire_ts_default,
+                        sanaei_api_version=p.get("sanaei_api_version"),
+                    )
+                    obj, e2 = api.create_user(p["panel_url"], p["access_token"], payload)
+                    if not obj:
+                        obj, g = api.get_user(p["panel_url"], p["access_token"], remote_name)
+                        if not obj:
+                            added_errs.append(f"{p['panel_url']} (inbounds {','.join(inb_ids)}): {e2 or g or 'unknown error'}")
+                            continue
+                    if not obj.get("enabled", True):
+                        ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], remote_name)
+                        if not ok_en:
+                            added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
+                            continue
+                    save_link(owner_id, username, int(pid), remote_name)
+                    links_map[int(pid)] = remote_name
+                    added_ok += 1
+                    continue
+
                 remote_names = []
                 for inb in inb_ids:
                     remote_name = f"{username}_{secrets.token_hex(3)}"
@@ -4190,7 +4252,7 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
             removed += 1
             if p:
                 api = get_api(p.get("panel_type"), p.get("sanaei_api_version"))
-                remotes = remote.split(",") if p.get("panel_type") == "sanaei" else [remote]
+                remotes = remote_names_for_panel(p, remote)
                 for rn in remotes:
                     log.info(
                         "sync_user_panels removing remote user %s on %s (%s/%s)",
@@ -4227,7 +4289,7 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
             continue
         api = get_api(p.get("panel_type"), p.get("sanaei_api_version"))
         remote = links_map.get(int(pid), panel_username(p.get("panel_type"), username))
-        remotes = remote.split(",") if p.get("panel_type") == "sanaei" else [remote]
+        remotes = remote_names_for_panel(p, remote)
         for rn in remotes:
             obj, g = api.get_user(p["panel_url"], p["access_token"], rn)
             if obj and not obj.get("enabled", True):

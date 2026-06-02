@@ -74,6 +74,14 @@ def get_sanaei_api(sanaei_api_version: str | None = None):
     return sanaei
 
 
+def remote_names_for_sanaei(remote_username: str, sanaei_api_version: str | None = None) -> list[str]:
+    if not remote_username:
+        return []
+    if (sanaei_api_version or "").lower() == "modern":
+        return [remote_username]
+    return [r.strip() for r in remote_username.split(",") if r.strip()]
+
+
 def get_setting(owner_id: int, key: str):
     try:
         return get_owner_setting(owner_id, key)
@@ -227,7 +235,7 @@ def disable_remote(panel_type, panel_url, token, remote_username, sanaei_api_ver
     try:
         if panel_type == "sanaei":
             api = get_sanaei_api(sanaei_api_version)
-            remotes = [r.strip() for r in remote_username.split(",") if r.strip()]
+            remotes = remote_names_for_sanaei(remote_username, sanaei_api_version)
             all_ok, last_msg = True, None
             for rn in remotes:
                 ok, msg = api.disable_remote_user(panel_url, token, rn)
@@ -386,7 +394,7 @@ def collect_links(mapped, local_username: str, want_html: bool):
         links, errs, rinfo = [], [], None
         if l.get("panel_type") == "sanaei":
             api = get_sanaei_api(l.get("sanaei_api_version"))
-            remotes = [r.strip() for r in l["remote_username"].split(",") if r.strip()]
+            remotes = remote_names_for_sanaei(l["remote_username"], l.get("sanaei_api_version"))
 
             def remote_worker(rn: str):
                 info = None
