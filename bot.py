@@ -223,7 +223,7 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
     ASK_NORMAL_SYNC_INTERVAL,
     ASK_WEBUI_USERNAME,
     ASK_WEBUI_PASSWORD,
-) = range(42)
+) = range(44)
 
 # ---------- helpers ----------
 UNIT = 1024
