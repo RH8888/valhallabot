@@ -127,7 +127,7 @@ def list_mapped_links(owner_id, local_username):
             f"""
             SELECT lup.panel_id, lup.remote_username,
                    p.panel_url, p.access_token, p.panel_type,
-                   p.sanaei_api_version,
+                   p.sanaei_api_version, p.sanaei_auth_type,
                    p.admin_username, p.admin_password_encrypted,
                    p.usage_multiplier, p.append_ratio_to_name
             FROM local_user_panel_links lup
@@ -152,7 +152,7 @@ def list_all_panels(owner_id):
         cur.execute(
             f"""
             SELECT id, panel_url, access_token, panel_type,
-                   sanaei_api_version,
+                   sanaei_api_version, sanaei_auth_type,
                    admin_username, admin_password_encrypted,
                    usage_multiplier, append_ratio_to_name
             FROM panels
