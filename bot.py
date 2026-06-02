@@ -109,6 +109,50 @@ def panel_username(panel_type: str, username: str) -> str:
         return value.lower()
     return value
 
+
+def build_sanaei_create_payload(
+    remote_name: str,
+    inbound_id: int | str,
+    limit_bytes: int = 0,
+    expire_ts: int = 0,
+    sanaei_api_version: str | None = None,
+) -> dict:
+    """Build a Sanaei user creation body for the configured API version.
+
+    Legacy Sanaei accepts an inbound ``id`` plus serialized
+    ``settings.clients``. Modern Sanaei's ``/panel/api/clients/add`` endpoint
+    expects a first-class client object and an ``inboundIds`` array.
+    """
+
+    client = {
+        "email": remote_name,
+        "enable": True,
+    }
+    if limit_bytes > 0:
+        client["totalGB"] = limit_bytes
+    if expire_ts > 0:
+        client["expiryTime"] = expire_ts * 1000
+
+    inbound_id = int(inbound_id)
+    if (sanaei_api_version or "").lower() == "modern":
+        return {
+            "client": {
+                **client,
+                "tgId": 0,
+                "limitIp": 0,
+            },
+            "inboundIds": [inbound_id],
+        }
+
+    legacy_client = {
+        "id": str(uuid.uuid4()),
+        **client,
+    }
+    return {
+        "id": inbound_id,
+        "settings": json.dumps({"clients": [legacy_client]}, separators=(",", ":")),
+    }
+
 # ---------- proxy helpers ----------
 def clone_proxy_settings(proxies: dict) -> dict:
     """Copy proxy settings and regenerate credentials.
@@ -3736,19 +3780,13 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
             panel_failed = False
             for inb in inbound_ids:
                 rn = f"{app_username}_{secrets.token_hex(3)}"
-                client = {
-                    "id": str(uuid.uuid4()),
-                    "email": rn,
-                    "enable": True,
-                }
-                if limit_bytes > 0:
-                    client["totalGB"] = limit_bytes
-                if expire_ts > 0:
-                    client["expiryTime"] = expire_ts * 1000
-                payload = {
-                    "id": int(inb),
-                    "settings": json.dumps({"clients": [client]}, separators=(",", ":")),
-                }
+                payload = build_sanaei_create_payload(
+                    rn,
+                    inb,
+                    limit_bytes=limit_bytes,
+                    expire_ts=expire_ts,
+                    sanaei_api_version=r.get("sanaei_api_version"),
+                )
                 obj, e = api.create_user(r["panel_url"], r["access_token"], payload)
                 if not obj:
                     obj, g = api.get_user(r["panel_url"], r["access_token"], rn)
@@ -4037,19 +4075,13 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                 remote_names = []
                 for inb in inb_ids:
                     remote_name = f"{username}_{secrets.token_hex(3)}"
-                    client = {
-                        "id": str(uuid.uuid4()),
-                        "email": remote_name,
-                        "enable": True,
-                    }
-                    if limit_bytes_default > 0:
-                        client["totalGB"] = limit_bytes_default
-                    if expire_ts_default > 0:
-                        client["expiryTime"] = expire_ts_default * 1000
-                    payload = {
-                        "id": int(inb),
-                        "settings": json.dumps({"clients": [client]}, separators=(",", ":")),
-                    }
+                    payload = build_sanaei_create_payload(
+                        remote_name,
+                        inb,
+                        limit_bytes=limit_bytes_default,
+                        expire_ts=expire_ts_default,
+                        sanaei_api_version=p.get("sanaei_api_version"),
+                    )
                     obj, e2 = api.create_user(p["panel_url"], p["access_token"], payload)
                     if not obj:
                         added_errs.append(f"{p['panel_url']} (inb {inb}): {e2 or 'unknown error'}")
