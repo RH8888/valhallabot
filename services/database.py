@@ -129,6 +129,8 @@ def ensure_schema() -> None:
                 panel_url VARCHAR(255) NOT NULL,
                 name VARCHAR(128) NOT NULL,
                 panel_type VARCHAR(32) NOT NULL DEFAULT 'marzneshin',
+                sanaei_api_version VARCHAR(16) NULL,
+                sanaei_auth_type VARCHAR(16) NULL,
                 usage_multiplier DOUBLE NOT NULL DEFAULT 1.0,
                 append_ratio_to_name TINYINT(1) NOT NULL DEFAULT 0,
                 admin_username VARCHAR(64) NOT NULL,
@@ -147,9 +149,26 @@ def ensure_schema() -> None:
             )
         except MySQLError:
             pass
+        # Sanaei metadata remains nullable so existing rows are not rewritten.
+        # Existing rows with panel_type='sanaei' and sanaei_api_version IS NULL
+        # are treated as legacy. New Sanaei rows should store
+        # sanaei_api_version as 'legacy' or 'modern'; modern rows should store
+        # sanaei_auth_type as 'cookie' (cookieAuth) or 'bearer' (bearerAuth).
         try:
             cur.execute(
-                "ALTER TABLE panels ADD COLUMN usage_multiplier DOUBLE NOT NULL DEFAULT 1.0 AFTER panel_type"
+                "ALTER TABLE panels ADD COLUMN sanaei_api_version VARCHAR(16) NULL AFTER panel_type"
+            )
+        except MySQLError:
+            pass
+        try:
+            cur.execute(
+                "ALTER TABLE panels ADD COLUMN sanaei_auth_type VARCHAR(16) NULL AFTER sanaei_api_version"
+            )
+        except MySQLError:
+            pass
+        try:
+            cur.execute(
+                "ALTER TABLE panels ADD COLUMN usage_multiplier DOUBLE NOT NULL DEFAULT 1.0 AFTER sanaei_auth_type"
             )
         except MySQLError:
             pass
