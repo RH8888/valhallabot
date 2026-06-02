@@ -16,6 +16,7 @@ from bot import (
     renew_user,
     list_user_links,
     get_api,
+    remote_names_for_panel,
 )
 from api.auth import get_identity, Identity
 from bot import set_local_user_service  # async function
@@ -295,12 +296,8 @@ def _set_user_disabled(owner_id: int, username: str, disabled: bool) -> None:
             cur.execute(sql, params)
 
     for row in list_user_links(owner_id, username):
-        api = get_api(row.get("panel_type"))
-        remotes = (
-            row["remote_username"].split(",")
-            if row.get("panel_type") == "sanaei"
-            else [row["remote_username"]]
-        )
+        api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
+        remotes = remote_names_for_panel(row, row["remote_username"])
         for rn in remotes:
             if disabled:
                 api.disable_remote_user(row["panel_url"], row["access_token"], rn)

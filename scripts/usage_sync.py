@@ -51,6 +51,18 @@ def get_api(panel_type: str, sanaei_api_version: str | None = None):
         return sanaei_modern
     return API_MODULES.get(panel_type, marzneshin)
 
+
+def is_legacy_sanaei_panel(panel_type: str, sanaei_api_version: str | None = None) -> bool:
+    return (panel_type or "").lower() == "sanaei" and (sanaei_api_version or "").lower() != "modern"
+
+
+def remote_names_for_panel(panel_type: str, remote_username: str, sanaei_api_version: str | None = None) -> list[str]:
+    if not remote_username:
+        return []
+    if is_legacy_sanaei_panel(panel_type, sanaei_api_version):
+        return [r.strip() for r in remote_username.split(",") if r.strip()]
+    return [remote_username]
+
 # ---------------- existing per-link / per-user logic ----------------
 
 def ensure_links_table():
@@ -174,9 +186,10 @@ def fetch_used_traffic(panel_type, panel_url, bearer, remote_username, sanaei_ap
     """Return used traffic for a remote user via appropriate panel API."""
     try:
         api = get_api(panel_type, sanaei_api_version)
-        if panel_type == "sanaei" and "," in remote_username:
+        remotes = remote_names_for_panel(panel_type, remote_username, sanaei_api_version)
+        if len(remotes) > 1:
             total = 0
-            for rn in [r.strip() for r in remote_username.split(",") if r.strip()]:
+            for rn in remotes:
                 obj, err = api.get_user(panel_url, bearer, rn)
                 if not obj:
                     return None, f"{panel_url}: {err or 'user not found'}"
@@ -584,7 +597,7 @@ def mark_user_disabled(owner_id, local_username):
 
 def disable_remote(panel_type, panel_url, token, remote_username, sanaei_api_version=None):
     api = get_api(panel_type, sanaei_api_version)
-    remotes = remote_username.split(",") if panel_type == "sanaei" else [remote_username]
+    remotes = remote_names_for_panel(panel_type, remote_username, sanaei_api_version)
     all_ok, last_msg = True, None
     for rn in remotes:
         ok, msg = api.disable_remote_user(panel_url, token, rn)
@@ -596,7 +609,7 @@ def disable_remote(panel_type, panel_url, token, remote_username, sanaei_api_ver
 
 def enable_remote(panel_type, panel_url, token, remote_username, sanaei_api_version=None):
     api = get_api(panel_type, sanaei_api_version)
-    remotes = remote_username.split(",") if panel_type == "sanaei" else [remote_username]
+    remotes = remote_names_for_panel(panel_type, remote_username, sanaei_api_version)
     all_ok, last_msg = True, None
     for rn in remotes:
         ok, msg = api.enable_remote_user(panel_url, token, rn)
