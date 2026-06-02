@@ -40,7 +40,7 @@ from dotenv import load_dotenv
 from mysql.connector import Error as MySQLError
 import qrcode
 
-from apis import marzneshin, marzban, rebecca, sanaei, pasarguard, guardcore
+from apis import marzneshin, marzban, rebecca, sanaei, sanaei_modern, pasarguard, guardcore
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -94,8 +94,11 @@ API_MODULES = {
     "guardcore": guardcore,
 }
 
-def get_api(panel_type: str):
-    return API_MODULES.get(panel_type or "marzneshin", marzneshin)
+def get_api(panel_type: str, sanaei_api_version: str | None = None):
+    panel_type = (panel_type or "marzneshin").lower()
+    if panel_type == "sanaei" and (sanaei_api_version or "").lower() == "modern":
+        return sanaei_modern
+    return API_MODULES.get(panel_type, marzneshin)
 
 
 def panel_username(panel_type: str, username: str) -> str:
@@ -862,7 +865,7 @@ def update_limit(owner_id: int, username: str, new_limit_bytes: int):
                 tuple(ids) + (username,),
             )
     for row in list_user_links(owner_id, username):
-        api = get_api(row.get("panel_type"))
+        api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
         remotes = (
             row["remote_username"].split(",")
             if row.get("panel_type") == "sanaei"
@@ -928,7 +931,7 @@ def set_user_disabled(owner_id: int, username: str, disabled: bool):
         )
 
     for row in list_user_links(owner_id, username):
-        api = get_api(row.get("panel_type"))
+        api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
         remotes = (
             row["remote_username"].split(",")
             if row.get("panel_type") == "sanaei"
@@ -972,7 +975,7 @@ def reset_used(owner_id: int, username: str):
             params,
         )
     for row in list_user_links(owner_id, username):
-        api = get_api(row.get("panel_type"))
+        api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
         remotes = (
             row["remote_username"].split(",")
             if row.get("panel_type") == "sanaei"
@@ -1025,7 +1028,7 @@ def renew_user(owner_id: int, username: str, add_days: int):
                 tuple(ids) + (username,),
             )
     for r in list_user_links(owner_id, username):
-        api = get_api(r.get("panel_type"))
+        api = get_api(r.get("panel_type"), r.get("sanaei_api_version"))
         remotes = (
             r["remote_username"].split(",")
             if r.get("panel_type") == "sanaei"
@@ -1052,6 +1055,7 @@ def list_user_links(owner_id: int, local_username: str):
         cur.execute(
             f"""SELECT lup.panel_id, lup.remote_username,
                       p.panel_url, p.access_token, p.panel_type,
+                      p.sanaei_api_version,
                       p.admin_username, p.admin_password_encrypted
                  FROM local_user_panel_links lup
                  JOIN panels p ON p.id = lup.panel_id
@@ -1090,7 +1094,7 @@ def delete_user(owner_id: int, username: str):
     rows = list_user_links(owner_id, username)
     for r in rows:
         try:
-            api = get_api(r.get("panel_type"))
+            api = get_api(r.get("panel_type"), r.get("sanaei_api_version"))
             remotes = (
                 r["remote_username"].split(",")
                 if r.get("panel_type") == "sanaei"
@@ -1226,7 +1230,8 @@ def list_panel_links(panel_id: int):
     with with_mysql_cursor() as cur:
         cur.execute("""
             SELECT lup.owner_id, lup.local_username, lup.remote_username,
-                   p.panel_url, p.access_token, p.panel_type
+                   p.panel_url, p.access_token, p.panel_type,
+                   p.sanaei_api_version
             FROM local_user_panel_links lup
             JOIN panels p ON p.id = lup.panel_id
             WHERE lup.panel_id=%s
@@ -1238,7 +1243,7 @@ def delete_panel_and_cleanup(owner_id: int, panel_id: int):
     rows = list_panel_links(panel_id)
     for r in rows:
         try:
-            api = get_api(r.get("panel_type"))
+            api = get_api(r.get("panel_type"), r.get("sanaei_api_version"))
             remotes = (
                 r["remote_username"].split(",")
                 if r.get("panel_type") == "sanaei"
@@ -2416,7 +2421,7 @@ async def show_panel_cfg_selector(q, context: ContextTypes.DEFAULT_TYPE, owner_i
         await q.edit_message_text("پنل پیدا نشد.")
         return ConversationHandler.END
 
-    api = get_api(info.get("panel_type"))
+    api = get_api(info.get("panel_type"), info.get("sanaei_api_version"))
     links = []
     if info.get("template_username"):
         u, e = api.get_user(info["panel_url"], info["access_token"], info["template_username"])
@@ -2455,7 +2460,7 @@ async def show_panel_cfgnum_selector(q, context: ContextTypes.DEFAULT_TYPE, owne
         await q.edit_message_text("پنل پیدا نشد.")
         return ConversationHandler.END
 
-    api = get_api(info.get("panel_type"))
+    api = get_api(info.get("panel_type"), info.get("sanaei_api_version"))
     links = []
     if info.get("template_username"):
         u, e = api.get_user(info["panel_url"], info["access_token"], info["template_username"])
@@ -3172,7 +3177,7 @@ async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ API token خالیه.", reply_markup=_back_kb("servers_panels"))
                 return ConversationHandler.END
         else:
-            api = get_api(panel_type)
+            api = get_api(panel_type, sanaei_api_version)
             tok, err = api.get_admin_token(panel_url, panel_user, password)
             if not tok:
                 await update.message.reply_text(f"❌ لاگین ناموفق: {err}")
@@ -3313,13 +3318,13 @@ async def got_edit_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE
         placeholders = ",".join(["%s"] * len(ids))
         with with_mysql_cursor() as cur:
             cur.execute(
-                f"SELECT panel_url, panel_type FROM panels WHERE id=%s AND telegram_user_id IN ({placeholders})",
+                f"SELECT panel_url, panel_type, sanaei_api_version FROM panels WHERE id=%s AND telegram_user_id IN ({placeholders})",
                 tuple([pid] + ids),
             )
             row = cur.fetchone()
         if not row:
             raise RuntimeError("panel not found")
-        api = get_api(row.get("panel_type"))
+        api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
         tok, err = api.get_admin_token(row["panel_url"], new_user, new_pass)
         if not tok:
             raise RuntimeError(f"login failed: {err}")
@@ -3657,7 +3662,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
 
     per_panel, errs = {}, []
     for r in rows:
-        api = get_api(r.get("panel_type"))
+        api = get_api(r.get("panel_type"), r.get("sanaei_api_version"))
         if r.get("panel_type") in ("marzneshin", "guardcore"):
             svc, e = api.fetch_user_services(
                 r["panel_url"], r["access_token"], r.get("template_username")
@@ -3704,7 +3709,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
     ok, failed = 0, []
     created_remotes: list[tuple[dict, list[str]]] = []
     for r in rows:
-        api = get_api(r.get("panel_type"))
+        api = get_api(r.get("panel_type"), r.get("sanaei_api_version"))
         remote_name = panel_username(r.get("panel_type"), app_username)
         if r.get("panel_type") == "marzneshin":
             payload = {
@@ -3804,7 +3809,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
 
     if failed:
         for panel, remote_names in created_remotes:
-            api = get_api(panel.get("panel_type"))
+            api = get_api(panel.get("panel_type"), panel.get("sanaei_api_version"))
             for remote in remote_names:
                 ok_rm, err_rm = api.remove_remote_user(panel["panel_url"], panel["access_token"], remote)
                 if not ok_rm:
@@ -3853,7 +3858,7 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                 panel = panels_map.get(int(pid))
                 if not panel:
                     continue
-                api = get_api(panel.get("panel_type"))
+                api = get_api(panel.get("panel_type"), panel.get("sanaei_api_version"))
                 remotes = (
                     remote.split(",")
                     if panel.get("panel_type") == "sanaei"
@@ -3912,7 +3917,7 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
             p = panels_map.get(int(pid))
             if not p:
                 continue
-            api = get_api(p.get("panel_type"))
+            api = get_api(p.get("panel_type"), p.get("sanaei_api_version"))
             tmpl = p.get("template_username")
             if p.get("panel_type") == "marzneshin":
                 if not tmpl:
@@ -4123,7 +4128,7 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
             links_map.pop(int(pid), None)
             removed += 1
             if p:
-                api = get_api(p.get("panel_type"))
+                api = get_api(p.get("panel_type"), p.get("sanaei_api_version"))
                 remotes = remote.split(",") if p.get("panel_type") == "sanaei" else [remote]
                 for rn in remotes:
                     log.info(
@@ -4159,7 +4164,7 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
         p = panels_map.get(int(pid))
         if not p:
             continue
-        api = get_api(p.get("panel_type"))
+        api = get_api(p.get("panel_type"), p.get("sanaei_api_version"))
         remote = links_map.get(int(pid), panel_username(p.get("panel_type"), username))
         remotes = remote.split(",") if p.get("panel_type") == "sanaei" else [remote]
         for rn in remotes:
