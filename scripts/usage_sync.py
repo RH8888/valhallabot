@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 
 from dotenv import load_dotenv
 from services import init_mysql_pool, with_mysql_cursor
-from services.database import mysql_errors
+from services.database import ensure_schema, mysql_errors
 from services.panel_tokens import ensure_panel_tokens
 from services.settings import get_setting as get_owner_setting
 
@@ -968,6 +968,7 @@ def loop():
 def main():
     load_dotenv()
     init_mysql_pool()
+    ensure_schema()
     ensure_agent_panel_usage_totals_table()
     loop()
 
