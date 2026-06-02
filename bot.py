@@ -101,6 +101,16 @@ def get_api(panel_type: str, sanaei_api_version: str | None = None):
     return API_MODULES.get(panel_type, marzneshin)
 
 
+def is_sanaei_bearer_panel(data: dict | None) -> bool:
+    if not data:
+        return False
+    return (
+        (data.get("panel_type") or "").lower() == "sanaei"
+        and (data.get("sanaei_api_version") or "").lower() == "modern"
+        and (data.get("sanaei_auth_type") or "").lower() == "bearer"
+    )
+
+
 def panel_username(panel_type: str, username: str) -> str:
     """Return panel-specific username representation."""
 
@@ -1909,7 +1919,12 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("اسم جدید پنل را بفرست:", reply_markup=_back_kb(f"panel_sel:{context.user_data.get('edit_panel_id')}")) ; return ASK_EDIT_PANEL_NAME
     if data == "p_change_creds":
         if not is_admin(uid): return ConversationHandler.END
-        await q.edit_message_text("یوزرنیم ادمین جدید را بفرست:", reply_markup=_back_kb(f"panel_sel:{context.user_data.get('edit_panel_id')}")) ; return ASK_EDIT_PANEL_USER
+        pid = context.user_data.get("edit_panel_id")
+        info = get_panel(uid, pid) if pid else None
+        if is_sanaei_bearer_panel(info):
+            context.user_data["new_admin_user"] = info.get("admin_username") or "bearer"
+            await q.edit_message_text("API token جدید را بفرست:", reply_markup=_back_kb(f"panel_sel:{pid}")) ; return ASK_EDIT_PANEL_PASS
+        await q.edit_message_text("یوزرنیم ادمین جدید را بفرست:", reply_markup=_back_kb(f"panel_sel:{pid}")) ; return ASK_EDIT_PANEL_USER
     if data == "p_set_multiplier":
         if not is_admin(uid): return ConversationHandler.END
         await q.edit_message_text("نسبت مصرف را بفرست (مثلا 1 یا 0.5). برای ریست، '-':", reply_markup=_back_kb(f"panel_sel:{context.user_data.get('edit_panel_id')}"))
@@ -2539,6 +2554,7 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         return ConversationHandler.END
 
     is_sanaei = p.get('panel_type') == 'sanaei'
+    is_sanaei_bearer = is_sanaei_bearer_panel(p)
     panel_type = (p.get("panel_type") or "").lower()
     supports_api_key = panel_type in ("rebecca", "guardcore")
     ratio = float(p.get("usage_multiplier") or 1.0)
@@ -2552,7 +2568,11 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         f"🧩 <b>{p['name']}</b>",
         f"📦 Type: <b>{p.get('panel_type', 'marzneshin')}</b>",
         f"🌐 URL: <code>{p['panel_url']}</code>",
-        f"👤 Admin: <code>{p['admin_username']}</code>",
+        (
+            "🔐 Auth: <b>Bearer token</b>"
+            if is_sanaei_bearer
+            else f"👤 Admin: <code>{p['admin_username']}</code>"
+        ),
         f"🧬 {label}: <b>{p.get('template_username') or '-'}</b>",
         f"⚖️ Ratio: <b>{ratio:.2f}x</b>",
     ]
@@ -2566,9 +2586,10 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         "",
         "چه کاری انجام بدهم؟",
     ]
+    credentials_label = "🔑 Change API Token" if is_sanaei_bearer else "🔑 Change Admin Credentials"
     kb = [
         [InlineKeyboardButton(f"🧬 Set/Clear {label}", callback_data="p_set_template")],
-        [InlineKeyboardButton("🔑 Change Admin Credentials", callback_data="p_change_creds")],
+        [InlineKeyboardButton(credentials_label, callback_data="p_change_creds")],
         [InlineKeyboardButton("✏️ Rename Panel", callback_data="p_rename")],
         [InlineKeyboardButton("⚖️ Set Usage Ratio", callback_data="p_set_multiplier")],
     ]
@@ -3178,6 +3199,10 @@ async def got_panel_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ URL نامعتبر. دوباره بفرست:")
         return ASK_PANEL_URL
     context.user_data["panel_url"] = url
+    if is_sanaei_bearer_panel(context.user_data):
+        context.user_data["panel_user"] = "bearer"
+        await update.message.reply_text("🔑 API token:", reply_markup=_back_kb("servers_panels"))
+        return ASK_PANEL_PASS
     await update.message.reply_text("👤 یوزرنیم ادمین:", reply_markup=_back_kb("servers_panels"))
     return ASK_PANEL_USER
 
@@ -3189,11 +3214,7 @@ async def got_panel_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ خالیه. دوباره بفرست:")
         return ASK_PANEL_USER
     context.user_data["panel_user"] = u
-    if (
-        context.user_data.get("panel_type") == "sanaei"
-        and context.user_data.get("sanaei_api_version") == "modern"
-        and context.user_data.get("sanaei_auth_type") == "bearer"
-    ):
+    if is_sanaei_bearer_panel(context.user_data):
         await update.message.reply_text("🔑 API token:", reply_markup=_back_kb("servers_panels"))
     else:
         await update.message.reply_text("🔒 پسورد ادمین:", reply_markup=_back_kb("servers_panels"))
@@ -3209,11 +3230,7 @@ async def got_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
     password = (update.message.text or "").strip()
     sanaei_api_version = context.user_data.get("sanaei_api_version")
     sanaei_auth_type = context.user_data.get("sanaei_auth_type")
-    sanaei_bearer_auth = (
-        panel_type == "sanaei"
-        and sanaei_api_version == "modern"
-        and sanaei_auth_type == "bearer"
-    )
+    sanaei_bearer_auth = is_sanaei_bearer_panel(context.user_data)
     try:
         if sanaei_bearer_auth:
             tok = password
@@ -3362,21 +3379,33 @@ async def got_edit_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE
         placeholders = ",".join(["%s"] * len(ids))
         with with_mysql_cursor() as cur:
             cur.execute(
-                f"SELECT panel_url, panel_type, sanaei_api_version FROM panels WHERE id=%s AND telegram_user_id IN ({placeholders})",
+                f"""
+                SELECT panel_url, panel_type, sanaei_api_version, sanaei_auth_type
+                FROM panels
+                WHERE id=%s AND telegram_user_id IN ({placeholders})
+                """,
                 tuple([pid] + ids),
             )
             row = cur.fetchone()
         if not row:
             raise RuntimeError("panel not found")
-        api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
-        tok, err = api.get_admin_token(row["panel_url"], new_user, new_pass)
-        if not tok:
-            raise RuntimeError(f"login failed: {err}")
-        encrypted_password = None
-        try:
-            encrypted_password = encrypt_panel_password(new_pass)
-        except PanelTokenEncryptionError as exc:
-            log.warning("Failed to encrypt panel password for %s: %s", row["panel_url"], exc)
+        bearer_auth = is_sanaei_bearer_panel(row)
+        if bearer_auth:
+            tok = new_pass
+            if not tok:
+                raise RuntimeError("API token is empty")
+            new_user = new_user or "bearer"
+            encrypted_password = None
+        else:
+            api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
+            tok, err = api.get_admin_token(row["panel_url"], new_user, new_pass)
+            if not tok:
+                raise RuntimeError(f"login failed: {err}")
+            encrypted_password = None
+            try:
+                encrypted_password = encrypt_panel_password(new_pass)
+            except PanelTokenEncryptionError as exc:
+                log.warning("Failed to encrypt panel password for %s: %s", row["panel_url"], exc)
         with with_mysql_cursor() as cur:
             cur.execute(
                 f"""
