@@ -1055,7 +1055,7 @@ def list_user_links(owner_id: int, local_username: str):
         cur.execute(
             f"""SELECT lup.panel_id, lup.remote_username,
                       p.panel_url, p.access_token, p.panel_type,
-                      p.sanaei_api_version,
+                      p.sanaei_api_version, p.sanaei_auth_type,
                       p.admin_username, p.admin_password_encrypted
                  FROM local_user_panel_links lup
                  JOIN panels p ON p.id = lup.panel_id

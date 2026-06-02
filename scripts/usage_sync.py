@@ -137,6 +137,7 @@ def fetch_all_links():
                        p.access_token,
                        p.panel_type,
                        p.sanaei_api_version,
+                       p.sanaei_auth_type,
                        p.usage_multiplier,
                        p.admin_username,
                        p.admin_password_encrypted,

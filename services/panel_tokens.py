@@ -124,8 +124,29 @@ def _panel_refresh_message(panel_id, panel_type: str, panel_url: str, status: st
     )
 
 
-def _authenticator_for_panel_type(panel_type: str):
-    panel_type = (panel_type or "").lower()
+def _normalise_sanaei_api_version(panel_row: dict) -> str:
+    return (panel_row.get("sanaei_api_version") or "legacy").strip().lower()
+
+
+def _normalise_sanaei_auth_type(panel_row: dict) -> str:
+    raw = (panel_row.get("sanaei_auth_type") or "").strip().lower()
+    if raw in {"bearer", "bearerauth", "api_key", "apikey", "token"}:
+        return "bearer"
+    if raw in {"cookie", "cookieauth", "session"}:
+        return "cookie"
+    return raw
+
+
+def _sanaei_bearer_refresh_unsupported(panel_row: dict) -> bool:
+    return (
+        (panel_row.get("panel_type") or "").lower() == "sanaei"
+        and _normalise_sanaei_api_version(panel_row) == "modern"
+        and _normalise_sanaei_auth_type(panel_row) == "bearer"
+    )
+
+
+def _authenticator_for_panel_type(panel_row: dict):
+    panel_type = (panel_row.get("panel_type") or "").lower()
     if panel_type == "marzneshin":
         from apis import marzneshin
 
@@ -139,6 +160,13 @@ def _authenticator_for_panel_type(panel_type: str):
 
         return rebecca.get_admin_token
     if panel_type == "sanaei":
+        if _normalise_sanaei_api_version(panel_row) == "modern":
+            if _normalise_sanaei_auth_type(panel_row) == "bearer":
+                return None
+            from apis import sanaei_modern
+
+            return sanaei_modern.get_admin_token
+
         from apis import sanaei
 
         return sanaei.get_admin_token
@@ -225,11 +253,11 @@ def ensure_panel_access_token(panel_row: dict, *, force: bool = False, reason: s
     """
 
     panel_type = (panel_row.get("panel_type") or "").lower()
-    auth_fn = _authenticator_for_panel_type(panel_type)
-    if not auth_fn:
+    auth_fn = _authenticator_for_panel_type(panel_row)
+    bearer_refresh_unsupported = _sanaei_bearer_refresh_unsupported(panel_row)
+    if not auth_fn and not bearer_refresh_unsupported:
         return panel_row
 
-    token = panel_row.get("access_token") or ""
     panel_key = _panel_cache_key(panel_row)
     lock = _panel_singleflight_lock(panel_key)
 
@@ -250,6 +278,18 @@ def ensure_panel_access_token(panel_row: dict, *, force: bool = False, reason: s
             hourly_due = not last_hourly or (now - last_hourly) >= HOURLY_CREDENTIAL_CHECK_INTERVAL
             if not hourly_due:
                 return panel_row
+
+        if not auth_fn:
+            log.info(
+                "Skipping Sanaei bearer token refresh panel_key=%s reason=%s: bearer tokens are not username/password refreshable",
+                panel_key,
+                reason,
+            )
+            if force:
+                _last_auth_fallback_check_at[panel_key] = now
+            else:
+                _last_credential_check_at[panel_key] = now
+            return panel_row
 
         log.info(
             "Running panel credential check panel_key=%s force=%s reason=%s",
@@ -398,8 +438,9 @@ def refresh_panel_access_token_for_request(panel_url: str, current_token: str, p
         if panel_type:
             cur.execute(
                 """
-                SELECT id, panel_url, panel_type, access_token, admin_username,
-                       admin_password_encrypted, token_refreshed_at
+                SELECT id, panel_url, panel_type, sanaei_api_version, sanaei_auth_type,
+                       access_token, admin_username, admin_password_encrypted,
+                       token_refreshed_at
                 FROM panels
                 WHERE panel_url=%s AND panel_type=%s
                 ORDER BY id DESC
@@ -414,8 +455,9 @@ def refresh_panel_access_token_for_request(panel_url: str, current_token: str, p
                 # Fallback to URL lookup so auth-refresh still works.
                 cur.execute(
                     """
-                    SELECT id, panel_url, panel_type, access_token, admin_username,
-                           admin_password_encrypted, token_refreshed_at
+                    SELECT id, panel_url, panel_type, sanaei_api_version, sanaei_auth_type,
+                           access_token, admin_username, admin_password_encrypted,
+                           token_refreshed_at
                     FROM panels
                     WHERE panel_url=%s
                     ORDER BY (access_token=%s) DESC, id DESC
@@ -427,8 +469,9 @@ def refresh_panel_access_token_for_request(panel_url: str, current_token: str, p
         else:
             cur.execute(
                 """
-                SELECT id, panel_url, panel_type, access_token, admin_username,
-                       admin_password_encrypted, token_refreshed_at
+                SELECT id, panel_url, panel_type, sanaei_api_version, sanaei_auth_type,
+                       access_token, admin_username, admin_password_encrypted,
+                       token_refreshed_at
                 FROM panels
                 WHERE panel_url=%s
                 ORDER BY (access_token=%s) DESC, id DESC
