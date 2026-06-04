@@ -706,13 +706,19 @@ def resolve_local_user_owner(owner_id: int, username: str) -> int | None:
         return int(row["owner_id"]) if row else None
 
 
-async def set_local_user_service(owner_id: int, username: str, service_id: int | None):
+async def set_local_user_service(
+    owner_id: int,
+    username: str,
+    service_id: int | None,
+    *,
+    rollback_on_error: bool = False,
+) -> list[str]:
     real_owner = resolve_local_user_owner(owner_id, username)
     if real_owner is None:
         log.info(
             "set_local_user_service skip: owner=%s username=%s not found", owner_id, username
         )
-        return
+        return []
 
     params: list[object] = [service_id, real_owner, username]
     with with_mysql_cursor(dict_=False) as cur:
@@ -721,7 +727,9 @@ async def set_local_user_service(owner_id: int, username: str, service_id: int |
             params,
         )
     pids = list_service_panel_ids(service_id) if service_id else set()
-    await sync_user_panels_async(real_owner, username, pids)
+    return await sync_user_panels_async(
+        real_owner, username, pids, rollback_on_error=rollback_on_error
+    )
 
 async def propagate_service_panels(service_id: int):
     """After service panels change, update agents/users accordingly."""
@@ -4035,7 +4043,13 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
         txt += "\n⚠️ خطاها:\n" + "\n".join(f"• {e}" for e in failed[:8])
     await q.edit_message_text(txt)
 
-def sync_user_panels(owner_id: int, username: str, selected_ids: set):
+def sync_user_panels(
+    owner_id: int,
+    username: str,
+    selected_ids: set,
+    *,
+    rollback_on_error: bool = False,
+) -> list[str]:
     lu = get_local_user(owner_id, username)
     if not lu:
         links_map = map_linked_remote_usernames(owner_id, username)
@@ -4071,7 +4085,7 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                             err or "unknown error",
                         )
         log.info("sync_user_panels skip missing local user %s/%s", owner_id, username)
-        return
+        return []
 
     links_map = map_linked_remote_usernames(owner_id, username)
     current = set(links_map.keys())
@@ -4334,6 +4348,34 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
                 links_map[int(pid)] = username
                 added_ok += 1
 
+    if rollback_on_error and added_errs:
+        for pid in sorted(to_add):
+            remote = links_map.get(int(pid))
+            panel = panels_map.get(int(pid))
+            if not remote or not panel:
+                continue
+            api = get_api(panel.get("panel_type"), panel.get("sanaei_api_version"))
+            for rn in remote_names_for_panel(panel, remote):
+                ok_rm, err_rm = api.remove_remote_user(
+                    panel["panel_url"], panel["access_token"], rn
+                )
+                if not ok_rm:
+                    log.warning(
+                        "sync_user_panels rollback failed removing %s from %s: %s",
+                        rn,
+                        panel.get("panel_url"),
+                        err_rm or "unknown error",
+                    )
+            remove_link(owner_id, username, int(pid))
+            links_map.pop(int(pid), None)
+        log.warning(
+            "sync_user_panels rolled back %s/%s because of errors: %s",
+            owner_id,
+            username,
+            "; ".join(added_errs[:10]),
+        )
+        return added_errs
+
     if to_remove:
         for pid in to_remove:
             p = panels_map.get(int(pid))
@@ -4403,11 +4445,24 @@ def sync_user_panels(owner_id: int, username: str, selected_ids: set):
     )
     if added_errs:
         log.warning("sync_user_panels errors: %s", "; ".join(added_errs[:10]))
+    return added_errs
 
-async def sync_user_panels_async(owner_id: int, username: str, selected_ids: set):
+async def sync_user_panels_async(
+    owner_id: int,
+    username: str,
+    selected_ids: set,
+    *,
+    rollback_on_error: bool = False,
+) -> list[str]:
     """Run sync_user_panels in a thread to avoid blocking the event loop."""
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, sync_user_panels, owner_id, username, selected_ids)
+
+    return await asyncio.to_thread(
+        sync_user_panels,
+        owner_id,
+        username,
+        selected_ids,
+        rollback_on_error=rollback_on_error,
+    )
 
 # ---------- wiring ----------
 def build_app():

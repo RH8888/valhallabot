@@ -1029,6 +1029,7 @@ function UsersPage() {
   const handleAction = async (payload: any) => {
     if (!selectedUser) return;
     setBusy(true);
+    setError('');
     try {
       const res = await fetch(`/api/v1/web/users/${encodeURIComponent(selectedUser.username)}`, {
         method: payload.delete ? 'DELETE' : 'PATCH',
@@ -1246,10 +1247,12 @@ function CreateUserModal({ services, onClose, onSuccess }: { services: ServiceRe
   const [days, setDays] = useState('');
   const [serviceId, setServiceId] = useState('');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
+    setError('');
     try {
       const res = await fetch('/api/v1/web/users', {
         method: 'POST',
@@ -1262,9 +1265,14 @@ function CreateUserModal({ services, onClose, onSuccess }: { services: ServiceRe
           service_id: serviceId ? Number(serviceId) : null,
         }),
       });
-      if (res.ok) onSuccess(); else alert('Failed to create user');
+      if (res.ok) {
+        onSuccess();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(typeof data.detail === 'string' ? data.detail : 'Failed to create user');
+      }
     } catch {
-      alert('Error occurred');
+      setError('Error occurred');
     } finally {
       setBusy(false);
     }
@@ -1301,6 +1309,11 @@ function CreateUserModal({ services, onClose, onSuccess }: { services: ServiceRe
               {services.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           </div>
+          {error && (
+            <div className="whitespace-pre-wrap rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-medium text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-200">
+              {error}
+            </div>
+          )}
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onClose} className={btnSecondary + " flex-1"}>Cancel</button>
             <button type="submit" disabled={busy} className={btnPrimary + " flex-1"}>{busy ? 'Creating...' : 'Create User'}</button>

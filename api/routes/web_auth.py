@@ -39,6 +39,7 @@ from api.users import (
 )
 from bot import (
     build_sub_links,
+    delete_local_user,
     delete_user,
     get_app_key,
     list_services_for_owner,
@@ -633,9 +634,25 @@ async def web_create_user(
             detail="minimum limit is 20GB for services that include a GuardCore panel",
         )
 
+    local_user_existed = _fetch_user(scoped_owner_id, payload.username) is not None
     upsert_local_user(scoped_owner_id, payload.username, payload.limit_bytes, payload.duration_days)
+    sync_errors: list[str] = []
     if payload.service_id is not None:
-        await set_local_user_service(scoped_owner_id, payload.username, payload.service_id)
+        sync_errors = await set_local_user_service(
+            scoped_owner_id,
+            payload.username,
+            payload.service_id,
+            rollback_on_error=True,
+        )
+    if sync_errors:
+        if not local_user_existed:
+            delete_local_user(scoped_owner_id, payload.username)
+        detail = (
+            "❌ ساخت کاربر موفق نبود و تمام کاربران ساخته‌شده از پنل‌های دیگر حذف شدند."
+            "\n⚠️ خطاها:\n"
+            + "\n".join(f"• {error}" for error in sync_errors[:8])
+        )
+        raise HTTPException(status_code=409, detail=detail)
 
     row = _fetch_user(scoped_owner_id, payload.username)
     if not row:
