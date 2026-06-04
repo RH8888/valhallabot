@@ -2010,8 +2010,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(uid): return ConversationHandler.END
         pid = context.user_data.get("edit_panel_id")
         info = get_panel(uid, pid) if pid else None
-        if info and info.get("panel_type") == "sanaei":
-            await q.edit_message_text("این پنل از لینک سابسکریپشن پشتیبانی نمی‌کند.")
+        if info and info.get("panel_type") == "sanaei" and not is_modern_sanaei_panel(info):
+            await q.edit_message_text("نسخه legacy سناعی از لینک سابسکریپشن برای فیلتر پشتیبانی نمی‌کند.")
             return ConversationHandler.END
         await q.edit_message_text("لینک سابسکریپشن پنل را بفرست (برای حذف، '-'):", reply_markup=_back_kb(f"panel_sel:{pid}")) ; return ASK_PANEL_SUB_URL
     if data == "p_set_api_key":
@@ -2034,8 +2034,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not info:
             await q.edit_message_text("پنل پیدا نشد.")
             return ConversationHandler.END
-        if info.get("panel_type") == "sanaei":
-            await q.edit_message_text("این پنل از فیلتر کانفیگ‌ها پشتیبانی نمی‌کند.")
+        if info.get("panel_type") == "sanaei" and not is_modern_sanaei_panel(info):
+            await q.edit_message_text("نسخه legacy سناعی از فیلتر کانفیگ‌ها پشتیبانی نمی‌کند.")
             return ConversationHandler.END
         if not info.get("sub_url"):
             await q.edit_message_text("اول لینک سابسکریپشن پنل را تنظیم کن (Set/Clear Sub URL).")
@@ -2048,8 +2048,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not info:
             await q.edit_message_text("پنل پیدا نشد.")
             return ConversationHandler.END
-        if info.get("panel_type") == "sanaei":
-            await q.edit_message_text("این پنل از فیلتر کانفیگ‌ها پشتیبانی نمی‌کند.")
+        if info.get("panel_type") == "sanaei" and not is_modern_sanaei_panel(info):
+            await q.edit_message_text("نسخه legacy سناعی از فیلتر کانفیگ‌ها پشتیبانی نمی‌کند.")
             return ConversationHandler.END
         if not info.get("sub_url"):
             await q.edit_message_text("اول لینک سابسکریپشن پنل را تنظیم کن (Set/Clear Sub URL).")
@@ -2533,10 +2533,34 @@ def extract_name(link: str) -> str:
         i = link.find("#")
         if i == -1:
             return ""
-        nm = unquote(link[i+1:]).strip()
-        return nm[:255]
+        return canonicalize_name(link[i+1:])
     except Exception:
         return ""
+
+
+def fetch_panel_filter_links(info: dict) -> list[str]:
+    """Return representative panel configs used by the filter selectors.
+
+    Non-Sanaei panels and modern Sanaei panels use the saved sample
+    subscription URL.  Legacy Sanaei is intentionally excluded by the caller.
+    The old template-user fallback is kept for panel types that still expose
+    one, but modern Sanaei must not use it because its template field stores
+    inbound IDs rather than a client username.
+    """
+
+    if not info:
+        return []
+    api = get_api(info.get("panel_type"), info.get("sanaei_api_version"))
+    if info.get("sub_url"):
+        return api.fetch_subscription_links(info["sub_url"])
+    if info.get("panel_type") == "sanaei":
+        return []
+    if info.get("template_username"):
+        u, _ = api.get_user(info["panel_url"], info["access_token"], info["template_username"])
+        if u and u.get("key"):
+            result = api.fetch_links_from_panel(info["panel_url"], info["template_username"], u["key"])
+            return result[0] if isinstance(result, tuple) else result
+    return []
 
 async def show_panel_cfg_selector(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, panel_id: int, page: int = 0, notice: str = None):
     info = get_panel(owner_id, panel_id)
@@ -2544,16 +2568,9 @@ async def show_panel_cfg_selector(q, context: ContextTypes.DEFAULT_TYPE, owner_i
         await q.edit_message_text("پنل پیدا نشد.")
         return ConversationHandler.END
 
-    api = get_api(info.get("panel_type"), info.get("sanaei_api_version"))
-    links = []
-    if info.get("template_username"):
-        u, e = api.get_user(info["panel_url"], info["access_token"], info["template_username"])
-        if u and u.get("key"):
-            links = api.fetch_links_from_panel(info["panel_url"], info["template_username"], u["key"])
-    elif info.get("sub_url"):
-        links = api.fetch_subscription_links(info["sub_url"])
+    links = fetch_panel_filter_links(info)
     if not links:
-        await q.edit_message_text("ابتدا template یا لینک سابسکریپشن را تنظیم کن.")
+        await q.edit_message_text("ابتدا لینک سابسکریپشن پنل را تنظیم کن.")
         return ConversationHandler.END
 
     seen, names = set(), []
@@ -2583,16 +2600,9 @@ async def show_panel_cfgnum_selector(q, context: ContextTypes.DEFAULT_TYPE, owne
         await q.edit_message_text("پنل پیدا نشد.")
         return ConversationHandler.END
 
-    api = get_api(info.get("panel_type"), info.get("sanaei_api_version"))
-    links = []
-    if info.get("template_username"):
-        u, e = api.get_user(info["panel_url"], info["access_token"], info["template_username"])
-        if u and u.get("key"):
-            links = api.fetch_links_from_panel(info["panel_url"], info["template_username"], u["key"])
-    elif info.get("sub_url"):
-        links = api.fetch_subscription_links(info["sub_url"])
+    links = fetch_panel_filter_links(info)
     if not links:
-        await q.edit_message_text("ابتدا template یا لینک سابسکریپشن را تنظیم کن.")
+        await q.edit_message_text("ابتدا لینک سابسکریپشن پنل را تنظیم کن.")
         return ConversationHandler.END
 
     titles = [extract_name(s) or f"کانفیگ {i+1}" for i, s in enumerate(links)]
@@ -2618,6 +2628,7 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         return ConversationHandler.END
 
     is_sanaei = p.get('panel_type') == 'sanaei'
+    is_modern_sanaei = is_modern_sanaei_panel(p)
     is_sanaei_bearer = is_sanaei_bearer_panel(p)
     panel_type = (p.get("panel_type") or "").lower()
     supports_api_key = panel_type in ("rebecca", "guardcore")
@@ -2644,7 +2655,7 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         lines.append(f"🏷️ Append ratio to config name: <b>{'ON' if append_ratio_enabled else 'OFF'}</b>")
     if supports_api_key:
         lines.append(f"🔐 API Key: <b>{api_key_state}</b>")
-    if not is_sanaei:
+    if not is_sanaei or is_modern_sanaei:
         lines.append(f"🔗 Sub URL: <code>{p.get('sub_url') or '-'}</code>")
     lines += [
         "",
@@ -2662,7 +2673,7 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         kb.append([InlineKeyboardButton(toggle_label, callback_data="p_toggle_ratio_name")])
     if supports_api_key:
         kb.append([InlineKeyboardButton("🧾 Set/Clear API Key", callback_data="p_set_api_key")])
-    if not is_sanaei:
+    if not is_sanaei or is_modern_sanaei:
         kb.append([InlineKeyboardButton("🔗 Set/Clear Sub URL", callback_data="p_set_sub")])
         kb.append([InlineKeyboardButton("🧷 فیلتر کانفیگ‌های پنل", callback_data="p_filter_cfgs")])
         kb.append([InlineKeyboardButton("🔢 فیلتر بر اساس شماره", callback_data="p_filter_cfgnums")])

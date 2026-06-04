@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote, urljoin
+import base64
 
 import json
 import os
@@ -358,6 +359,32 @@ def fetch_links_from_panel(panel_url: str, token: str, username: str) -> Tuple[L
     except Exception as e:  # pragma: no cover - network errors
         return [], str(e)[:200]
 
+
+def fetch_subscription_links(sub_url: str) -> List[str]:
+    """Return links from a sample subscription URL for config filtering.
+
+    Modern 3x-ui user subscriptions are normally fetched through the client
+    links API, but admins can still provide any representative subscription URL
+    so the bot can list config names/order and save per-panel disabled filters.
+    """
+
+    try:
+        r = SESSION.get(sub_url, headers={"accept": "text/plain,application/json"}, timeout=20)
+        if r.status_code != 200:
+            return []
+        if r.headers.get("content-type", "").startswith("application/json"):
+            return _normalise_links(_json_or_empty(r))
+        txt = r.text or ""
+        lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
+        if not any(ln.lower().startswith(ALLOWED_SCHEMES) for ln in lines):
+            try:
+                decoded = base64.b64decode(txt.strip() + "===")
+                lines = [ln.strip() for ln in decoded.decode(errors="ignore").splitlines() if ln.strip()]
+            except Exception:
+                pass
+        return [ln for ln in lines if ln.lower().startswith(ALLOWED_SCHEMES)]
+    except Exception:  # pragma: no cover - network errors
+        return []
 
 def _update_client(panel_url: str, token: str, username: str, changes: Mapping[str, Any]) -> Tuple[bool, Optional[str]]:
     current, err = _fetch_client(panel_url, token, username)
