@@ -268,6 +268,94 @@ def _prepare_create_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
     return body
 
 
+def _iter_inbound_clients(inbound: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
+    settings = inbound.get("settings") or {}
+    if isinstance(settings, str):
+        try:
+            settings = json.loads(settings or "{}")
+        except Exception:
+            settings = {}
+    clients = settings.get("clients") if isinstance(settings, Mapping) else None
+    if isinstance(clients, Iterable) and not isinstance(clients, (str, bytes, bytearray)):
+        for client in clients:
+            if isinstance(client, Mapping):
+                yield client
+
+
+def _client_email(client: Mapping[str, Any]) -> Optional[str]:
+    value = _first_present(client, "email", "Email", "username")
+    if value is None:
+        return None
+    email = str(value).strip()
+    return email or None
+
+
+def _normalise_client_email(email: Any) -> str:
+    return str(email or "").strip().casefold()
+
+
+def _list_inbounds(panel_url: str, token: str) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+    try:
+        r = _request_with_reauth(
+            "GET",
+            panel_url,
+            token,
+            "panel",
+            "api",
+            "inbounds",
+            "list",
+            headers={"accept": "application/json"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            return None, _response_error(r, 200)
+        data = _json_or_empty(r)
+        if not _panel_success(data):
+            return None, str(data.get("msg") or "request failed")[:200]
+        obj = _unwrap_panel_response(data)
+        if isinstance(obj, list):
+            return [dict(item) for item in obj if isinstance(item, Mapping)], None
+        if isinstance(obj, Mapping):
+            inbounds = obj.get("inbounds") or obj.get("list") or obj.get("items")
+            if isinstance(inbounds, list):
+                return [dict(item) for item in inbounds if isinstance(item, Mapping)], None
+        return [], None
+    except Exception as e:  # pragma: no cover - network errors
+        return None, str(e)[:200]
+
+
+def _fetch_all_client_emails(panel_url: str, token: str) -> Tuple[Optional[set[str]], Optional[str]]:
+    inbounds, err = _list_inbounds(panel_url, token)
+    if err:
+        return None, err
+    emails: set[str] = set()
+    for inbound in inbounds or []:
+        for client in _iter_inbound_clients(inbound):
+            email = _client_email(client)
+            if email:
+                emails.add(_normalise_client_email(email))
+        stats = inbound.get("clientStats")
+        if isinstance(stats, Iterable) and not isinstance(stats, (str, bytes, bytearray)):
+            for stat in stats:
+                if isinstance(stat, Mapping):
+                    email = _client_email(stat)
+                    if email:
+                        emails.add(_normalise_client_email(email))
+    return emails, None
+
+
+def _validate_new_client_email(panel_url: str, token: str, email: Any) -> Optional[str]:
+    normalised = _normalise_client_email(email)
+    if not normalised:
+        return "client email is required"
+    emails, err = _fetch_all_client_emails(panel_url, token)
+    if err:
+        return f"could not verify unique client email: {err}"
+    if normalised in (emails or set()):
+        return f"client email '{str(email).strip()}' already exists on this panel"
+    return None
+
+
 def _fetch_client(panel_url: str, token: str, username: str) -> Tuple[Optional[Any], Optional[str]]:
     try:
         r = _request_with_reauth("GET", panel_url, token, "panel", "api", "clients", "get", username, timeout=15)
@@ -308,6 +396,10 @@ def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dic
 
     try:
         body = _prepare_create_payload(payload or {})
+        client = _extract_client(body.get("client"))
+        duplicate_err = _validate_new_client_email(panel_url, token, _first_present(client, "email", "username"))
+        if duplicate_err:
+            return None, duplicate_err
         r = _request_with_reauth(
             "POST",
             panel_url,

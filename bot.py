@@ -3942,10 +3942,8 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 )
                 obj, e = api.create_user(r["panel_url"], r["access_token"], payload)
                 if not obj:
-                    obj, g = api.get_user(r["panel_url"], r["access_token"], remote_name)
-                    if not obj:
-                        failed.append(f"{r['panel_url']} (inbounds {','.join(map(str, inbound_ids))}): {e or g or 'unknown error'}")
-                        continue
+                    failed.append(f"{r['panel_url']} (inbounds {','.join(map(str, inbound_ids))}): {e or 'unknown error'}")
+                    continue
                 created_remotes.append((r, [remote_name]))
                 if not obj.get("enabled", True):
                     ok_en, err_en = api.enable_remote_user(r["panel_url"], r["access_token"], remote_name)
@@ -4265,10 +4263,8 @@ def sync_user_panels(
                     )
                     obj, e2 = api.create_user(p["panel_url"], p["access_token"], payload)
                     if not obj:
-                        obj, g = api.get_user(p["panel_url"], p["access_token"], remote_name)
-                        if not obj:
-                            added_errs.append(f"{p['panel_url']} (inbounds {','.join(inb_ids)}): {e2 or g or 'unknown error'}")
-                            continue
+                        added_errs.append(f"{p['panel_url']} (inbounds {','.join(inb_ids)}): {e2 or 'unknown error'}")
+                        continue
                     if not obj.get("enabled", True):
                         ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], remote_name)
                         if not ok_en:
