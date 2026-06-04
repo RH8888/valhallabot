@@ -98,7 +98,21 @@ def _unwrap_panel_response(data: Any) -> Any:
 
 
 def _panel_success(data: Any) -> bool:
-    return not isinstance(data, Mapping) or data.get("success", True) is not False
+    """Return whether a wrapped 3x-ui response is successful.
+
+    Some panel forks encode ``success`` as strings or integers instead of a
+    JSON boolean.  Treat every explicit false-like value as a failure so
+    ``{"success": false, ...}`` responses, including duplicate-email
+    errors from ``/panel/api/clients/add``, never get normalised into a
+    successful client object.
+    """
+
+    if not isinstance(data, Mapping) or "success" not in data:
+        return True
+    success = data.get("success")
+    if isinstance(success, str):
+        return success.strip().lower() not in {"", "0", "false", "no", "off"}
+    return bool(success)
 
 
 def _json_or_empty(response: requests.Response) -> Any:
