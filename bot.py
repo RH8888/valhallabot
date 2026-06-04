@@ -85,6 +85,22 @@ log = logging.getLogger("marz_bot")
 
 # ---------- api helpers ----------
 PANEL_TYPES = ("marzneshin", "marzban", "rebecca", "sanaei", "pasarguard", "guardcore")
+PANEL_TYPE_LABELS = {
+    "marzneshin": "Marzneshin",
+    "marzban": "Marzban",
+    "rebecca": "Rebecca",
+    "sanaei": "Sanaei / x-ui",
+    "pasarguard": "Pasarguard",
+    "guardcore": "GuardCore",
+}
+SANAEI_VERSION_LABELS = {
+    "legacy": "Legacy",
+    "modern": "Modern",
+}
+SANAEI_AUTH_TYPE_LABELS = {
+    "cookie": "Cookie",
+    "bearer": "Bearer / API token",
+}
 API_MODULES = {
     "marzneshin": marzneshin,
     "marzban": marzban,
@@ -426,6 +442,30 @@ def _back_kb(callback_data: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("⬅️ Back", callback_data=callback_data)]]
     )
+
+
+def _choice_kb(choices: dict[str, str], callback_prefix: str, back_callback: str = "servers_panels") -> InlineKeyboardMarkup:
+    rows = []
+    items = list(choices.items())
+    for i in range(0, len(items), 2):
+        rows.append([
+            InlineKeyboardButton(label, callback_data=f"{callback_prefix}:{value}")
+            for value, label in items[i:i + 2]
+        ])
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data=back_callback)])
+    return InlineKeyboardMarkup(rows)
+
+
+def _panel_type_kb() -> InlineKeyboardMarkup:
+    return _choice_kb(PANEL_TYPE_LABELS, "add_panel_type")
+
+
+def _sanaei_version_kb() -> InlineKeyboardMarkup:
+    return _choice_kb(SANAEI_VERSION_LABELS, "add_sanaei_version")
+
+
+def _sanaei_auth_type_kb() -> InlineKeyboardMarkup:
+    return _choice_kb(SANAEI_AUTH_TYPE_LABELS, "add_sanaei_auth")
 
 def _sub_placeholder_toggle_label(owner_id: int) -> str:
     enabled = (get_setting(owner_id, "subscription_placeholder_enabled") or "0") != "0"
@@ -3145,10 +3185,37 @@ async def got_panel_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ASK_PANEL_NAME
     context.user_data["panel_name"] = name
     await update.message.reply_text(
-        f"نوع پنل را مشخص کن ({'/'.join(PANEL_TYPES)}):",
-        reply_markup=_back_kb("servers_panels")
+        "نوع پنل را انتخاب کن:",
+        reply_markup=_panel_type_kb(),
     )
     return ASK_PANEL_TYPE
+
+
+async def _apply_panel_type(panel_type: str, context: ContextTypes.DEFAULT_TYPE, send_message):
+    context.user_data["panel_type"] = panel_type
+    context.user_data.pop("sanaei_api_version", None)
+    context.user_data.pop("sanaei_auth_type", None)
+    if panel_type == "sanaei":
+        await send_message(
+            "نسخه x-ui ثنایی را انتخاب کن:",
+            reply_markup=_sanaei_version_kb(),
+        )
+        return ASK_SANAEI_VERSION
+    await send_message("🌐 URL پنل (مثال https://panel.example.com):", reply_markup=_back_kb("servers_panels"))
+    return ASK_PANEL_URL
+
+
+async def got_panel_type_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(update.effective_user.id):
+        await q.edit_message_text("دسترسی ندارید.")
+        return ConversationHandler.END
+    panel_type = (q.data or "").split(":", 1)[1].strip().lower()
+    if panel_type not in PANEL_TYPES:
+        await q.edit_message_text("❌ نوع پنل نامعتبر. دوباره انتخاب کن:", reply_markup=_panel_type_kb())
+        return ASK_PANEL_TYPE
+    return await _apply_panel_type(panel_type, context, q.edit_message_text)
 
 async def got_panel_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -3156,56 +3223,80 @@ async def got_panel_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t = (update.message.text or "").strip().lower()
     if t not in PANEL_TYPES:
         await update.message.reply_text(
-            f"❌ نوع پنل نامعتبر. یکی از {'/'.join(PANEL_TYPES)} بفرست:",
-            reply_markup=_back_kb("servers_panels")
+            "❌ نوع پنل نامعتبر. از دکمه‌ها انتخاب کن:",
+            reply_markup=_panel_type_kb(),
         )
         return ASK_PANEL_TYPE
-    context.user_data["panel_type"] = t
-    context.user_data.pop("sanaei_api_version", None)
-    context.user_data.pop("sanaei_auth_type", None)
-    if t == "sanaei":
-        await update.message.reply_text(
-            "نسخه x-ui ثنایی را مشخص کن (legacy/modern):",
-            reply_markup=_back_kb("servers_panels"),
-        )
+    return await _apply_panel_type(t, context, update.message.reply_text)
+
+
+async def got_sanaei_version_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(update.effective_user.id):
+        await q.edit_message_text("دسترسی ندارید.")
+        return ConversationHandler.END
+    version = (q.data or "").split(":", 1)[1].strip().lower()
+    if version not in SANAEI_VERSION_LABELS:
+        await q.edit_message_text("❌ نسخه نامعتبر. دوباره انتخاب کن:", reply_markup=_sanaei_version_kb())
         return ASK_SANAEI_VERSION
-    await update.message.reply_text("🌐 URL پنل (مثال https://panel.example.com):", reply_markup=_back_kb("servers_panels"))
-    return ASK_PANEL_URL
+    return await _apply_sanaei_version(version, context, q.edit_message_text)
+
+
+async def _apply_sanaei_version(version: str, context: ContextTypes.DEFAULT_TYPE, send_message):
+    context.user_data["sanaei_api_version"] = version
+    context.user_data.pop("sanaei_auth_type", None)
+    if version == "legacy":
+        await send_message("🌐 URL پنل (مثال https://panel.example.com):", reply_markup=_back_kb("servers_panels"))
+        return ASK_PANEL_URL
+    await send_message(
+        "نوع احراز هویت ثنایی مدرن را انتخاب کن:",
+        reply_markup=_sanaei_auth_type_kb(),
+    )
+    return ASK_SANAEI_AUTH_TYPE
 
 async def got_sanaei_version(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
     version = (update.message.text or "").strip().lower()
-    if version not in {"legacy", "modern"}:
+    if version not in SANAEI_VERSION_LABELS:
         await update.message.reply_text(
-            "❌ نسخه نامعتبر. یکی از legacy/modern بفرست:",
-            reply_markup=_back_kb("servers_panels"),
+            "❌ نسخه نامعتبر. از دکمه‌ها انتخاب کن:",
+            reply_markup=_sanaei_version_kb(),
         )
         return ASK_SANAEI_VERSION
-    context.user_data["sanaei_api_version"] = version
-    context.user_data.pop("sanaei_auth_type", None)
-    if version == "legacy":
-        await update.message.reply_text("🌐 URL پنل (مثال https://panel.example.com):", reply_markup=_back_kb("servers_panels"))
-        return ASK_PANEL_URL
-    await update.message.reply_text(
-        "نوع احراز هویت ثنایی مدرن را مشخص کن (cookie/bearer):",
-        reply_markup=_back_kb("servers_panels"),
-    )
-    return ASK_SANAEI_AUTH_TYPE
+    return await _apply_sanaei_version(version, context, update.message.reply_text)
+
+
+async def got_sanaei_auth_type_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(update.effective_user.id):
+        await q.edit_message_text("دسترسی ندارید.")
+        return ConversationHandler.END
+    auth_type = (q.data or "").split(":", 1)[1].strip().lower()
+    if auth_type not in SANAEI_AUTH_TYPE_LABELS:
+        await q.edit_message_text("❌ نوع احراز هویت نامعتبر. دوباره انتخاب کن:", reply_markup=_sanaei_auth_type_kb())
+        return ASK_SANAEI_AUTH_TYPE
+    return await _apply_sanaei_auth_type(auth_type, context, q.edit_message_text)
+
+
+async def _apply_sanaei_auth_type(auth_type: str, context: ContextTypes.DEFAULT_TYPE, send_message):
+    context.user_data["sanaei_auth_type"] = auth_type
+    await send_message("🌐 URL پنل (مثال https://panel.example.com):", reply_markup=_back_kb("servers_panels"))
+    return ASK_PANEL_URL
 
 async def got_sanaei_auth_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
     auth_type = (update.message.text or "").strip().lower()
-    if auth_type not in {"cookie", "bearer"}:
+    if auth_type not in SANAEI_AUTH_TYPE_LABELS:
         await update.message.reply_text(
-            "❌ نوع احراز هویت نامعتبر. یکی از cookie/bearer بفرست:",
-            reply_markup=_back_kb("servers_panels"),
+            "❌ نوع احراز هویت نامعتبر. از دکمه‌ها انتخاب کن:",
+            reply_markup=_sanaei_auth_type_kb(),
         )
         return ASK_SANAEI_AUTH_TYPE
-    context.user_data["sanaei_auth_type"] = auth_type
-    await update.message.reply_text("🌐 URL پنل (مثال https://panel.example.com):", reply_markup=_back_kb("servers_panels"))
-    return ASK_PANEL_URL
+    return await _apply_sanaei_auth_type(auth_type, context, update.message.reply_text)
 
 async def got_panel_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -4333,9 +4424,18 @@ def build_app():
         states={
             # add panel (admin)
             ASK_PANEL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_name)],
-            ASK_PANEL_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_type)],
-            ASK_SANAEI_VERSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_sanaei_version)],
-            ASK_SANAEI_AUTH_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_sanaei_auth_type)],
+            ASK_PANEL_TYPE: [
+                CallbackQueryHandler(got_panel_type_button, pattern=r"^add_panel_type:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_type),
+            ],
+            ASK_SANAEI_VERSION: [
+                CallbackQueryHandler(got_sanaei_version_button, pattern=r"^add_sanaei_version:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, got_sanaei_version),
+            ],
+            ASK_SANAEI_AUTH_TYPE: [
+                CallbackQueryHandler(got_sanaei_auth_type_button, pattern=r"^add_sanaei_auth:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, got_sanaei_auth_type),
+            ],
             ASK_PANEL_URL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_url)],
             ASK_PANEL_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_user)],
             ASK_PANEL_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_pass)],
