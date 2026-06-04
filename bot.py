@@ -161,6 +161,30 @@ def remote_names_for_panel(panel: dict | None, remote_username: str) -> list[str
     return [remote_username]
 
 
+def is_duplicate_create_error(error: object) -> bool:
+    """Return True when a panel rejected creation because the name exists.
+
+    User-creation flows sometimes fetch the remote user after a failed create to
+    recover from ambiguous network/panel responses.  Duplicate-name responses
+    are not ambiguous: treating the existing remote user as the newly created
+    user can attach this bot record to another customer's subscription.
+    """
+
+    text = str(error or "").casefold()
+    if not text:
+        return False
+    duplicate_markers = (
+        "already exists",
+        "already in use",
+        "duplicate",
+        "409",
+    )
+    identity_markers = ("email", "username", "user", "client", "subscription")
+    return any(marker in text for marker in duplicate_markers) and any(
+        marker in text for marker in identity_markers
+    )
+
+
 def _normalise_sanaei_inbound_ids(inbound_ids: int | str | list | tuple | set) -> list[int]:
     if isinstance(inbound_ids, (list, tuple, set)):
         values = inbound_ids
@@ -3967,6 +3991,10 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 )
                 obj, e = api.create_user(r["panel_url"], r["access_token"], payload)
                 if not obj:
+                    if is_duplicate_create_error(e):
+                        failed.append(f"{r['panel_url']} (inb {inb}): {e or 'duplicate user'}")
+                        panel_failed = True
+                        continue
                     obj, g = api.get_user(r["panel_url"], r["access_token"], rn)
                     if not obj:
                         failed.append(f"{r['panel_url']} (inb {inb}): {e or g or 'unknown error'}")
@@ -4010,6 +4038,9 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                     payload["group_ids"] = list(groups)
         obj, e = api.create_user(r["panel_url"], r["access_token"], payload)
         if not obj:
+            if is_duplicate_create_error(e):
+                failed.append(f"{r['panel_url']}: {e or 'duplicate user'}")
+                continue
             obj, g = api.get_user(r["panel_url"], r["access_token"], remote_name)
             if not obj:
                 failed.append(f"{r['panel_url']}: {e or g or 'unknown error'}")
@@ -4178,6 +4209,9 @@ def sync_user_panels(
                 }
                 obj, e2 = api.create_user(p["panel_url"], p["access_token"], payload)
                 if not obj:
+                    if is_duplicate_create_error(e2):
+                        added_errs.append(f"{p['panel_url']}: {e2 or 'duplicate user'}")
+                        continue
                     obj, g = api.get_user(p["panel_url"], p["access_token"], username)
                     if not obj:
                         added_errs.append(f"{p['panel_url']}: {e2 or g or 'unknown error'}")
@@ -4231,6 +4265,9 @@ def sync_user_panels(
                 }
                 obj, e2 = api.create_user(p["panel_url"], p["access_token"], payload)
                 if not obj:
+                    if is_duplicate_create_error(e2):
+                        added_errs.append(f"{p['panel_url']}: {e2 or 'duplicate user'}")
+                        continue
                     obj, g = api.get_user(p["panel_url"], p["access_token"], remote_username)
                     if not obj:
                         added_errs.append(f"{p['panel_url']}: {e2 or g or 'unknown error'}")
