@@ -28,9 +28,9 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from services import ensure_panel_tokens, init_mysql_pool, with_mysql_cursor
 from services.database import errorcode, mysql_errors
-from services.settings import get_setting as get_owner_setting
+from services.settings import get_setting as get_owner_setting, get_setting_exact
 from apis import sanaei, sanaei_modern, pasarguard, rebecca, guardcore
-from .ownership import expand_owner_ids, canonical_owner_id
+from .ownership import expand_owner_ids, canonical_owner_id, ordered_admin_ids
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | flask_agg | %(message)s",
@@ -802,11 +802,39 @@ def _replace_placeholders(template: str, values: dict[str, str]) -> str:
     return re.sub(r"\{([A-Z0-9_]+)\}", repl, template, flags=re.IGNORECASE)
 
 
-def build_sub_placeholder_config(owner_id: int, local_username: str, lu) -> str | None:
-    enabled = (get_setting(owner_id, SUB_PLACEHOLDER_ENABLED_KEY) or "0") != "0"
-    if not enabled:
+def _root_admin_id() -> int | None:
+    admins = ordered_admin_ids()
+    return admins[0] if admins else None
+
+
+def _exact_setting(owner_id: int | None, key: str) -> str | None:
+    if owner_id is None:
         return None
-    template = (get_setting(owner_id, SUB_PLACEHOLDER_TEMPLATE_KEY) or "").strip()
+    return get_setting_exact(int(owner_id), key)
+
+
+def _effective_sub_placeholder_enabled(owner_id: int) -> bool:
+    root_id = _root_admin_id()
+    raw = _exact_setting(owner_id, SUB_PLACEHOLDER_ENABLED_KEY)
+    if raw is None and root_id is not None and int(owner_id) != root_id:
+        raw = _exact_setting(root_id, SUB_PLACEHOLDER_ENABLED_KEY)
+    return (raw or "0") != "0"
+
+
+def _effective_sub_placeholder_template(owner_id: int) -> str:
+    root_id = _root_admin_id()
+    template = (_exact_setting(owner_id, SUB_PLACEHOLDER_TEMPLATE_KEY) or "").strip()
+    if template:
+        return template
+    if root_id is not None and int(owner_id) != root_id:
+        return (_exact_setting(root_id, SUB_PLACEHOLDER_TEMPLATE_KEY) or "").strip()
+    return ""
+
+
+def build_sub_placeholder_config(owner_id: int, local_username: str, lu) -> str | None:
+    if not _effective_sub_placeholder_enabled(owner_id):
+        return None
+    template = _effective_sub_placeholder_template(owner_id)
     if not template:
         return None
 
