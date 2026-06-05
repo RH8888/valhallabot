@@ -466,6 +466,9 @@ def make_panel_name(url, u):
         h = urlparse(url).hostname or url
     except Exception:
         h = url
+    h = str(h).replace("www.", "")
+    base = f"{h}-{u}".strip("-")
+    return (base[:120] if len(base) > 120 else base) or "panel"
 
 def normalize_domain_entry(value: str) -> str:
     value = (value or "").strip()
@@ -604,25 +607,88 @@ def _admin_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([row for row in kb if row])
 
 
-def get_extra_domains(owner_id: int) -> list[str]:
+def _domain_settings_owner(owner_id: int) -> int:
     settings_owner = owner_id
     if not is_admin(owner_id):
         admins = sorted(admin_ids())
         if admins:
             settings_owner = admins[0]
-    raw = get_setting(settings_owner, "extra_sub_domains") or ""
-    return parse_extra_domains(raw)
+    return settings_owner
 
-def build_sub_links(owner_id: int, username: str, app_key: str) -> list[str]:
+
+def _public_base_parts() -> tuple[str, str, str]:
     public_base = os.getenv("PUBLIC_BASE_URL", "http://localhost:5000").rstrip("/")
     parsed = urlparse(public_base)
     scheme = parsed.scheme or "https"
-    base_host = (parsed.netloc or parsed.path).lower()
-    links = [f"{public_base}/sub/{username}/{app_key}/links"]
-    for host in get_extra_domains(owner_id):
-        if host == base_host:
+    base_host = normalize_domain_entry(parsed.netloc or parsed.path)
+    return public_base, scheme, base_host
+
+
+def get_extra_domains(owner_id: int) -> list[str]:
+    raw = get_setting(_domain_settings_owner(owner_id), "extra_sub_domains") or ""
+    return parse_extra_domains(raw)
+
+
+def set_extra_domains(owner_id: int, domains: list[str]) -> None:
+    cleaned = []
+    seen = set()
+    for domain in domains:
+        host = normalize_domain_entry(domain)
+        if not host or host in seen:
             continue
-        links.append(f"{scheme}://{host}/sub/{username}/{app_key}/links")
+        cleaned.append(host)
+        seen.add(host)
+    set_setting(owner_id, "extra_sub_domains", "\n".join(cleaned))
+
+
+def get_disabled_sub_domains(owner_id: int) -> set[str]:
+    raw = get_setting(_domain_settings_owner(owner_id), "disabled_sub_domains") or ""
+    return set(parse_extra_domains(raw))
+
+
+def set_disabled_sub_domains(owner_id: int, domains: set[str]) -> None:
+    cleaned = []
+    seen = set()
+    for domain in sorted(domains):
+        host = normalize_domain_entry(domain)
+        if not host or host in seen:
+            continue
+        cleaned.append(host)
+        seen.add(host)
+    set_setting(owner_id, "disabled_sub_domains", "\n".join(cleaned))
+
+
+def get_subscription_domain_entries(owner_id: int) -> list[dict[str, str | bool]]:
+    public_base, scheme, base_host = _public_base_parts()
+    disabled = get_disabled_sub_domains(owner_id)
+    entries: list[dict[str, str | bool]] = []
+    if base_host:
+        entries.append({
+            "host": base_host,
+            "url_base": public_base,
+            "kind": "main",
+            "enabled": base_host not in disabled,
+        })
+    seen = {base_host} if base_host else set()
+    for host in get_extra_domains(owner_id):
+        if host in seen:
+            continue
+        seen.add(host)
+        entries.append({
+            "host": host,
+            "url_base": f"{scheme}://{host}",
+            "kind": "extra",
+            "enabled": host not in disabled,
+        })
+    return entries
+
+
+def build_sub_links(owner_id: int, username: str, app_key: str) -> list[str]:
+    links = []
+    for entry in get_subscription_domain_entries(owner_id):
+        if not entry.get("enabled"):
+            continue
+        links.append(f"{entry['url_base']}/sub/{username}/{app_key}/links")
     return links
 
 def format_sub_links_html(links: list[str]) -> str:
@@ -642,9 +708,54 @@ def format_sub_links_text(links: list[str]) -> str:
     lines = ["🔗 Links:"]
     lines.extend([f"• {link}" for link in links])
     return "\n".join(lines)
-    h = str(h).replace("www.", "")
-    base = f"{h}-{u}".strip("-")
-    return (base[:120] if len(base) > 120 else base) or "panel"
+
+
+def _subscription_domains_text(owner_id: int, notice: str | None = None) -> str:
+    entries = get_subscription_domain_entries(owner_id)
+    lines = []
+    if notice:
+        lines.append(notice)
+        lines.append("")
+    lines.append("🌐 Subscription domains")
+    lines.append("")
+    lines.append("Use Add Domain to add a new domain, then enable/disable each domain from the buttons below.")
+    lines.append("The main PUBLIC_BASE_URL domain can also be disabled, so it will not be shown when creating users.")
+    lines.append("")
+    if not entries:
+        lines.append("No domains are configured.")
+        return "\n".join(lines)
+    lines.append("Current domains:")
+    for entry in entries:
+        icon = "🟢" if entry.get("enabled") else "🔴"
+        kind = "Main" if entry.get("kind") == "main" else "Extra"
+        lines.append(f"{icon} {kind}: {entry['host']}")
+    return "\n".join(lines)
+
+
+def _subscription_domains_kb(owner_id: int) -> InlineKeyboardMarkup:
+    entries = get_subscription_domain_entries(owner_id)
+    rows = [[InlineKeyboardButton("➕ Add Domain", callback_data="domain_add")]]
+    for idx, entry in enumerate(entries):
+        host = str(entry["host"])
+        short_host = host if len(host) <= 30 else host[:27] + "…"
+        if entry.get("enabled"):
+            toggle_label = f"🔴 Disable {short_host}"
+        else:
+            toggle_label = f"🟢 Enable {short_host}"
+        row = [InlineKeyboardButton(toggle_label, callback_data=f"domain_toggle:{idx}")]
+        if entry.get("kind") == "extra":
+            row.append(InlineKeyboardButton("🗑️", callback_data=f"domain_delete:{idx}"))
+        rows.append(row)
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_technical")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def show_subscription_domains_menu(q, owner_id: int, notice: str | None = None):
+    await q.edit_message_text(
+        _subscription_domains_text(owner_id, notice),
+        reply_markup=_subscription_domains_kb(owner_id),
+    )
+    return ConversationHandler.END
 
 def generate_qr_png(data: str) -> io.BytesIO:
     qr = qrcode.QRCode(
@@ -1878,16 +1989,59 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(uid):
             await q.edit_message_text("دسترسی ندارید.")
             return ConversationHandler.END
-        cur_domains = get_extra_domains(uid)
-        cur = "\n".join(cur_domains) if cur_domains else "—"
+        return await show_subscription_domains_menu(q, uid)
+
+    if data == "domain_add":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
         await q.edit_message_text(
-            "دامنه‌های اضافه فعلی:\n"
-            f"{cur}\n\n"
-            "دامنه‌های جدید را با کاما یا خط جدید بفرست.\n"
-            "برای حذف: clear",
-            reply_markup=_back_kb("admin_technical")
+            "دامنه جدید را بفرست. می‌تونی چند دامنه را با کاما جدا کنی.\n"
+            "مثال: sub.example.com",
+            reply_markup=_back_kb("extra_sub_domains"),
         )
         return ASK_EXTRA_SUB_DOMAINS
+
+    if data.startswith("domain_toggle:"):
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        try:
+            idx = int(data.split(":", 1)[1])
+        except ValueError:
+            return await show_subscription_domains_menu(q, uid, "❌ دامنه نامعتبر است.")
+        entries = get_subscription_domain_entries(uid)
+        if idx < 0 or idx >= len(entries):
+            return await show_subscription_domains_menu(q, uid, "❌ دامنه پیدا نشد.")
+        host = str(entries[idx]["host"])
+        disabled = get_disabled_sub_domains(uid)
+        if host in disabled:
+            disabled.remove(host)
+            notice = f"✅ {host} فعال شد."
+        else:
+            disabled.add(host)
+            notice = f"✅ {host} غیرفعال شد."
+        set_disabled_sub_domains(uid, disabled)
+        return await show_subscription_domains_menu(q, uid, notice)
+
+    if data.startswith("domain_delete:"):
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        try:
+            idx = int(data.split(":", 1)[1])
+        except ValueError:
+            return await show_subscription_domains_menu(q, uid, "❌ دامنه نامعتبر است.")
+        entries = get_subscription_domain_entries(uid)
+        if idx < 0 or idx >= len(entries) or entries[idx].get("kind") != "extra":
+            return await show_subscription_domains_menu(q, uid, "❌ فقط دامنه‌های اضافه قابل حذف هستند.")
+        host = str(entries[idx]["host"])
+        extras = [domain for domain in get_extra_domains(uid) if domain != host]
+        disabled = get_disabled_sub_domains(uid)
+        disabled.discard(host)
+        set_extra_domains(uid, extras)
+        set_disabled_sub_domains(uid, disabled)
+        return await show_subscription_domains_menu(q, uid, f"✅ {host} حذف شد.")
 
 
     # --- admin/agent shared
@@ -3178,20 +3332,43 @@ async def got_service_emerg_cfg(update: Update, context: ContextTypes.DEFAULT_TY
 async def got_extra_sub_domains(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
+    owner_id = update.effective_user.id
     msg = (update.message.text or "").strip()
     if not msg:
-        await update.message.reply_text("❌ لیست خالیه. دوباره بفرست:")
+        await update.message.reply_text("❌ دامنه خالیه. دوباره بفرست:")
         return ASK_EXTRA_SUB_DOMAINS
     if msg.lower() in {"off", "none", "clear", "delete"}:
-        set_setting(update.effective_user.id, "extra_sub_domains", "")
-        await update.message.reply_text("✅ دامنه‌های اضافه پاک شد.", reply_markup=_back_kb("admin_technical"))
+        set_extra_domains(owner_id, [])
+        disabled = get_disabled_sub_domains(owner_id)
+        _, _, base_host = _public_base_parts()
+        set_disabled_sub_domains(owner_id, {base_host} if base_host in disabled else set())
+        await update.message.reply_text("✅ دامنه‌های اضافه پاک شد.", reply_markup=_back_kb("extra_sub_domains"))
         return ConversationHandler.END
     domains = parse_extra_domains(msg)
     if not domains:
         await update.message.reply_text("❌ دامنه معتبر پیدا نشد. دوباره بفرست:")
         return ASK_EXTRA_SUB_DOMAINS
-    set_setting(update.effective_user.id, "extra_sub_domains", "\n".join(domains))
-    await update.message.reply_text("✅ دامنه‌های اضافه ذخیره شد.", reply_markup=_back_kb("admin_technical"))
+
+    _, _, base_host = _public_base_parts()
+    existing = get_extra_domains(owner_id)
+    merged = list(existing)
+    added = []
+    seen = set(existing)
+    if base_host:
+        seen.add(base_host)
+    for domain in domains:
+        if domain in seen:
+            continue
+        merged.append(domain)
+        added.append(domain)
+        seen.add(domain)
+    set_extra_domains(owner_id, merged)
+
+    if added:
+        msg_out = "✅ دامنه اضافه شد:\n" + "\n".join(f"• {domain}" for domain in added)
+    else:
+        msg_out = "ℹ️ دامنه جدیدی اضافه نشد؛ دامنه‌ها قبلاً وجود داشتند."
+    await update.message.reply_text(msg_out, reply_markup=_back_kb("extra_sub_domains"))
     return ConversationHandler.END
 
 
@@ -4650,7 +4827,7 @@ def build_app():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, got_sub_placeholder_template)
             ],
             ASK_SERVICE_EMERGENCY_CFG: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_service_emerg_cfg)],
-            ASK_EXTRA_SUB_DOMAINS: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_extra_sub_domains)],
+            ASK_EXTRA_SUB_DOMAINS: [CallbackQueryHandler(on_button), MessageHandler(filters.TEXT & ~filters.COMMAND, got_extra_sub_domains)],
             ASK_NEAR_LIMIT_THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_near_limit_threshold)],
             ASK_NEAR_LIMIT_SYNC_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_near_limit_sync_interval)],
             ASK_NORMAL_SYNC_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_normal_sync_interval)],
