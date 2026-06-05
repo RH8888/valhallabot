@@ -272,6 +272,35 @@ def is_admin(tg_id: int) -> bool:
     return tg_id in admin_ids()
 
 
+def _mask_panel_address(panel_url: str | None) -> str:
+    """Return an agent-safe panel address without exposing host, port, or path."""
+
+    raw = (panel_url or "").strip()
+    if not raw:
+        return "پنل نامشخص"
+    parsed = urlparse(raw if "://" in raw else f"//{raw}")
+    host = parsed.hostname or raw.split("/", 1)[0].split(":", 1)[0]
+    labels = [label for label in host.split(".") if label]
+    if not labels:
+        return "پنل نامشخص"
+
+    def mask_label(label: str) -> str:
+        if len(label) <= 1:
+            return f"{label}***"
+        return f"{label[:2]}***"
+
+    return ".".join(mask_label(label) for label in labels)
+
+
+def panel_error_address(panel: dict | str | None, owner_id: int) -> str:
+    """Show full panel URLs to admins, but mask them for agents."""
+
+    panel_url = panel.get("panel_url") if isinstance(panel, dict) else panel
+    if is_admin(owner_id):
+        return (panel_url or "unknown panel").strip() or "unknown panel"
+    return _mask_panel_address(panel_url)
+
+
 def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> int:
     owner_id = int(context.user_data.get("manage_owner_id") or actor_id)
     if owner_id != actor_id and not is_admin(actor_id):
@@ -3892,7 +3921,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
             )
             if e:
                 errs.append(
-                    f"{r['panel_url']} (template '{r['template_username']}'): {e}"
+                    f"{panel_error_address(r, owner_id)} (template '{r['template_username']}'): {e}"
                 )
             per_panel[r["id"]] = {"service_ids": svc or []}
         elif r.get("panel_type") == "sanaei":
@@ -3901,13 +3930,13 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
         else:
             tmpl = r.get("template_username")
             if not tmpl:
-                errs.append(f"{r['panel_url']}: template missing")
+                errs.append(f"{panel_error_address(r, owner_id)}: template missing")
                 per_panel[r["id"]] = {"proxies": {}, "inbounds": {}}
                 continue
             obj, e = api.get_user(r["panel_url"], r["access_token"], tmpl)
             if not obj:
                 errs.append(
-                    f"{r['panel_url']} (template '{tmpl}'): {e or 'not found'}"
+                    f"{panel_error_address(r, owner_id)} (template '{tmpl}'): {e or 'not found'}"
                 )
                 per_panel[r["id"]] = {"proxies": {}, "inbounds": {}}
                 continue
@@ -3966,13 +3995,13 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 )
                 obj, e = api.create_user(r["panel_url"], r["access_token"], payload)
                 if not obj:
-                    failed.append(f"{r['panel_url']} (inbounds {','.join(map(str, inbound_ids))}): {e or 'unknown error'}")
+                    failed.append(f"{panel_error_address(r, owner_id)} (inbounds {','.join(map(str, inbound_ids))}): {e or 'unknown error'}")
                     continue
                 created_remotes.append((r, [remote_name]))
                 if not obj.get("enabled", True):
                     ok_en, err_en = api.enable_remote_user(r["panel_url"], r["access_token"], remote_name)
                     if not ok_en:
-                        failed.append(f"{r['panel_url']}: enable failed - {err_en or 'unknown'}")
+                        failed.append(f"{panel_error_address(r, owner_id)}: enable failed - {err_en or 'unknown'}")
                         continue
                 save_link(owner_id, app_username, r["id"], remote_name)
                 ok += 1
@@ -3992,18 +4021,18 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 obj, e = api.create_user(r["panel_url"], r["access_token"], payload)
                 if not obj:
                     if is_duplicate_create_error(e):
-                        failed.append(f"{r['panel_url']} (inb {inb}): {e or 'duplicate user'}")
+                        failed.append(f"{panel_error_address(r, owner_id)} (inb {inb}): {e or 'duplicate user'}")
                         panel_failed = True
                         continue
                     obj, g = api.get_user(r["panel_url"], r["access_token"], rn)
                     if not obj:
-                        failed.append(f"{r['panel_url']} (inb {inb}): {e or g or 'unknown error'}")
+                        failed.append(f"{panel_error_address(r, owner_id)} (inb {inb}): {e or g or 'unknown error'}")
                         panel_failed = True
                         continue
                 if not obj.get("enabled", True):
                     ok_en, err_en = api.enable_remote_user(r["panel_url"], r["access_token"], rn)
                     if not ok_en:
-                        failed.append(f"{r['panel_url']} (inb {inb}): enable failed - {err_en or 'unknown'}")
+                        failed.append(f"{panel_error_address(r, owner_id)} (inb {inb}): enable failed - {err_en or 'unknown'}")
                         panel_failed = True
                         continue
                 remote_names.append(rn)
@@ -4014,7 +4043,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 if not panel_failed:
                     ok += 1
             if panel_failed:
-                failed.append(f"{r['panel_url']}: user creation was partial and rolled back")
+                failed.append(f"{panel_error_address(r, owner_id)}: user creation was partial and rolled back")
             continue
         else:
             expire_ts = 0 if usage_sec <= 0 else int(datetime.now(timezone.utc).timestamp()) + usage_sec
@@ -4039,17 +4068,17 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
         obj, e = api.create_user(r["panel_url"], r["access_token"], payload)
         if not obj:
             if is_duplicate_create_error(e):
-                failed.append(f"{r['panel_url']}: {e or 'duplicate user'}")
+                failed.append(f"{panel_error_address(r, owner_id)}: {e or 'duplicate user'}")
                 continue
             obj, g = api.get_user(r["panel_url"], r["access_token"], remote_name)
             if not obj:
-                failed.append(f"{r['panel_url']}: {e or g or 'unknown error'}")
+                failed.append(f"{panel_error_address(r, owner_id)}: {e or g or 'unknown error'}")
                 continue
         created_remotes.append((r, [remote_name]))
         if not obj.get("enabled", True):
             ok_en, err_en = api.enable_remote_user(r["panel_url"], r["access_token"], remote_name)
             if not ok_en:
-                failed.append(f"{r['panel_url']}: enable failed - {err_en or 'unknown'}")
+                failed.append(f"{panel_error_address(r, owner_id)}: enable failed - {err_en or 'unknown'}")
                 continue
         save_link(owner_id, app_username, r["id"], remote_name)
         ok += 1
@@ -4175,12 +4204,12 @@ def sync_user_panels(
                         if not obj.get("enabled", True):
                             ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], username)
                             if not ok_en:
-                                added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
+                                added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
                         save_link(owner_id, username, int(pid), username)
                         links_map[int(pid)] = username
                         added_ok += 1
                     else:
-                        added_errs.append(f"{p['panel_url']}: no template & user not found")
+                        added_errs.append(f"{panel_error_address(p, owner_id)}: no template & user not found")
                     continue
 
                 svc, e = api.fetch_user_services(p["panel_url"], p["access_token"], tmpl)
@@ -4190,12 +4219,12 @@ def sync_user_panels(
                         if not obj.get("enabled", True):
                             ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], username)
                             if not ok_en:
-                                added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
+                                added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
                         save_link(owner_id, username, int(pid), username)
                         links_map[int(pid)] = username
                         added_ok += 1
                     else:
-                        added_errs.append(f"{p['panel_url']}: {e}")
+                        added_errs.append(f"{panel_error_address(p, owner_id)}: {e}")
                     continue
 
                 payload = {
@@ -4210,17 +4239,17 @@ def sync_user_panels(
                 obj, e2 = api.create_user(p["panel_url"], p["access_token"], payload)
                 if not obj:
                     if is_duplicate_create_error(e2):
-                        added_errs.append(f"{p['panel_url']}: {e2 or 'duplicate user'}")
+                        added_errs.append(f"{panel_error_address(p, owner_id)}: {e2 or 'duplicate user'}")
                         continue
                     obj, g = api.get_user(p["panel_url"], p["access_token"], username)
                     if not obj:
-                        added_errs.append(f"{p['panel_url']}: {e2 or g or 'unknown error'}")
+                        added_errs.append(f"{panel_error_address(p, owner_id)}: {e2 or g or 'unknown error'}")
                         continue
 
                 if not obj.get("enabled", True):
                     ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], username)
                     if not ok_en:
-                        added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
+                        added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
 
                 save_link(owner_id, username, int(pid), username)
                 links_map[int(pid)] = username
@@ -4233,12 +4262,12 @@ def sync_user_panels(
                         if not obj.get("enabled", True):
                             ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], remote_username)
                             if not ok_en:
-                                added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
+                                added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
                         save_link(owner_id, username, int(pid), remote_username)
                         links_map[int(pid)] = remote_username
                         added_ok += 1
                     else:
-                        added_errs.append(f"{p['panel_url']}: no template & user not found")
+                        added_errs.append(f"{panel_error_address(p, owner_id)}: no template & user not found")
                     continue
 
                 svc, e = api.fetch_user_services(p["panel_url"], p["access_token"], tmpl)
@@ -4248,12 +4277,12 @@ def sync_user_panels(
                         if not obj.get("enabled", True):
                             ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], remote_username)
                             if not ok_en:
-                                added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
+                                added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
                         save_link(owner_id, username, int(pid), remote_username)
                         links_map[int(pid)] = remote_username
                         added_ok += 1
                     else:
-                        added_errs.append(f"{p['panel_url']}: {e}")
+                        added_errs.append(f"{panel_error_address(p, owner_id)}: {e}")
                     continue
 
                 payload = {
@@ -4266,28 +4295,28 @@ def sync_user_panels(
                 obj, e2 = api.create_user(p["panel_url"], p["access_token"], payload)
                 if not obj:
                     if is_duplicate_create_error(e2):
-                        added_errs.append(f"{p['panel_url']}: {e2 or 'duplicate user'}")
+                        added_errs.append(f"{panel_error_address(p, owner_id)}: {e2 or 'duplicate user'}")
                         continue
                     obj, g = api.get_user(p["panel_url"], p["access_token"], remote_username)
                     if not obj:
-                        added_errs.append(f"{p['panel_url']}: {e2 or g or 'unknown error'}")
+                        added_errs.append(f"{panel_error_address(p, owner_id)}: {e2 or g or 'unknown error'}")
                         continue
 
                 if not obj.get("enabled", True):
                     ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], remote_username)
                     if not ok_en:
-                        added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
+                        added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
 
                 save_link(owner_id, username, int(pid), remote_username)
                 links_map[int(pid)] = remote_username
                 added_ok += 1
             elif p.get("panel_type") == "sanaei":
                 if not tmpl:
-                    added_errs.append(f"{p['panel_url']}: inbound missing")
+                    added_errs.append(f"{panel_error_address(p, owner_id)}: inbound missing")
                     continue
                 inb_ids = [x.strip() for x in tmpl.split(",") if x.strip().isdigit()]
                 if not inb_ids:
-                    added_errs.append(f"{p['panel_url']}: inbound missing")
+                    added_errs.append(f"{panel_error_address(p, owner_id)}: inbound missing")
                     continue
                 if is_modern_sanaei_panel(p):
                     remote_name = panel_username(p.get("panel_type"), username)
@@ -4300,12 +4329,12 @@ def sync_user_panels(
                     )
                     obj, e2 = api.create_user(p["panel_url"], p["access_token"], payload)
                     if not obj:
-                        added_errs.append(f"{p['panel_url']} (inbounds {','.join(inb_ids)}): {e2 or 'unknown error'}")
+                        added_errs.append(f"{panel_error_address(p, owner_id)} (inbounds {','.join(inb_ids)}): {e2 or 'unknown error'}")
                         continue
                     if not obj.get("enabled", True):
                         ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], remote_name)
                         if not ok_en:
-                            added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
+                            added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
                             continue
                     save_link(owner_id, username, int(pid), remote_name)
                     links_map[int(pid)] = remote_name
@@ -4324,12 +4353,12 @@ def sync_user_panels(
                     )
                     obj, e2 = api.create_user(p["panel_url"], p["access_token"], payload)
                     if not obj:
-                        added_errs.append(f"{p['panel_url']} (inb {inb}): {e2 or 'unknown error'}")
+                        added_errs.append(f"{panel_error_address(p, owner_id)} (inb {inb}): {e2 or 'unknown error'}")
                         continue
                     if not obj.get("enabled", True):
                         ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], remote_name)
                         if not ok_en:
-                            added_errs.append(f"{p['panel_url']} (inb {inb}): enable failed - {err_en or 'unknown'}")
+                            added_errs.append(f"{panel_error_address(p, owner_id)} (inb {inb}): enable failed - {err_en or 'unknown'}")
                             continue
                     remote_names.append(remote_name)
                 if remote_names:
@@ -4347,7 +4376,7 @@ def sync_user_panels(
                         )
                         if not tmpl_obj:
                             added_errs.append(
-                                f"{p['panel_url']} (template '{tmpl}'): {t_err or 'not found'}"
+                                f"{panel_error_address(p, owner_id)} (template '{tmpl}'): {t_err or 'not found'}"
                             )
                             continue
                         payload = {
@@ -4372,12 +4401,12 @@ def sync_user_panels(
                         )
                         if not obj:
                             added_errs.append(
-                                f"{p['panel_url']}: {e2 or 'unknown error'}"
+                                f"{panel_error_address(p, owner_id)}: {e2 or 'unknown error'}"
                             )
                             continue
                     else:
                         added_errs.append(
-                            f"{p['panel_url']}: no template & user not found"
+                            f"{panel_error_address(p, owner_id)}: no template & user not found"
                         )
                         continue
                 if not obj.get("enabled", True):
@@ -4386,7 +4415,7 @@ def sync_user_panels(
                     )
                     if not ok_en:
                         added_errs.append(
-                            f"{p['panel_url']}: enable failed - {err_en or 'unknown'}"
+                            f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}"
                         )
                 save_link(owner_id, username, int(pid), username)
                 links_map[int(pid)] = username
@@ -4456,7 +4485,7 @@ def sync_user_panels(
                             username,
                             err or "unknown error",
                         )
-                        added_errs.append(f"remove on {p['panel_url']}: {err or 'unknown error'}")
+                        added_errs.append(f"remove on {panel_error_address(p, owner_id)}: {err or 'unknown error'}")
 
     for pid in selected_ids:
         if is_disabled:
@@ -4474,7 +4503,7 @@ def sync_user_panels(
                 if ok_en:
                     enabled_ok += 1
                 else:
-                    added_errs.append(f"{p['panel_url']}: enable failed - {err_en or 'unknown'}")
+                    added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
         if int(pid) not in links_map:
             save_link(owner_id, username, int(pid), remote)
             links_map[int(pid)] = remote
