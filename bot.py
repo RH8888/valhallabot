@@ -557,16 +557,23 @@ def _sub_placeholder_toggle_label(owner_id: int) -> str:
     enabled = _effective_sub_placeholder_enabled(owner_id)
     return "🟢 Sub Placeholder: ON" if enabled else "🔴 Sub Placeholder: OFF"
 
+
+def _sub_placeholder_template_button(owner_id: int) -> list[InlineKeyboardButton]:
+    if not _effective_sub_placeholder_enabled(owner_id):
+        return []
+    return [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")]
+
+
 def _agent_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
     webui_username = (get_setting(owner_id, "webui_agent_username") or "").strip()
     webui_config_label = f"🔐 Web UI Login: {webui_username}" if webui_username else "🔐 Web UI Login: not set"
     kb = [
         [InlineKeyboardButton(_sub_placeholder_toggle_label(owner_id), callback_data="toggle_sub_placeholder")],
-        [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
+        _sub_placeholder_template_button(owner_id),
         [InlineKeyboardButton(webui_config_label, callback_data="set_webui_login")],
         [InlineKeyboardButton("⬅️ Back", callback_data="back_home")],
     ]
-    return InlineKeyboardMarkup(kb)
+    return InlineKeyboardMarkup([row for row in kb if row])
 
 
 def _admin_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
@@ -584,7 +591,7 @@ def _admin_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
     kb = [
         [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
         [InlineKeyboardButton(_sub_placeholder_toggle_label(owner_id), callback_data="toggle_sub_placeholder")],
-        [InlineKeyboardButton("🧩 Sub Placeholder Template", callback_data="sub_placeholder_template")],
+        _sub_placeholder_template_button(owner_id),
         [InlineKeyboardButton(f"⚠️ Near-Limit Threshold: {threshold_text}", callback_data="set_near_limit_threshold")],
         [InlineKeyboardButton(f"⏱️ Near-Limit Sync: {near_minutes}m", callback_data="set_near_limit_sync_interval")],
         [InlineKeyboardButton(f"⏱️ Normal Sync: {normal_minutes}m", callback_data="set_normal_sync_interval")],
@@ -594,7 +601,7 @@ def _admin_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
         [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
     ]
-    return InlineKeyboardMarkup(kb)
+    return InlineKeyboardMarkup([row for row in kb if row])
 
 
 def get_extra_domains(owner_id: int) -> list[str]:
@@ -1842,6 +1849,12 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "sub_placeholder_template":
         if not is_admin(uid) and not get_agent(uid):
             await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        if not _effective_sub_placeholder_enabled(uid):
+            if is_admin(uid):
+                await q.edit_message_text("Technical:", reply_markup=_admin_technical_kb(uid))
+            else:
+                await q.edit_message_text("Settings:", reply_markup=_agent_technical_kb(uid))
             return ConversationHandler.END
         own_template = (_exact_owner_setting(uid, "subscription_placeholder_template") or "").strip()
         effective_template, template_owner = _effective_sub_placeholder_template(uid)
