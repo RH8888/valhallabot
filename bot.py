@@ -533,9 +533,30 @@ def _exact_owner_setting(owner_id: int | None, key: str) -> str | None:
     return get_setting_exact(int(owner_id), key)
 
 
+def _legacy_root_admin_setting(owner_id: int, key: str) -> tuple[str | None, int | None]:
+    """Return a pre-scoped admin setting when the root admin has no exact row.
+
+    Admin-owned records have historically been shared across every ADMIN_IDS
+    entry.  After placeholder settings became exact-owner scoped, a root admin
+    can still have the old value stored under a secondary admin id.  Only the
+    root admin gets this compatibility fallback so secondary admins keep their
+    own placeholder scope.
+    """
+    admins = ordered_admin_ids()
+    if not admins or int(owner_id) != admins[0]:
+        return None, None
+    for admin_id in admins[1:]:
+        value = _exact_owner_setting(admin_id, key)
+        if value is not None:
+            return value, admin_id
+    return None, None
+
+
 def _effective_sub_placeholder_enabled(owner_id: int) -> bool:
     root_id = _root_admin_id()
     raw = _exact_owner_setting(owner_id, "subscription_placeholder_enabled")
+    if raw is None:
+        raw, _ = _legacy_root_admin_setting(owner_id, "subscription_placeholder_enabled")
     if raw is None and root_id is not None and int(owner_id) != root_id:
         raw = _exact_owner_setting(root_id, "subscription_placeholder_enabled")
     return (raw or "0") != "0"
@@ -546,6 +567,10 @@ def _effective_sub_placeholder_template(owner_id: int) -> tuple[str, int | None]
     own = (_exact_owner_setting(owner_id, "subscription_placeholder_template") or "").strip()
     if own:
         return own, int(owner_id)
+    legacy, legacy_owner = _legacy_root_admin_setting(owner_id, "subscription_placeholder_template")
+    legacy_template = (legacy or "").strip()
+    if legacy_template:
+        return legacy_template, legacy_owner
     if root_id is not None and int(owner_id) != root_id:
         root = (_exact_owner_setting(root_id, "subscription_placeholder_template") or "").strip()
         if root:
