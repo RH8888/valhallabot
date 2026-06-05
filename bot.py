@@ -50,6 +50,7 @@ from telegram.ext import (
 
 from api.subscription_aggregator import (
     admin_ids,
+    ordered_admin_ids,
     expand_owner_ids,
     canonical_owner_id,
 )
@@ -69,6 +70,7 @@ from services import (
     renew_agent_days,
     set_agent_active,
     get_setting,
+    get_setting_exact,
     set_setting,
     TokenEncryptionError as PanelTokenEncryptionError,
     encrypt_panel_password,
@@ -520,8 +522,39 @@ def _sanaei_version_kb() -> InlineKeyboardMarkup:
 def _sanaei_auth_type_kb() -> InlineKeyboardMarkup:
     return _choice_kb(SANAEI_AUTH_TYPE_LABELS, "add_sanaei_auth")
 
+def _root_admin_id() -> int | None:
+    admins = ordered_admin_ids()
+    return admins[0] if admins else None
+
+
+def _exact_owner_setting(owner_id: int | None, key: str) -> str | None:
+    if owner_id is None:
+        return None
+    return get_setting_exact(int(owner_id), key)
+
+
+def _effective_sub_placeholder_enabled(owner_id: int) -> bool:
+    root_id = _root_admin_id()
+    raw = _exact_owner_setting(owner_id, "subscription_placeholder_enabled")
+    if raw is None and root_id is not None and int(owner_id) != root_id:
+        raw = _exact_owner_setting(root_id, "subscription_placeholder_enabled")
+    return (raw or "0") != "0"
+
+
+def _effective_sub_placeholder_template(owner_id: int) -> tuple[str, int | None]:
+    root_id = _root_admin_id()
+    own = (_exact_owner_setting(owner_id, "subscription_placeholder_template") or "").strip()
+    if own:
+        return own, int(owner_id)
+    if root_id is not None and int(owner_id) != root_id:
+        root = (_exact_owner_setting(root_id, "subscription_placeholder_template") or "").strip()
+        if root:
+            return root, root_id
+    return "", None
+
+
 def _sub_placeholder_toggle_label(owner_id: int) -> str:
-    enabled = (get_setting(owner_id, "subscription_placeholder_enabled") or "0") != "0"
+    enabled = _effective_sub_placeholder_enabled(owner_id)
     return "🟢 Sub Placeholder: ON" if enabled else "🔴 Sub Placeholder: OFF"
 
 def _agent_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
@@ -1731,7 +1764,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(uid) and not get_agent(uid):
             await q.edit_message_text("دسترسی ندارید.")
             return ConversationHandler.END
-        current = (get_setting(uid, "subscription_placeholder_enabled") or "0") != "0"
+        current = _effective_sub_placeholder_enabled(uid)
         set_setting(uid, "subscription_placeholder_enabled", "0" if current else "1")
         if is_admin(uid):
             await q.edit_message_text("Technical:", reply_markup=_admin_technical_kb(uid))
@@ -1810,13 +1843,20 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(uid) and not get_agent(uid):
             await q.edit_message_text("دسترسی ندارید.")
             return ConversationHandler.END
-        cur = get_setting(uid, "subscription_placeholder_template") or "—"
+        own_template = (_exact_owner_setting(uid, "subscription_placeholder_template") or "").strip()
+        effective_template, template_owner = _effective_sub_placeholder_template(uid)
+        if own_template:
+            cur = own_template
+        elif effective_template and template_owner is not None and template_owner != uid:
+            cur = f"{effective_template}\n\n(از قالب root admin استفاده می‌شود؛ برای اختصاصی کردن، قالب جدید بفرست.)"
+        else:
+            cur = "—"
         back_target = "admin_technical" if is_admin(uid) else "agent_technical"
         await q.edit_message_text(
             "قالب فعلی:\n"
             f"{cur}\n\n"
             "قالب جدید را بفرست.\n"
-            "برای حذف: clear",
+            "برای حذف قالب اختصاصی و استفاده از root admin: clear",
             reply_markup=_back_kb(back_target),
         )
         return ASK_SUB_PLACEHOLDER_TEMPLATE

@@ -14,7 +14,7 @@ from .quotas import (
     renew_agent_days,
     set_agent_active,
 )
-from .settings import get_setting, set_setting, delete_setting
+from .settings import get_setting, get_setting_exact, set_setting, delete_setting
 from .panel_tokens import (
     TokenEncryptionError,
     decrypt_panel_password,
@@ -38,6 +38,7 @@ __all__ = [
     "renew_agent_days",
     "set_agent_active",
     "get_setting",
+    "get_setting_exact",
     "set_setting",
     "delete_setting",
     "TokenEncryptionError",

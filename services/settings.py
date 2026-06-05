@@ -10,6 +10,33 @@ log = logging.getLogger(__name__)
 _settings_table_missing_logged = False
 
 
+def get_setting_exact(owner_id: int, key: str) -> Optional[str]:
+    """Return a setting stored exactly for one owner, without admin fallback."""
+    with with_mysql_cursor() as cur:
+        try:
+            cur.execute(
+                """
+                SELECT `value`
+                FROM settings
+                WHERE owner_id=%s AND `key`=%s
+                LIMIT 1
+                """,
+                (owner_id, key),
+            )
+        except mysql_errors.ProgrammingError as exc:
+            if getattr(exc, "errno", None) == errorcode.ER_NO_SUCH_TABLE:
+                global _settings_table_missing_logged
+                if not _settings_table_missing_logged:
+                    log.warning(
+                        "settings table missing; returning no setting values until it is created"
+                    )
+                    _settings_table_missing_logged = True
+                return None
+            raise
+        row = cur.fetchone()
+    return row["value"] if row else None
+
+
 def get_setting(owner_id: int, key: str) -> Optional[str]:
     from api.subscription_aggregator.ownership import ordered_admin_ids
 
