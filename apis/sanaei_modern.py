@@ -501,6 +501,12 @@ def _update_client(panel_url: str, token: str, username: str, changes: Mapping[s
         return False, "not found"
     client.update({key: value for key, value in changes.items() if value is not None})
     client.setdefault("email", username)
+
+    # Prune read-only or nested fields that might cause the panel to reject the
+    # update when sent back in a flat client payload.
+    for key in ("traffic", "id", "inboundIds", "createdAt", "updatedAt", "up", "down"):
+        client.pop(key, None)
+
     try:
         r = _request_with_reauth(
             "POST",
@@ -592,8 +598,10 @@ def update_remote_user(
     changes: Dict[str, Any] = {}
     if data_limit is not None:
         changes["totalGB"] = int(data_limit)
+        changes["total"] = int(data_limit)
     if expire is not None:
         changes["expiryTime"] = int(expire) * 1000
+        changes["expiry_time"] = int(expire) * 1000
     if not changes:
         return True, None
     return _update_client(panel_url, token, username, changes)
