@@ -84,6 +84,79 @@ class SanaeiModernResponseTests(unittest.TestCase):
         self.assertIn("already exists", err)
         request.assert_not_called()
 
+    def test_normalise_user_object_parses_string_false_enable(self):
+        user = sanaei_modern._normalise_user_object({"email": "alice", "enable": "false"})
+
+        self.assertFalse(user["enabled"])
+        self.assertFalse(user["enable"])
+
+    def test_update_remote_user_uses_modern_update_endpoint_and_client_payload(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {"success": True, "msg": "Client updated"}
+        current = {
+            "email": "alice@example.com",
+            "id": "uuid-1",
+            "totalGB": 1024,
+            "expiryTime": 0,
+            "enable": True,
+            "inboundIds": [7],
+            "used_traffic": 100,
+            "up": 40,
+            "down": 60,
+            "links": ["vless://example"],
+        }
+
+        with patch.object(sanaei_modern, "_fetch_client", return_value=(current, None)), patch.object(
+            sanaei_modern, "_request_with_reauth", return_value=response
+        ) as request:
+            ok, err = sanaei_modern.update_remote_user(
+                "https://panel.example", "token", "alice@example.com", data_limit=2048
+            )
+
+        self.assertTrue(ok)
+        self.assertIsNone(err)
+        request.assert_called_once()
+        args = request.call_args.args
+        self.assertEqual(args[:7], ("POST", "https://panel.example", "token", "panel", "api", "clients", "update"))
+        self.assertEqual(args[7], "alice@example.com")
+        sent_json = request.call_args.kwargs["json"]
+        self.assertEqual(sent_json["email"], "alice@example.com")
+        self.assertEqual(sent_json["totalGB"], 2048)
+        self.assertEqual(sent_json["id"], "uuid-1")
+        self.assertNotIn("inboundIds", sent_json)
+        self.assertNotIn("used_traffic", sent_json)
+        self.assertNotIn("up", sent_json)
+        self.assertNotIn("down", sent_json)
+        self.assertNotIn("links", sent_json)
+
+    def test_disable_and_enable_use_update_payload_enable_field_only(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {"success": True}
+        current = {"client": {"email": "alice", "totalGB": 1024, "enabled": "false", "inboundIds": [1]}}
+
+        with patch.object(sanaei_modern, "_fetch_client", return_value=(current, None)), patch.object(
+            sanaei_modern, "_request_with_reauth", return_value=response
+        ) as request:
+            ok, err = sanaei_modern.disable_remote_user("https://panel.example", "token", "alice")
+
+        self.assertTrue(ok)
+        self.assertIsNone(err)
+        sent_json = request.call_args.kwargs["json"]
+        self.assertEqual(sent_json["enable"], False)
+        self.assertNotIn("enabled", sent_json)
+        self.assertNotIn("inboundIds", sent_json)
+
+        with patch.object(sanaei_modern, "_fetch_client", return_value=(current, None)), patch.object(
+            sanaei_modern, "_request_with_reauth", return_value=response
+        ) as request:
+            ok, err = sanaei_modern.enable_remote_user("https://panel.example", "token", "alice")
+
+        self.assertTrue(ok)
+        self.assertIsNone(err)
+        self.assertEqual(request.call_args.kwargs["json"]["enable"], True)
+
 
 if __name__ == "__main__":
     unittest.main()

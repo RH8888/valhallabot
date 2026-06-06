@@ -131,6 +131,12 @@ def _coerce_int(value: Any) -> Optional[int]:
         return None
 
 
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "0", "false", "no", "off"}
+    return bool(value)
+
+
 def _first_present(obj: Mapping[str, Any], *keys: str) -> Any:
     for key in keys:
         if key in obj and obj.get(key) is not None:
@@ -206,7 +212,7 @@ def _normalise_user_object(client_obj: Any, traffic_obj: Any = None, links: Opti
         status = str(client.get("status") or "").lower()
         enabled = status not in {"disabled", "limited", "expired", "depleted"}
     else:
-        enabled = bool(enabled_value)
+        enabled = _coerce_bool(enabled_value)
 
     normalised = dict(client)
     normalised.update(
@@ -492,15 +498,63 @@ def fetch_subscription_links(sub_url: str) -> List[str]:
     except Exception:  # pragma: no cover - network errors
         return []
 
+_MODERN_CLIENT_UPDATE_DROP_FIELDS = {
+    # These can be present in /panel/api/clients/get, /traffic, or our normalised
+    # object, but docs/sanaei-new-version.json says /clients/update/{email}
+    # expects the JSON client payload only.
+    "inboundIds",
+    "inbound_ids",
+    "inbounds",
+    "client",
+    "user",
+    "traffic",
+    "links",
+    "urls",
+    "subscription_url",
+    "subscriptionUrl",
+    "subUrl",
+    "used_traffic",
+    "usedTraffic",
+    "used",
+    "up",
+    "down",
+    "upload",
+    "download",
+    "uplink",
+    "downlink",
+    "enabled",
+    "data_limit",
+    "dataLimit",
+    "expiry_time",
+    "expire",
+    "expireTime",
+    "uuid",
+    "username",
+}
+
+
+def _prepare_update_payload(current: Any, username: str, changes: Mapping[str, Any]) -> Dict[str, Any]:
+    client = _extract_client(current)
+    if not client:
+        return {}
+    body = {key: value for key, value in client.items() if key not in _MODERN_CLIENT_UPDATE_DROP_FIELDS}
+    if client.get("enable") is None and client.get("enabled") is not None:
+        body["enable"] = _coerce_bool(client.get("enabled"))
+    body.update({key: value for key, value in changes.items() if value is not None})
+    if body.get("email") is None:
+        body["email"] = _first_present(client, "email", "username") or username
+    if body.get("enable") is not None:
+        body["enable"] = _coerce_bool(body.get("enable"))
+    return body
+
+
 def _update_client(panel_url: str, token: str, username: str, changes: Mapping[str, Any]) -> Tuple[bool, Optional[str]]:
     current, err = _fetch_client(panel_url, token, username)
     if err:
         return False, err
-    client = _extract_client(current)
+    client = _prepare_update_payload(current, username, changes)
     if not client:
         return False, "not found"
-    client.update({key: value for key, value in changes.items() if value is not None})
-    client.setdefault("email", username)
     try:
         r = _request_with_reauth(
             "POST",
@@ -529,13 +583,13 @@ def _update_client(panel_url: str, token: str, username: str, changes: Mapping[s
 def disable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
     """Disable a client via ``POST /panel/api/clients/update/{email}``."""
 
-    return _update_client(panel_url, token, username, {"enable": False, "enabled": False})
+    return _update_client(panel_url, token, username, {"enable": False})
 
 
 def enable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
     """Enable a client via ``POST /panel/api/clients/update/{email}``."""
 
-    return _update_client(panel_url, token, username, {"enable": True, "enabled": True})
+    return _update_client(panel_url, token, username, {"enable": True})
 
 
 def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
