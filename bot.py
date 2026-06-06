@@ -4093,7 +4093,7 @@ async def handle_edit_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     class FakeCQ:
         async def edit_message_text(self, *args, **kwargs):
             await update.message.reply_text(*args, **kwargs)
-    return await show_user_card(FakeCQ(), context, owner_id, uname, notice="✅ لیمیت بروزرسانی شد.")
+    return await show_user_card(FakeCQ(), owner_id, uname, notice="✅ لیمیت بروزرسانی شد.")
 
 async def handle_renew_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uname = context.user_data.get("manage_username")
@@ -4111,7 +4111,7 @@ async def handle_renew_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     class FakeCQ:
         async def edit_message_text(self, *args, **kwargs):
             await update.message.reply_text(*args, **kwargs)
-    return await show_user_card(FakeCQ(), context, owner_id, uname, notice=f"✅ {days} روز تمدید شد.")
+    return await show_user_card(FakeCQ(), owner_id, uname, notice=f"✅ {days} روز تمدید شد.")
 
 # ---------- cancel ----------
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
