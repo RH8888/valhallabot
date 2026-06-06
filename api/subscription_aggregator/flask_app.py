@@ -813,9 +813,30 @@ def _exact_setting(owner_id: int | None, key: str) -> str | None:
     return get_setting_exact(int(owner_id), key)
 
 
+def _legacy_root_admin_setting(owner_id: int, key: str) -> str | None:
+    """Return a pre-scoped admin setting when the root admin has no exact row.
+
+    Admin-owned records have historically been shared across every ADMIN_IDS
+    entry.  After placeholder settings became exact-owner scoped, a root admin
+    can still have the old value stored under a secondary admin id.  Only the
+    root admin gets this compatibility fallback so secondary admins keep their
+    own placeholder scope.
+    """
+    admins = ordered_admin_ids()
+    if not admins or int(owner_id) != admins[0]:
+        return None
+    for admin_id in admins[1:]:
+        value = _exact_setting(admin_id, key)
+        if value is not None:
+            return value
+    return None
+
+
 def _effective_sub_placeholder_enabled(owner_id: int) -> bool:
     root_id = _root_admin_id()
     raw = _exact_setting(owner_id, SUB_PLACEHOLDER_ENABLED_KEY)
+    if raw is None:
+        raw = _legacy_root_admin_setting(owner_id, SUB_PLACEHOLDER_ENABLED_KEY)
     if raw is None and root_id is not None and int(owner_id) != root_id:
         raw = _exact_setting(root_id, SUB_PLACEHOLDER_ENABLED_KEY)
     return (raw or "0") != "0"
@@ -824,6 +845,9 @@ def _effective_sub_placeholder_enabled(owner_id: int) -> bool:
 def _effective_sub_placeholder_template(owner_id: int) -> str:
     root_id = _root_admin_id()
     template = (_exact_setting(owner_id, SUB_PLACEHOLDER_TEMPLATE_KEY) or "").strip()
+    if template:
+        return template
+    template = (_legacy_root_admin_setting(owner_id, SUB_PLACEHOLDER_TEMPLATE_KEY) or "").strip()
     if template:
         return template
     if root_id is not None and int(owner_id) != root_id:
