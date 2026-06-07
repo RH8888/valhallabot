@@ -528,6 +528,7 @@ _MODERN_CLIENT_UPDATE_DROP_FIELDS = {
     "expiry_time",
     "expire",
     "expireTime",
+    "id",
     "uuid",
     "username",
 }
@@ -545,13 +546,12 @@ def _prepare_update_payload(current: Any, username: str, changes: Mapping[str, A
         body["email"] = _first_present(client, "email", "username") or username
     if body.get("enable") is not None:
         body["enable"] = _coerce_bool(body.get("enable"))
-    # Modern 3x-ui's Client.id field is a string (UUID/protocol secret).
-    # Some panel responses also include a numeric database row id named ``id``;
-    # sending that number back to /clients/update/{email} makes Go reject the
-    # JSON before applying traffic-limit or enable changes.  Keep string ids
-    # intact and stringify numeric ids so update/disable calls remain accepted.
-    if body.get("id") is not None and not isinstance(body.get("id"), str):
-        body["id"] = str(body["id"])
+    # Never send id/uuid on modern update requests.  The endpoint identifies
+    # the existing client by the email path parameter, and echoing any id value
+    # can mutate the protocol UUID/secret (for example replacing it with a
+    # numeric database row id such as "12").
+    body.pop("id", None)
+    body.pop("uuid", None)
     return body
 
 
