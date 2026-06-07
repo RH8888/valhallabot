@@ -545,6 +545,13 @@ def _prepare_update_payload(current: Any, username: str, changes: Mapping[str, A
         body["email"] = _first_present(client, "email", "username") or username
     if body.get("enable") is not None:
         body["enable"] = _coerce_bool(body.get("enable"))
+    # Modern 3x-ui's Client.id field is a string (UUID/protocol secret).
+    # Some panel responses also include a numeric database row id named ``id``;
+    # sending that number back to /clients/update/{email} makes Go reject the
+    # JSON before applying traffic-limit or enable changes.  Keep string ids
+    # intact and stringify numeric ids so update/disable calls remain accepted.
+    if body.get("id") is not None and not isinstance(body.get("id"), str):
+        body["id"] = str(body["id"])
     return body
 
 

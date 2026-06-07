@@ -130,6 +130,27 @@ class SanaeiModernResponseTests(unittest.TestCase):
         self.assertNotIn("down", sent_json)
         self.assertNotIn("links", sent_json)
 
+    def test_update_payload_stringifies_numeric_client_id(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {"success": True}
+        current = {
+            "email": "alice",
+            "id": 123,
+            "totalGB": 1024,
+            "expiryTime": 0,
+            "enable": True,
+        }
+
+        with patch.object(sanaei_modern, "_fetch_client", return_value=(current, None)), patch.object(
+            sanaei_modern, "_request_with_reauth", return_value=response
+        ) as request:
+            ok, err = sanaei_modern.update_remote_user("https://panel.example", "token", "alice", data_limit=2048)
+
+        self.assertTrue(ok)
+        self.assertIsNone(err)
+        self.assertEqual(request.call_args.kwargs["json"]["id"], "123")
+
     def test_disable_and_enable_use_update_payload_enable_field_only(self):
         response = Mock()
         response.status_code = 200
