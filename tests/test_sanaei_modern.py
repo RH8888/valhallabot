@@ -96,7 +96,8 @@ class SanaeiModernResponseTests(unittest.TestCase):
         response.json.return_value = {"success": True, "msg": "Client updated"}
         current = {
             "email": "alice@example.com",
-            "id": "uuid-1",
+            "id": 12,
+            "uuid": "uuid-1",
             "totalGB": 1024,
             "expiryTime": 0,
             "enable": True,
@@ -123,7 +124,7 @@ class SanaeiModernResponseTests(unittest.TestCase):
         sent_json = request.call_args.kwargs["json"]
         self.assertEqual(sent_json["email"], "alice@example.com")
         self.assertEqual(sent_json["totalGB"], 2048)
-        self.assertNotIn("id", sent_json)
+        self.assertEqual(sent_json["id"], "uuid-1")
         self.assertNotIn("uuid", sent_json)
         self.assertNotIn("inboundIds", sent_json)
         self.assertNotIn("used_traffic", sent_json)
@@ -131,7 +132,7 @@ class SanaeiModernResponseTests(unittest.TestCase):
         self.assertNotIn("down", sent_json)
         self.assertNotIn("links", sent_json)
 
-    def test_update_payload_never_sends_uuid_or_id_fields(self):
+    def test_update_payload_sends_fetched_uuid_as_id_field(self):
         response = Mock()
         response.status_code = 200
         response.json.return_value = {"success": True}
@@ -153,16 +154,35 @@ class SanaeiModernResponseTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIsNone(err)
         sent_json = request.call_args.kwargs["json"]
-        self.assertNotIn("id", sent_json)
+        self.assertEqual(sent_json["id"], "550e8400-e29b-41d4-a716-446655440000")
         self.assertNotIn("uuid", sent_json)
 
-    def test_disable_and_enable_drop_id_even_when_current_id_is_string_uuid(self):
+    def test_update_refuses_to_post_without_fetched_uuid(self):
+        current = {
+            "email": "alice",
+            "id": 12,
+            "totalGB": 1024,
+            "expiryTime": 0,
+            "enable": True,
+        }
+
+        with patch.object(sanaei_modern, "_fetch_client", return_value=(current, None)), patch.object(
+            sanaei_modern, "_request_with_reauth"
+        ) as request:
+            ok, err = sanaei_modern.update_remote_user("https://panel.example", "token", "alice", data_limit=2048)
+
+        self.assertFalse(ok)
+        self.assertEqual(err, "client uuid not found")
+        request.assert_not_called()
+
+    def test_disable_and_enable_include_current_uuid_as_id(self):
         response = Mock()
         response.status_code = 200
         response.json.return_value = {"success": True}
         current = {
             "email": "alice",
-            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "id": 12,
+            "uuid": "550e8400-e29b-41d4-a716-446655440000",
             "totalGB": 1024,
             "expiryTime": 0,
             "enable": True,
@@ -175,7 +195,7 @@ class SanaeiModernResponseTests(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertIsNone(err)
-        self.assertNotIn("id", request.call_args.kwargs["json"])
+        self.assertEqual(request.call_args.kwargs["json"]["id"], "550e8400-e29b-41d4-a716-446655440000")
 
         with patch.object(sanaei_modern, "_fetch_client", return_value=(current, None)), patch.object(
             sanaei_modern, "_request_with_reauth", return_value=response
@@ -184,13 +204,21 @@ class SanaeiModernResponseTests(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertIsNone(err)
-        self.assertNotIn("id", request.call_args.kwargs["json"])
+        self.assertEqual(request.call_args.kwargs["json"]["id"], "550e8400-e29b-41d4-a716-446655440000")
 
     def test_disable_and_enable_use_update_payload_enable_field_only(self):
         response = Mock()
         response.status_code = 200
         response.json.return_value = {"success": True}
-        current = {"client": {"email": "alice", "totalGB": 1024, "enabled": "false", "inboundIds": [1]}}
+        current = {
+            "client": {
+                "email": "alice",
+                "uuid": "550e8400-e29b-41d4-a716-446655440000",
+                "totalGB": 1024,
+                "enabled": "false",
+                "inboundIds": [1],
+            }
+        }
 
         with patch.object(sanaei_modern, "_fetch_client", return_value=(current, None)), patch.object(
             sanaei_modern, "_request_with_reauth", return_value=response
@@ -203,6 +231,7 @@ class SanaeiModernResponseTests(unittest.TestCase):
         self.assertEqual(sent_json["enable"], False)
         self.assertNotIn("enabled", sent_json)
         self.assertNotIn("inboundIds", sent_json)
+        self.assertEqual(sent_json["id"], "550e8400-e29b-41d4-a716-446655440000")
 
         with patch.object(sanaei_modern, "_fetch_client", return_value=(current, None)), patch.object(
             sanaei_modern, "_request_with_reauth", return_value=response

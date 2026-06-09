@@ -528,6 +528,10 @@ _MODERN_CLIENT_UPDATE_DROP_FIELDS = {
     "expiry_time",
     "expire",
     "expireTime",
+    # The row/database id and raw UUID field are intentionally dropped from the
+    # copied client payload below.  Modern Sanaei update requests must send the
+    # protocol UUID as the payload's ``id`` field, so _prepare_update_payload
+    # derives that value explicitly from the freshly fetched client UUID.
     "id",
     "uuid",
     "username",
@@ -538,6 +542,9 @@ def _prepare_update_payload(current: Any, username: str, changes: Mapping[str, A
     client = _extract_client(current)
     if not client:
         return {}
+    client_uuid = client.get("uuid")
+    if client_uuid is None or str(client_uuid).strip() == "":
+        return {}
     body = {key: value for key, value in client.items() if key not in _MODERN_CLIENT_UPDATE_DROP_FIELDS}
     if client.get("enable") is None and client.get("enabled") is not None:
         body["enable"] = _coerce_bool(client.get("enabled"))
@@ -546,11 +553,11 @@ def _prepare_update_payload(current: Any, username: str, changes: Mapping[str, A
         body["email"] = _first_present(client, "email", "username") or username
     if body.get("enable") is not None:
         body["enable"] = _coerce_bool(body.get("enable"))
-    # Never send id/uuid on modern update requests.  The endpoint identifies
-    # the existing client by the email path parameter, and echoing any id value
-    # can mutate the protocol UUID/secret (for example replacing it with a
-    # numeric database row id such as "12").
-    body.pop("id", None)
+    # Modern Sanaei uses the path email as the current username, but the update
+    # body must also include the client's existing protocol UUID as ``id``.
+    # Omitting it can make the panel generate a new UUID and break existing
+    # subscription links/client configs.  Do not reuse numeric database row IDs.
+    body["id"] = str(client_uuid).strip()
     body.pop("uuid", None)
     return body
 
@@ -559,9 +566,12 @@ def _update_client(panel_url: str, token: str, username: str, changes: Mapping[s
     current, err = _fetch_client(panel_url, token, username)
     if err:
         return False, err
+    current_client = _extract_client(current)
+    if not current_client:
+        return False, "not found"
     client = _prepare_update_payload(current, username, changes)
     if not client:
-        return False, "not found"
+        return False, "client uuid not found"
     try:
         r = _request_with_reauth(
             "POST",
