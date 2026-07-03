@@ -877,15 +877,12 @@ def build_user(local_username, app_key, lu, remote=None):
     manual_disabled = bool(lu.get("manual_disabled")) if lu else False
     if remote:
         enabled = remote.get("enabled", True)
-        expire_raw = (
-            remote.get("expire_date")
-            or remote.get("expire")
-            or remote.get("expiryTime")
-            or remote.get("expiry_time")
-            or remote.get("expire_at")
-            or ""
-        )
-    if not expire_raw and lu:
+
+    # The subscription page is the customer-facing view of the local plan.
+    # Renewals update local_users.expire_at first and panel updates can lag or
+    # fail independently, so prefer the local expiry over stale remote metadata
+    # when calculating remaining days and the Jalali expiration date.
+    if lu:
         exp_l = lu.get("expire_at")
         if exp_l:
             try:
@@ -895,6 +892,16 @@ def build_user(local_username, app_key, lu, remote=None):
                     expire_raw = str(int(datetime.fromisoformat(str(exp_l)).timestamp()))
             except Exception:
                 expire_raw = ""
+
+    if not expire_raw and remote:
+        expire_raw = (
+            remote.get("expire_date")
+            or remote.get("expire")
+            or remote.get("expiryTime")
+            or remote.get("expiry_time")
+            or remote.get("expire_at")
+            or ""
+        )
     data_limit_reached = bool(limit > 0 and used >= limit)
     expired = False
     if manual_disabled:
