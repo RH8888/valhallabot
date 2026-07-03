@@ -651,6 +651,38 @@ def reset_remote_user_usage(panel_url: str, token: str, username: str) -> Tuple[
         return False, str(e)[:200]
 
 
+def renew_remote_user(panel_url: str, token: str, username: str, add_days: int) -> Tuple[bool, Optional[str]]:
+    """Extend one client via ``POST /panel/api/clients/bulkAdjust``.
+
+    The modern Sanaei API exposes day-based renewal as ``bulkAdjust`` with
+    ``addDays``.  Use that endpoint for renewals instead of rewriting the full
+    client through ``/clients/update/{email}``, which is intended for absolute
+    client-field replacement.
+    """
+
+    try:
+        r = _request_with_reauth(
+            "POST",
+            panel_url,
+            token,
+            "panel",
+            "api",
+            "clients",
+            "bulkAdjust",
+            json={"emails": [username], "addDays": int(add_days)},
+            headers={"Content-Type": "application/json"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            return False, _response_error(r, 200)
+        data = _json_or_empty(r)
+        if not _panel_success(data):
+            return False, str(data.get("msg") or "request failed")[:200]
+        return True, None
+    except Exception as e:  # pragma: no cover - network errors
+        return False, str(e)[:200]
+
+
 def update_remote_user(
     panel_url: str,
     token: str,
