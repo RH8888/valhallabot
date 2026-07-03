@@ -528,10 +528,10 @@ _MODERN_CLIENT_UPDATE_DROP_FIELDS = {
     "expiry_time",
     "expire",
     "expireTime",
-    # IDs returned by lookup endpoints are intentionally dropped.  The modern
-    # /panel/api/clients/update/{email} endpoint is documented to receive only
-    # the JSON client fields the caller wants to keep; including row IDs or
-    # protocol UUID aliases can make expiry-only renewals fail on newer panels.
+    # The row/database id and raw UUID field are intentionally dropped from the
+    # copied client payload below.  Modern Sanaei update requests must send the
+    # protocol UUID as the payload's ``id`` field, so _prepare_update_payload
+    # derives that value explicitly from the freshly fetched client UUID.
     "id",
     "uuid",
     "username",
@@ -542,6 +542,9 @@ def _prepare_update_payload(current: Any, username: str, changes: Mapping[str, A
     client = _extract_client(current)
     if not client:
         return {}
+    client_uuid = client.get("uuid")
+    if client_uuid is None or str(client_uuid).strip() == "":
+        return {}
     body = {key: value for key, value in client.items() if key not in _MODERN_CLIENT_UPDATE_DROP_FIELDS}
     if client.get("enable") is None and client.get("enabled") is not None:
         body["enable"] = _coerce_bool(client.get("enabled"))
@@ -550,11 +553,12 @@ def _prepare_update_payload(current: Any, username: str, changes: Mapping[str, A
         body["email"] = _first_present(client, "email", "username") or username
     if body.get("enable") is not None:
         body["enable"] = _coerce_bool(body.get("enable"))
-    # Modern Sanaei uses the path email as the current username.  Its documented
-    # update body is the client payload (for example email/totalGB/expiryTime/
-    # tgId/enable) and not an inbound wrapper or identifier object.
+    # Modern Sanaei uses the path email as the current username, but the update
+    # body must also include the client's existing protocol UUID as ``id``.
+    # Omitting it can make the panel generate a new UUID and break existing
+    # subscription links/client configs.  Do not reuse numeric database row IDs.
+    body["id"] = str(client_uuid).strip()
     body.pop("uuid", None)
-    body.pop("id", None)
     return body
 
 
@@ -567,7 +571,7 @@ def _update_client(panel_url: str, token: str, username: str, changes: Mapping[s
         return False, "not found"
     client = _prepare_update_payload(current, username, changes)
     if not client:
-        return False, "client payload not found"
+        return False, "client uuid not found"
     try:
         r = _request_with_reauth(
             "POST",
