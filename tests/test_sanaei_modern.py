@@ -206,6 +206,37 @@ class SanaeiModernResponseTests(unittest.TestCase):
         self.assertEqual(sent_json["id"], "550e8400-e29b-41d4-a716-446655440000")
         self.assertNotIn("uuid", sent_json)
 
+
+    def test_update_remote_user_can_set_finite_quota_to_unlimited(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {"success": True, "msg": "Client updated"}
+        current = {
+            "email": "alice@example.com",
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "totalGB": 2048,
+            "expiryTime": 0,
+            "enable": True,
+            "inboundIds": [7],
+        }
+
+        with patch.object(sanaei_modern, "_fetch_client", return_value=(current, None)), patch.object(
+            sanaei_modern, "_request_with_reauth", return_value=response
+        ) as request:
+            ok, err = sanaei_modern.update_remote_user(
+                "https://panel.example", "token", "alice@example.com", data_limit=0
+            )
+
+        self.assertTrue(ok)
+        self.assertIsNone(err)
+        request.assert_called_once()
+        args = request.call_args.args
+        self.assertEqual(args[:7], ("POST", "https://panel.example", "token", "panel", "api", "clients", "update"))
+        sent_json = request.call_args.kwargs["json"]
+        self.assertEqual(sent_json["totalGB"], 0)
+        self.assertEqual(sent_json["id"], "550e8400-e29b-41d4-a716-446655440000")
+        self.assertNotIn("inboundIds", sent_json)
+
     def test_update_refuses_to_post_without_fetched_uuid(self):
         current = {
             "email": "alice",
