@@ -683,6 +683,80 @@ def renew_remote_user(
         return False, str(e)[:200]
 
 
+def _bulk_adjust_remote_user_quota(
+    panel_url: str,
+    token: str,
+    username: str,
+    add_bytes: int,
+) -> Tuple[bool, Optional[str]]:
+    """Shift a modern Sanaei client's quota through the documented bulkAdjust API."""
+
+    if add_bytes == 0:
+        return True, None
+    try:
+        r = _request_with_reauth(
+            "POST",
+            panel_url,
+            token,
+            "panel",
+            "api",
+            "clients",
+            "bulkAdjust",
+            json={"emails": [username], "addBytes": int(add_bytes)},
+            headers={"Content-Type": "application/json"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            return False, _response_error(r, 200)
+        data = _json_or_empty(r)
+        if not _panel_success(data):
+            return False, str(data.get("msg") or "request failed")[:200]
+        obj = _unwrap_panel_response(data)
+        if isinstance(obj, Mapping):
+            skipped = obj.get("skipped")
+            if isinstance(skipped, Iterable) and not isinstance(skipped, (str, bytes, bytearray)):
+                for item in skipped:
+                    if not isinstance(item, Mapping):
+                        continue
+                    skipped_email = _normalise_client_email(item.get("email"))
+                    if skipped_email == _normalise_client_email(username):
+                        return False, str(item.get("reason") or "quota adjustment skipped")[:200]
+        _links_cache.pop((panel_url, token, username), None)
+        return True, None
+    except Exception as e:  # pragma: no cover - network errors
+        return False, str(e)[:200]
+
+
+def _set_remote_user_quota(
+    panel_url: str,
+    token: str,
+    username: str,
+    data_limit: int,
+) -> Tuple[bool, Optional[str]]:
+    """Set an absolute quota, preferring bulkAdjust for finite-to-finite edits."""
+
+    target_limit = int(data_limit)
+    current, err = _fetch_client(panel_url, token, username)
+    if err:
+        return False, err
+    current_client = _extract_client(current)
+    current_limit = _coerce_int(_first_present(current_client, "totalGB", "total", "data_limit", "dataLimit"))
+    if current_limit is None:
+        return _update_client(panel_url, token, username, {"totalGB": target_limit})
+    if current_limit == target_limit:
+        return True, None
+    # docs/sanaei-new-version.json documents /clients/bulkAdjust as the quota
+    # shift endpoint, but it intentionally skips unlimited quotas.  Use the
+    # replacement-style update endpoint only for transitions to/from unlimited
+    # traffic or when the current quota is unavailable.
+    if current_limit == 0 or target_limit == 0:
+        return _update_client(panel_url, token, username, {"totalGB": target_limit})
+    ok, _ = _bulk_adjust_remote_user_quota(panel_url, token, username, target_limit - current_limit)
+    if ok:
+        return True, None
+    return _update_client(panel_url, token, username, {"totalGB": target_limit})
+
+
 def update_remote_user(
     panel_url: str,
     token: str,
@@ -690,11 +764,13 @@ def update_remote_user(
     data_limit: Optional[int] = None,
     expire: Optional[int] = None,
 ) -> Tuple[bool, Optional[str]]:
-    """Update quota or expiry for *username* on the modern client endpoint."""
+    """Update quota or expiry for *username* on the modern client endpoints."""
 
-    changes: Dict[str, Any] = {}
     if data_limit is not None:
-        changes["totalGB"] = int(data_limit)
+        ok, err = _set_remote_user_quota(panel_url, token, username, int(data_limit))
+        if not ok:
+            return False, err
+    changes: Dict[str, Any] = {}
     if expire is not None:
         changes["expiryTime"] = int(expire) * 1000
     if not changes:

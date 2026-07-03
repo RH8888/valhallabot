@@ -90,7 +90,40 @@ class SanaeiModernResponseTests(unittest.TestCase):
         self.assertFalse(user["enabled"])
         self.assertFalse(user["enable"])
 
-    def test_update_remote_user_uses_modern_update_endpoint_and_client_payload(self):
+    def test_update_remote_user_uses_bulk_adjust_for_finite_quota_edits(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {"success": True, "obj": {"adjusted": 1, "skipped": []}}
+        current = {
+            "email": "alice@example.com",
+            "id": 12,
+            "uuid": "uuid-1",
+            "totalGB": 1024,
+            "expiryTime": 0,
+            "enable": True,
+            "inboundIds": [7],
+            "used_traffic": 100,
+            "up": 40,
+            "down": 60,
+            "links": ["vless://example"],
+        }
+
+        with patch.object(sanaei_modern, "_fetch_client", return_value=(current, None)), patch.object(
+            sanaei_modern, "_request_with_reauth", return_value=response
+        ) as request:
+            ok, err = sanaei_modern.update_remote_user(
+                "https://panel.example", "token", "alice@example.com", data_limit=2048
+            )
+
+        self.assertTrue(ok)
+        self.assertIsNone(err)
+        request.assert_called_once()
+        args = request.call_args.args
+        self.assertEqual(args[:7], ("POST", "https://panel.example", "token", "panel", "api", "clients", "bulkAdjust"))
+        self.assertEqual(request.call_args.kwargs["json"], {"emails": ["alice@example.com"], "addBytes": 1024})
+        self.assertEqual(request.call_args.kwargs["headers"], {"Content-Type": "application/json"})
+
+    def test_update_remote_user_uses_modern_update_endpoint_for_unlimited_quota_edits(self):
         response = Mock()
         response.status_code = 200
         response.json.return_value = {"success": True, "msg": "Client updated"}
@@ -98,7 +131,7 @@ class SanaeiModernResponseTests(unittest.TestCase):
             "email": "alice@example.com",
             "id": 12,
             "uuid": "uuid-1",
-            "totalGB": 1024,
+            "totalGB": 0,
             "expiryTime": 0,
             "enable": True,
             "inboundIds": [7],
@@ -165,7 +198,7 @@ class SanaeiModernResponseTests(unittest.TestCase):
         with patch.object(sanaei_modern, "_fetch_client", return_value=(current, None)), patch.object(
             sanaei_modern, "_request_with_reauth", return_value=response
         ) as request:
-            ok, err = sanaei_modern.update_remote_user("https://panel.example", "token", "alice", data_limit=2048)
+            ok, err = sanaei_modern.update_remote_user("https://panel.example", "token", "alice", expire=1234567890)
 
         self.assertTrue(ok)
         self.assertIsNone(err)
@@ -185,7 +218,7 @@ class SanaeiModernResponseTests(unittest.TestCase):
         with patch.object(sanaei_modern, "_fetch_client", return_value=(current, None)), patch.object(
             sanaei_modern, "_request_with_reauth"
         ) as request:
-            ok, err = sanaei_modern.update_remote_user("https://panel.example", "token", "alice", data_limit=2048)
+            ok, err = sanaei_modern.update_remote_user("https://panel.example", "token", "alice", expire=1234567890)
 
         self.assertFalse(ok)
         self.assertEqual(err, "client uuid not found")
