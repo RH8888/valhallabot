@@ -543,6 +543,17 @@ def _prepare_update_payload(current: Any, username: str, changes: Mapping[str, A
     if not client:
         return {}
     client_uuid = client.get("uuid")
+    # Older/newer modern Sanaei responses are not consistent: some return the
+    # protocol UUID in ``uuid`` while the documented client payload uses ``id``.
+    # Numeric ``id`` values can be database rows and must not be sent as the
+    # protocol id, but a non-numeric string id is the UUID/password value needed
+    # by the replacement-style update endpoint.
+    if client_uuid is None or str(client_uuid).strip() == "":
+        raw_id = client.get("id")
+        if raw_id is not None and not isinstance(raw_id, int):
+            raw_id_text = str(raw_id).strip()
+            if raw_id_text and not raw_id_text.isdigit():
+                client_uuid = raw_id_text
     if client_uuid is None or str(client_uuid).strip() == "":
         return {}
     body = {key: value for key, value in client.items() if key not in _MODERN_CLIENT_UPDATE_DROP_FIELDS}
