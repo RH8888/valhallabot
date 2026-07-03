@@ -1365,9 +1365,15 @@ def renew_user(owner_id: int, username: str, add_days: int):
         api = get_api(r.get("panel_type"), r.get("sanaei_api_version"))
         remotes = remote_names_for_panel(r, r["remote_username"])
         for rn in remotes:
-            ok, err = api.update_remote_user(
-                r["panel_url"], r["access_token"], rn, expire=expire_ts
-            )
+            renew_remote_user = getattr(api, "renew_remote_user", None)
+            if callable(renew_remote_user):
+                ok, err = renew_remote_user(
+                    r["panel_url"], r["access_token"], rn, add_days
+                )
+            else:
+                ok, err = api.update_remote_user(
+                    r["panel_url"], r["access_token"], rn, expire=expire_ts
+                )
             if not ok:
                 log.warning("remote renew failed on %s: %s", r["panel_url"], err)
             if should_enable:
