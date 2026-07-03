@@ -132,6 +132,22 @@ class SanaeiModernResponseTests(unittest.TestCase):
         self.assertNotIn("down", sent_json)
         self.assertNotIn("links", sent_json)
 
+    def test_renew_remote_user_uses_bulk_adjust_add_days_payload(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {"success": True, "obj": {"adjusted": 1, "skipped": []}}
+
+        with patch.object(sanaei_modern, "_request_with_reauth", return_value=response) as request:
+            ok, err = sanaei_modern.renew_remote_user("https://panel.example", "token", "alice", 30)
+
+        self.assertTrue(ok)
+        self.assertIsNone(err)
+        request.assert_called_once()
+        args = request.call_args.args
+        self.assertEqual(args[:7], ("POST", "https://panel.example", "token", "panel", "api", "clients", "bulkAdjust"))
+        self.assertEqual(request.call_args.kwargs["json"], {"emails": ["alice"], "addDays": 30})
+        self.assertEqual(request.call_args.kwargs["headers"], {"Content-Type": "application/json"})
+
     def test_update_payload_sends_fetched_uuid_as_id_field(self):
         response = Mock()
         response.status_code = 200
