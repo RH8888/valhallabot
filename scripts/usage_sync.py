@@ -414,6 +414,28 @@ def mark_usage_limit_notified(owner_id, local_username):
         )
 
 
+def format_usage_value(num):
+    """Format byte values for usage notifications using MB/GB/TB units."""
+    try:
+        value = float(num)
+    except (TypeError, ValueError):
+        value = 0.0
+
+    mb = 1024.0 ** 2
+    gb = 1024.0 ** 3
+    tb = 1024.0 ** 4
+
+    if abs(value) >= tb:
+        scaled, unit = value / tb, "TB"
+    elif abs(value) >= gb:
+        scaled, unit = value / gb, "GB"
+    else:
+        scaled, unit = value / mb, "MB"
+
+    precision = 1 if abs(scaled) >= 100 else 2
+    return f"{scaled:.{precision}f} {unit}"
+
+
 def send_owner_limit_notification(owner_id: int, message: str):
     enabled = (get_setting(owner_id, "limit_event_notifications_enabled") or "1") != "0"
     if not enabled:
@@ -549,7 +571,7 @@ def send_nightly_panel_usage_report_if_due(now_utc: datetime, last_sent_local_da
         agent_key = int(row["agent_tg_id"])
         if agent_key != current_agent:
             if current_agent is not None:
-                report_lines.append(f"  ↳ Agent total: {agent_total} bytes")
+                report_lines.append(f"  ↳ Agent total: {format_usage_value(agent_total)}")
                 report_lines.append("")
             current_agent = agent_key
             agent_total = 0
@@ -559,13 +581,13 @@ def send_nightly_panel_usage_report_if_due(now_utc: datetime, last_sent_local_da
         agent_total += used
         overall_total += used
         report_lines.append(
-            f"  • [{row['panel_id']}] {row['panel_name']} ({row['panel_type']}): {used} bytes"
+            f"  • [{row['panel_id']}] {row['panel_name']} ({row['panel_type']}): {format_usage_value(used)}"
         )
 
     if current_agent is not None:
-        report_lines.append(f"  ↳ Agent total: {agent_total} bytes")
+        report_lines.append(f"  ↳ Agent total: {format_usage_value(agent_total)}")
         report_lines.append("")
-    report_lines.append(f"🌐 Overall total usage: {overall_total} bytes")
+    report_lines.append(f"🌐 Overall total usage: {format_usage_value(overall_total)}")
 
     report_text = "\n".join(report_lines)
     chunks = _split_message_chunks(report_text)
@@ -643,7 +665,7 @@ def try_disable_if_user_exceeded(owner_id, local_username):
         if not usage_notified:
             send_owner_limit_notification(
                 owner_id,
-                f"📊 User {local_username} exceeded usage limit ({used} / {limit} bytes).",
+                f"📊 User {local_username} exceeded usage limit ({format_usage_value(used)} / {format_usage_value(limit)}).",
             )
             mark_usage_limit_notified(owner_id, local_username)
         if not pushed:
