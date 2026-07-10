@@ -336,6 +336,9 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
 
     # settings
     ASK_LIMIT_MSG,
+    ASK_EXPIRE_MSG,
+    ASK_LIMIT_CONFIG,
+    ASK_EXPIRE_CONFIG,
     ASK_SUB_PLACEHOLDER_TEMPLATE,
     ASK_SERVICE_EMERGENCY_CFG,
     ASK_EXTRA_SUB_DOMAINS,
@@ -344,7 +347,7 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
     ASK_NORMAL_SYNC_INTERVAL,
     ASK_WEBUI_USERNAME,
     ASK_WEBUI_PASSWORD,
-) = range(44)
+) = range(47)
 
 # ---------- helpers ----------
 UNIT = 1024
@@ -599,7 +602,8 @@ def _admin_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(f"⏱️ Near-Limit Sync: {near_minutes}m", callback_data="set_near_limit_sync_interval")],
         [InlineKeyboardButton(f"⏱️ Normal Sync: {normal_minutes}m", callback_data="set_normal_sync_interval")],
         [InlineKeyboardButton(webui_config_label, callback_data="set_webui_login")],
-        [InlineKeyboardButton("💬 Limit Message", callback_data="limit_msg")],
+        [InlineKeyboardButton("💬 Traffic Limit Message", callback_data="limit_msg")],
+        [InlineKeyboardButton("⏰ Expire Message", callback_data="expire_msg")],
         [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
         [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
         [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
@@ -1959,9 +1963,121 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(uid):
             await q.edit_message_text("دسترسی ندارید.")
             return ConversationHandler.END
-        cur = get_setting(uid, "limit_message") or "—"
-        await q.edit_message_text(f"پیام فعلی:\n{cur}\n\nپیام جدید را بفرست:", reply_markup=_back_kb("admin_technical"))
+        limit_config = get_setting(uid, "limit_config") or os.getenv(
+            "USER_LIMIT_REACHED_CONFIG",
+            "vless://limitreached@info.info:80?encryption=none&security=none&type=tcp&headerType=none"
+        )
+        limit_message = get_setting(uid, "limit_message") or os.getenv(
+            "USER_LIMIT_REACHED_MESSAGE",
+            "User {username} has reached data limit ({used} / {limit})"
+        )
+        text = (
+            "💬 *تنظیمات پیام اتمام ترافیک (Traffic Limit Reached Message)*\n\n"
+            "🔗 *قالب کانفیگ (Template Config):*\n"
+            f"`{limit_config}`\n\n"
+            "📝 *متن پیام (Custom Message):*\n"
+            f"`{limit_message}`"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔗 ویرایش قالب کانفیگ", callback_data="edit_limit_config")],
+            [InlineKeyboardButton("📝 ویرایش متن پیام", callback_data="edit_limit_message")],
+            [InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_technical")]
+        ])
+        await q.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+        return ConversationHandler.END
+
+    if data == "edit_limit_config":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        cur = get_setting(uid, "limit_config") or os.getenv(
+            "USER_LIMIT_REACHED_CONFIG",
+            "vless://limitreached@info.info:80?encryption=none&security=none&type=tcp&headerType=none"
+        )
+        await q.edit_message_text(
+            f"قالب کانفیگ اتمام ترافیک فعلی:\n`{cur}`\n\nقالب جدید را بفرست (مثلا vless://limitreached@...):",
+            reply_markup=_back_kb("limit_msg"),
+            parse_mode="Markdown"
+        )
+        return ASK_LIMIT_CONFIG
+
+    if data == "edit_limit_message":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        cur = get_setting(uid, "limit_message") or os.getenv(
+            "USER_LIMIT_REACHED_MESSAGE",
+            "User {username} has reached data limit ({used} / {limit})"
+        )
+        await q.edit_message_text(
+            f"متن پیام اتمام ترافیک فعلی:\n`{cur}`\n\nمتن جدید را بفرست:",
+            reply_markup=_back_kb("limit_msg"),
+            parse_mode="Markdown"
+        )
         return ASK_LIMIT_MSG
+
+    if data == "expire_msg":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        expire_config = get_setting(uid, "expire_config") or os.getenv(
+            "USER_EXPIRED_CONFIG",
+            os.getenv(
+                "USER_LIMIT_REACHED_CONFIG",
+                "vless://limitreached@info.info:80?encryption=none&security=none&type=tcp&headerType=none"
+            )
+        )
+        expire_message = get_setting(uid, "expire_message") or os.getenv(
+            "USER_EXPIRED_MESSAGE",
+            "User {username} has expired"
+        )
+        text = (
+            "⏰ *تنظیمات پیام انقضای زمان (Subscription Expired Message)*\n\n"
+            "🔗 *قالب کانفیگ (Template Config):*\n"
+            f"`{expire_config}`\n\n"
+            "📝 *متن پیام (Custom Message):*\n"
+            f"`{expire_message}`"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔗 ویرایش قالب کانفیگ", callback_data="edit_expire_config")],
+            [InlineKeyboardButton("📝 ویرایش متن پیام", callback_data="edit_expire_message")],
+            [InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_technical")]
+        ])
+        await q.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+        return ConversationHandler.END
+
+    if data == "edit_expire_config":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        cur = get_setting(uid, "expire_config") or os.getenv(
+            "USER_EXPIRED_CONFIG",
+            os.getenv(
+                "USER_LIMIT_REACHED_CONFIG",
+                "vless://limitreached@info.info:80?encryption=none&security=none&type=tcp&headerType=none"
+            )
+        )
+        await q.edit_message_text(
+            f"قالب کانفیگ انقضای زمان فعلی:\n`{cur}`\n\nقالب جدید را بفرست (مثلا vless://limitreached@...):",
+            reply_markup=_back_kb("expire_msg"),
+            parse_mode="Markdown"
+        )
+        return ASK_EXPIRE_CONFIG
+
+    if data == "edit_expire_message":
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        cur = get_setting(uid, "expire_message") or os.getenv(
+            "USER_EXPIRED_MESSAGE",
+            "User {username} has expired"
+        )
+        await q.edit_message_text(
+            f"متن پیام انقضای زمان فعلی:\n`{cur}`\n\nمتن جدید را بفرست:",
+            reply_markup=_back_kb("expire_msg"),
+            parse_mode="Markdown"
+        )
+        return ASK_EXPIRE_MSG
 
     if data == "sub_placeholder_template":
         if not is_admin(uid) and not get_agent(uid):
@@ -3298,7 +3414,40 @@ async def got_limit_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ پیام خالیه. دوباره بفرست:")
         return ASK_LIMIT_MSG
     set_setting(update.effective_user.id, "limit_message", msg)
-    await update.message.reply_text("✅ پیام ذخیره شد.", reply_markup=_back_kb("admin_technical"))
+    await update.message.reply_text("✅ پیام ذخیره شد.", reply_markup=_back_kb("limit_msg"))
+    return ConversationHandler.END
+
+async def got_limit_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    cfg = (update.message.text or "").strip()
+    if not cfg:
+        await update.message.reply_text("❌ قالب خالیه. دوباره بفرست:")
+        return ASK_LIMIT_CONFIG
+    set_setting(update.effective_user.id, "limit_config", cfg)
+    await update.message.reply_text("✅ قالب کانفیگ ذخیره شد.", reply_markup=_back_kb("limit_msg"))
+    return ConversationHandler.END
+
+async def got_expire_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    msg = (update.message.text or "").strip()
+    if not msg:
+        await update.message.reply_text("❌ پیام خالیه. دوباره بفرست:")
+        return ASK_EXPIRE_MSG
+    set_setting(update.effective_user.id, "expire_message", msg)
+    await update.message.reply_text("✅ پیام ذخیره شد.", reply_markup=_back_kb("expire_msg"))
+    return ConversationHandler.END
+
+async def got_expire_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    cfg = (update.message.text or "").strip()
+    if not cfg:
+        await update.message.reply_text("❌ قالب خالیه. دوباره بفرست:")
+        return ASK_EXPIRE_CONFIG
+    set_setting(update.effective_user.id, "expire_config", cfg)
+    await update.message.reply_text("✅ قالب کانفیگ ذخیره شد.", reply_markup=_back_kb("expire_msg"))
     return ConversationHandler.END
 
 async def got_sub_placeholder_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4829,6 +4978,9 @@ def build_app():
 
             # settings
             ASK_LIMIT_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_limit_msg)],
+            ASK_EXPIRE_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_expire_msg)],
+            ASK_LIMIT_CONFIG: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_limit_config)],
+            ASK_EXPIRE_CONFIG: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_expire_config)],
             ASK_SUB_PLACEHOLDER_TEMPLATE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, got_sub_placeholder_template)
             ],

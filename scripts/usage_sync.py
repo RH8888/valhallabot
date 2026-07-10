@@ -696,6 +696,18 @@ def try_disable_if_user_exceeded(owner_id, local_username):
         )
         mark_expire_limit_notified(owner_id, local_username)
 
+    if expired:
+        if not pushed:
+            links = list_links_of_local_user(owner_id, local_username)
+            for l in links:
+                code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"], l.get("sanaei_api_version"))
+                if code and code != 200:
+                    log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
+                else:
+                    log.info("disabled %s on %s", l["remote_username"], l["panel_url"])
+            mark_user_disabled(owner_id, local_username)
+        return
+
     if limit > 0 and used >= limit:
         if not usage_notified:
             send_owner_limit_notification(
@@ -724,6 +736,19 @@ def try_enable_if_user_ok(owner_id, local_username):
 
     if manual_disabled:
         return
+
+    # Check if the user is expired
+    expire_at = lu.get("expire_at")
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    expired = False
+    if expire_at:
+        try:
+            expired = (expire_at <= now_utc)
+        except Exception:
+            expired = False
+    if expired:
+        return
+
     if pushed and (limit == 0 or used < limit):
         links = list_links_of_local_user(owner_id, local_username)
         for l in links:

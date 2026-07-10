@@ -997,6 +997,7 @@ def unified_links(local_username, app_key):
     expire_notified = int(lu.get("expire_limit_notified", 0) or 0)
 
     manual_blocked = False
+    expired = False
     if manual_disabled:
         manual_blocked = True
         if not pushed:
@@ -1041,7 +1042,26 @@ def unified_links(local_username, app_key):
                         log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
                 mark_user_disabled(owner_id, local_username)
             if not want_html:
-                return Response("", mimetype="text/plain")
+                expired_config = get_setting(owner_id, "expire_config") or os.getenv(
+                    "USER_EXPIRED_CONFIG",
+                    os.getenv(
+                        "USER_LIMIT_REACHED_CONFIG",
+                        "vless://limitreached@info.info:80?encryption=none&security=none&type=tcp&headerType=none"
+                    )
+                )
+                msg_template = get_setting(owner_id, "expire_message") or os.getenv(
+                    "USER_EXPIRED_MESSAGE",
+                    "User {username} has expired",
+                )
+                msg = msg_template.replace("{username}", local_username)
+                body = expired_config + "#" + quote(msg)
+                resp = Response(body, mimetype="text/plain")
+
+                resp.headers["X-Plan-Limit-Bytes"] = str(limit)
+                resp.headers["X-Used-Bytes"] = str(used)
+                resp.headers["X-Remaining-Bytes"] = "0"
+                resp.headers["X-Disabled-Pushed"] = "1"
+                return resp
 
     limit_reached = False
     if not manual_disabled:
@@ -1067,7 +1087,7 @@ def unified_links(local_username, app_key):
                         log.warning("disable on %s@%s -> %s %s", l["remote_username"], l["panel_url"], code, msg)
                 mark_user_disabled(owner_id, local_username)
             if not want_html:
-                limit_config = os.getenv(
+                limit_config = get_setting(owner_id, "limit_config") or os.getenv(
                     "USER_LIMIT_REACHED_CONFIG",
                     "vless://limitreached@info.info:80?encryption=none&security=none&type=tcp&headerType=none",
                 )
@@ -1090,7 +1110,7 @@ def unified_links(local_username, app_key):
     # ---- Aggregate & filter links (per-panel config-name filters) ----
     mapped = list_mapped_links(owner_id, local_username)
     all_links, errors, remote_info = [], [], None
-    if not agent_blocked and not limit_reached and not manual_blocked:
+    if not agent_blocked and not limit_reached and not manual_blocked and not expired:
         if mapped:
             all_links, errors, remote_info = collect_links(mapped, local_username, want_html)
         else:
