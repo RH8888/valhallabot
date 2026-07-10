@@ -288,6 +288,8 @@ def get_local_user(owner_id, local_username):
         "manual_disabled",
         "disabled_pushed",
         "usage_limit_notified",
+        "expire_at",
+        "expire_limit_notified",
     ]
     available = [col for col in wanted if col in columns]
     with with_mysql_cursor() as cur:
@@ -303,7 +305,10 @@ def get_local_user(owner_id, local_username):
         row = cur.fetchone()
         if row:
             for col in wanted:
-                row.setdefault(col, 0)
+                if col == "expire_at":
+                    row.setdefault(col, None)
+                else:
+                    row.setdefault(col, 0)
         return row
 
 
@@ -408,6 +413,18 @@ def mark_usage_limit_notified(owner_id, local_username):
             """
             UPDATE local_users
             SET usage_limit_notified=1, usage_limit_notified_at=NOW()
+            WHERE owner_id=%s AND username=%s
+            """,
+            (owner_id, local_username),
+        )
+
+
+def mark_expire_limit_notified(owner_id, local_username):
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE local_users
+            SET expire_limit_notified=1, expire_limit_notified_at=NOW()
             WHERE owner_id=%s AND username=%s
             """,
             (owner_id, local_username),
@@ -660,6 +677,24 @@ def try_disable_if_user_exceeded(owner_id, local_username):
 
     if manual_disabled:
         return
+
+    # Check for expiration notification
+    expire_at = lu.get("expire_at")
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    expired = False
+    if expire_at:
+        try:
+            expired = (expire_at <= now_utc)
+        except Exception:
+            expired = False
+    expire_notified = int(lu.get("expire_limit_notified", 0) or 0)
+
+    if expired and not expire_notified:
+        send_owner_limit_notification(
+            owner_id,
+            f"⏰ User {local_username} reached expiration limit.",
+        )
+        mark_expire_limit_notified(owner_id, local_username)
 
     if limit > 0 and used >= limit:
         if not usage_notified:
