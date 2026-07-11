@@ -147,19 +147,19 @@ can be added manually to customise behaviour.
   their allowance, the worker and aggregator coordinate to disable remote
   accounts automatically.
 
-### API token storage
+### Token & Password Storage
 
-- **Hashed + encrypted** – Agent and admin API tokens are stored as a SHA-256
+- **API tokens (hashed + encrypted)** – Agent and admin API tokens are stored as a SHA-256
   hash for lookups plus an encrypted payload (using the
   `AGENT_TOKEN_ENCRYPTION_KEY`) so the raw value can still be shown once via the
   bot or REST API.
-- **Legacy migration** – Existing installations that stored plaintext admin
-  tokens should run `python -m scripts.migrate_admin_tokens` (with
-  `PYTHONPATH=.` or from within the project virtualenv) after deploying this
-  release. The script hashes and encrypts any remaining plaintext entries while
-  preserving the original value.
+- **Panel passwords (encrypted)** – Panel admin passwords (`panels.admin_password_encrypted`)
+  are encrypted using the same `AGENT_TOKEN_ENCRYPTION_KEY` before storing in the database.
+- **Legacy migration** – To migrate existing installations that stored plaintext passwords:
+  - Run the panel password migration script: `python -m scripts.migrate_panel_passwords` (with `PYTHONPATH=.` or from within the project virtualenv) to encrypt plaintext panel passwords.
+  - If your installation has legacy plaintext admin tokens, run the appropriate admin token migration script if applicable.
 - **Environment requirement** – Ensure `AGENT_TOKEN_ENCRYPTION_KEY` is defined
-  before rotating or viewing tokens; without it the bot and API will refuse to
+  before rotating or viewing tokens/passwords; without it the bot and API will refuse to
   decrypt stored values. During key rotations, put previous keys in
   `AGENT_TOKEN_ENCRYPTION_OLD_KEYS` until old ciphertext has been re-encrypted.
 

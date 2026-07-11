@@ -13,7 +13,7 @@ from typing import Iterable
 
 import requests
 
-from models.token_crypto import TokenEncryptionError
+from models.token_crypto import TokenEncryptionError, decrypt_token, encrypt_token
 
 from .database import with_mysql_cursor
 
@@ -207,15 +207,13 @@ def _is_auth_error(error: str | None) -> bool:
 
 
 def encrypt_panel_password(password: str) -> str:
-    """Store panel admin passwords as-is (encryption disabled)."""
-
-    return password
+    """Encrypt a panel admin password with the configured Fernet key."""
+    return encrypt_token(password)
 
 
 def decrypt_panel_password(ciphertext: str) -> str:
-    """Read panel admin passwords as-is (decryption disabled)."""
-
-    return ciphertext
+    """Decrypt a stored panel admin password with the configured Fernet key."""
+    return decrypt_token(ciphertext)
 
 
 def _decode_jwt_payload(token: str) -> dict | None:
