@@ -1833,6 +1833,39 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = q.data
     uid = update.effective_user.id
 
+    # Keep add-panel inline selections responsive even if Telegram delivers the
+    # callback outside the expected conversation state (for example after a bot
+    # restart or after another callback handler has ended the conversation).
+    if data.startswith("add_panel_type:"):
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        panel_type = data.split(":", 1)[1].strip().lower()
+        if panel_type not in PANEL_TYPES:
+            await q.edit_message_text("❌ نوع پنل نامعتبر. دوباره انتخاب کن:", reply_markup=_panel_type_kb())
+            return ASK_PANEL_TYPE
+        return await _apply_panel_type(panel_type, context, q.edit_message_text)
+
+    if data.startswith("add_sanaei_version:"):
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        version = data.split(":", 1)[1].strip().lower()
+        if version not in SANAEI_VERSION_LABELS:
+            await q.edit_message_text("❌ نسخه نامعتبر. دوباره انتخاب کن:", reply_markup=_sanaei_version_kb())
+            return ASK_SANAEI_VERSION
+        return await _apply_sanaei_version(version, context, q.edit_message_text)
+
+    if data.startswith("add_sanaei_auth:"):
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        auth_type = data.split(":", 1)[1].strip().lower()
+        if auth_type not in SANAEI_AUTH_TYPE_LABELS:
+            await q.edit_message_text("❌ نوع احراز هویت نامعتبر. دوباره انتخاب کن:", reply_markup=_sanaei_auth_type_kb())
+            return ASK_SANAEI_AUTH_TYPE
+        return await _apply_sanaei_auth_type(auth_type, context, q.edit_message_text)
+
     if data == "admin_panel":
         if not is_admin(uid):
             await q.edit_message_text("دسترسی ندارید.")
