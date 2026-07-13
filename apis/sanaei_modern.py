@@ -443,7 +443,12 @@ def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dic
         return None, str(e)[:200]
 
 
-def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict], Optional[str]]:
+def get_user(
+    panel_url: str,
+    token: str,
+    username: str,
+    sanaei_sub_method: str = "links",
+) -> Tuple[Optional[Dict], Optional[str]]:
     """Fetch and normalise client details via modern client endpoints."""
 
     client, err = _fetch_client(panel_url, token, username)
@@ -452,24 +457,50 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
     traffic, traffic_err = _fetch_traffic(panel_url, token, username)
     if traffic_err:
         traffic = None
-    links, _ = fetch_links_from_panel(panel_url, token, username)
+    links, _ = fetch_links_from_panel(panel_url, token, username, sanaei_sub_method=sanaei_sub_method)
     return _normalise_user_object(client, traffic, links), None
 
 
 @cached(cache=_links_cache, lock=_links_lock)
-def fetch_links_from_panel(panel_url: str, token: str, username: str) -> Tuple[List[str], Optional[str]]:
-    """Return generated client links from ``GET /panel/api/clients/links/{email}``."""
+def fetch_links_from_panel(
+    panel_url: str,
+    token: str,
+    username: str,
+    sanaei_sub_method: str = "links",
+) -> Tuple[List[str], Optional[str]]:
+    """Return generated client links from modern panel."""
 
-    try:
-        r = _request_with_reauth("GET", panel_url, token, "panel", "api", "clients", "links", username, timeout=20)
-        if r.status_code != 200:
-            return [], _response_error(r, 200)
-        data = _json_or_empty(r)
-        if not _panel_success(data):
-            return [], str(data.get("msg") or "request failed")[:200]
-        return _normalise_links(_unwrap_panel_response(data)), None
-    except Exception as e:  # pragma: no cover - network errors
-        return [], str(e)[:200]
+    if sanaei_sub_method == "sub_links":
+        try:
+            client_data, err = _fetch_client(panel_url, token, username)
+            if err:
+                return [], err
+            if not client_data:
+                return [], "client not found"
+            client_dict = _extract_client(client_data)
+            sub_id = client_dict.get("subId") or (client_data.get("subId") if isinstance(client_data, dict) else None)
+            if not sub_id:
+                return [], f"subId not found for {username}"
+            r = _request_with_reauth("GET", panel_url, token, "panel", "api", "clients", "subLinks", sub_id, timeout=20)
+            if r.status_code != 200:
+                return [], _response_error(r, 200)
+            data = _json_or_empty(r)
+            if not _panel_success(data):
+                return [], str(data.get("msg") or "request failed")[:200]
+            return _normalise_links(_unwrap_panel_response(data)), None
+        except Exception as e:  # pragma: no cover - network errors
+            return [], str(e)[:200]
+    else:
+        try:
+            r = _request_with_reauth("GET", panel_url, token, "panel", "api", "clients", "links", username, timeout=20)
+            if r.status_code != 200:
+                return [], _response_error(r, 200)
+            data = _json_or_empty(r)
+            if not _panel_success(data):
+                return [], str(data.get("msg") or "request failed")[:200]
+            return _normalise_links(_unwrap_panel_response(data)), None
+        except Exception as e:  # pragma: no cover - network errors
+            return [], str(e)[:200]
 
 
 def fetch_subscription_links(sub_url: str) -> List[str]:

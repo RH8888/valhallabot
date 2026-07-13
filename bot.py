@@ -1396,7 +1396,8 @@ def list_user_links(owner_id: int, local_username: str):
             f"""SELECT lup.panel_id, lup.remote_username,
                       p.panel_url, p.access_token, p.panel_type,
                       p.sanaei_api_version, p.sanaei_auth_type,
-                      p.admin_username, p.admin_password_encrypted
+                      p.admin_username, p.admin_password_encrypted,
+                      p.sanaei_sub_method
                  FROM local_user_panel_links lup
                  JOIN panels p ON p.id = lup.panel_id
                  WHERE lup.owner_id IN ({placeholders}) AND lup.local_username=%s""",
@@ -1484,6 +1485,16 @@ def set_panel_append_ratio_to_name(owner_id: int, panel_id: int, enabled: bool):
             params,
         )
 
+def set_panel_sanaei_sub_method(owner_id: int, panel_id: int, method: str):
+    ids = expand_owner_ids(owner_id)
+    placeholders = ",".join(["%s"] * len(ids))
+    params = [method, int(panel_id)] + ids
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"UPDATE panels SET sanaei_sub_method=%s WHERE id=%s AND telegram_user_id IN ({placeholders})",
+            params,
+        )
+
 def get_panel(owner_id: int, panel_id: int):
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
@@ -1567,7 +1578,7 @@ def list_panel_links(panel_id: int):
         cur.execute("""
             SELECT lup.owner_id, lup.local_username, lup.remote_username,
                    p.panel_url, p.access_token, p.panel_type,
-                   p.sanaei_api_version
+                   p.sanaei_api_version, p.sanaei_sub_method
             FROM local_user_panel_links lup
             JOIN panels p ON p.id = lup.panel_id
             WHERE lup.panel_id=%s
@@ -2388,6 +2399,18 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await show_panel_card(q, context, uid, pid)
         set_panel_append_ratio_to_name(uid, pid, not bool(info.get("append_ratio_to_name") or 0))
         return await show_panel_card(q, context, uid, pid)
+    if data == "p_toggle_sub_method":
+        if not is_admin(uid):
+            return ConversationHandler.END
+        pid = context.user_data.get("edit_panel_id")
+        info = get_panel(uid, pid) if pid else None
+        if not info:
+            await q.edit_message_text("پنل پیدا نشد.")
+            return ConversationHandler.END
+        current_method = info.get("sanaei_sub_method") or "links"
+        new_method = "sub_links" if current_method == "links" else "links"
+        set_panel_sanaei_sub_method(uid, pid, new_method)
+        return await show_panel_card(q, context, uid, pid)
     if data == "p_set_sub":
         if not is_admin(uid): return ConversationHandler.END
         pid = context.user_data.get("edit_panel_id")
@@ -3039,6 +3062,10 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         lines.append(f"🔐 API Key: <b>{api_key_state}</b>")
     if not is_sanaei or is_modern_sanaei:
         lines.append(f"🔗 Sub URL: <code>{p.get('sub_url') or '-'}</code>")
+    if is_modern_sanaei:
+        sub_method = p.get("sanaei_sub_method") or "links"
+        sub_method_label = "subLinks" if sub_method == "sub_links" else "links"
+        lines.append(f"🔄 Sub Method: <b>{sub_method_label}</b>")
     lines += [
         "",
         "چه کاری انجام بدهم؟",
@@ -3059,6 +3086,10 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         kb.append([InlineKeyboardButton("🔗 Set/Clear Sub URL", callback_data="p_set_sub")])
         kb.append([InlineKeyboardButton("🧷 فیلتر کانفیگ‌های پنل", callback_data="p_filter_cfgs")])
         kb.append([InlineKeyboardButton("🔢 فیلتر بر اساس شماره", callback_data="p_filter_cfgnums")])
+    if is_modern_sanaei:
+        sub_method = p.get("sanaei_sub_method") or "links"
+        sub_method_btn = "🔄 Sub Method: " + ("links" if sub_method == "sub_links" else "subLinks")
+        kb.append([InlineKeyboardButton(sub_method_btn, callback_data="p_toggle_sub_method")])
     kb.append([InlineKeyboardButton("🗑️ Remove Panel", callback_data="p_remove")])
     kb.append([InlineKeyboardButton("⬅️ Back", callback_data="manage_panels")])
     await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")

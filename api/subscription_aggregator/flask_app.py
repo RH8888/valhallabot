@@ -136,6 +136,7 @@ def list_mapped_links(owner_id, local_username):
             SELECT lup.panel_id, lup.remote_username,
                    p.panel_url, p.access_token, p.panel_type,
                    p.sanaei_api_version, p.sanaei_auth_type,
+                   p.sanaei_sub_method,
                    p.admin_username, p.admin_password_encrypted,
                    p.usage_multiplier, p.append_ratio_to_name
             FROM local_user_panel_links lup
@@ -161,6 +162,7 @@ def list_all_panels(owner_id):
             f"""
             SELECT id, panel_url, access_token, panel_type,
                    sanaei_api_version, sanaei_auth_type,
+                   sanaei_sub_method,
                    admin_username, admin_password_encrypted,
                    usage_multiplier, append_ratio_to_name
             FROM panels
@@ -395,14 +397,18 @@ def collect_links(mapped, local_username: str, want_html: bool):
         if l.get("panel_type") == "sanaei":
             api = get_sanaei_api(l.get("sanaei_api_version"))
             remotes = remote_names_for_sanaei(l["remote_username"], l.get("sanaei_api_version"))
+            is_modern = (l.get("sanaei_api_version") or "").lower() == "modern"
 
             def remote_worker(rn: str):
                 info = None
+                kwargs = {}
+                if is_modern:
+                    kwargs["sanaei_sub_method"] = l.get("sanaei_sub_method", "links")
                 if want_html:
-                    u, uerr = api.get_user(l["panel_url"], l["access_token"], rn)
+                    u, uerr = api.get_user(l["panel_url"], l["access_token"], rn, **kwargs)
                     if not uerr:
                         info = u
-                ls, err = api.fetch_links_from_panel(l["panel_url"], l["access_token"], rn)
+                ls, err = api.fetch_links_from_panel(l["panel_url"], l["access_token"], rn, **kwargs)
                 if err:
                     err = f"{rn}@{l['panel_url']}: {err}"
                 return ls, err, info

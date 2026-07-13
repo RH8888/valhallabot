@@ -322,6 +322,70 @@ class SanaeiModernResponseTests(unittest.TestCase):
         self.assertIsNone(err)
         self.assertEqual(request.call_args.kwargs["json"]["enable"], True)
 
+    def test_fetch_links_from_panel_default_uses_links_endpoint(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {
+            "success": True,
+            "obj": ["vless://uuid-1@host:443?security=none#alice"]
+        }
+
+        with patch.object(sanaei_modern, "_request_with_reauth", return_value=response) as request:
+            links, err = sanaei_modern.fetch_links_from_panel("https://panel.example", "token", "alice@example.com")
+
+        self.assertEqual(links, ["vless://uuid-1@host:443?security=none#alice"])
+        self.assertIsNone(err)
+        request.assert_called_once()
+        args = request.call_args.args
+        self.assertEqual(args[:7], ("GET", "https://panel.example", "token", "panel", "api", "clients", "links"))
+        self.assertEqual(args[7], "alice@example.com")
+
+    def test_fetch_links_from_panel_sub_links_uses_sublinks_endpoint(self):
+        client_response = {
+            "email": "alice@example.com",
+            "subId": "sub-id-12345",
+            "uuid": "uuid-1",
+            "inboundIds": [7]
+        }
+        sublinks_response = Mock()
+        sublinks_response.status_code = 200
+        sublinks_response.json.return_value = {
+            "success": True,
+            "obj": ["vless://uuid-1@host:443?security=none#alice"]
+        }
+
+        with patch.object(sanaei_modern, "_fetch_client", return_value=(client_response, None)), patch.object(
+            sanaei_modern, "_request_with_reauth", return_value=sublinks_response
+        ) as request:
+            links, err = sanaei_modern.fetch_links_from_panel(
+                "https://panel.example", "token", "alice@example.com", sanaei_sub_method="sub_links"
+            )
+
+        self.assertEqual(links, ["vless://uuid-1@host:443?security=none#alice"])
+        self.assertIsNone(err)
+        request.assert_called_once()
+        args = request.call_args.args
+        self.assertEqual(args[:7], ("GET", "https://panel.example", "token", "panel", "api", "clients", "subLinks"))
+        self.assertEqual(args[7], "sub-id-12345")
+
+    def test_fetch_links_from_panel_sub_links_handles_missing_subid(self):
+        client_response = {
+            "email": "alice@example.com",
+            "uuid": "uuid-1",
+            "inboundIds": [7]
+        }
+
+        with patch.object(sanaei_modern, "_fetch_client", return_value=(client_response, None)), patch.object(
+            sanaei_modern, "_request_with_reauth"
+        ) as request:
+            links, err = sanaei_modern.fetch_links_from_panel(
+                "https://panel.example", "token", "alice@example.com", sanaei_sub_method="sub_links"
+            )
+
+        self.assertEqual(links, [])
+        self.assertIn("subId not found", err)
+        request.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

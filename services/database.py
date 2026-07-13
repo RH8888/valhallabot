@@ -131,6 +131,7 @@ def ensure_schema() -> None:
                 panel_type VARCHAR(32) NOT NULL DEFAULT 'marzneshin',
                 sanaei_api_version VARCHAR(16) NULL,
                 sanaei_auth_type VARCHAR(16) NULL,
+                sanaei_sub_method VARCHAR(32) NOT NULL DEFAULT 'links',
                 usage_multiplier DOUBLE NOT NULL DEFAULT 1.0,
                 append_ratio_to_name TINYINT(1) NOT NULL DEFAULT 0,
                 admin_username VARCHAR(64) NOT NULL,
@@ -163,6 +164,12 @@ def ensure_schema() -> None:
         try:
             cur.execute(
                 "ALTER TABLE panels ADD COLUMN sanaei_auth_type VARCHAR(16) NULL AFTER sanaei_api_version"
+            )
+        except MySQLError:
+            pass
+        try:
+            cur.execute(
+                "ALTER TABLE panels ADD COLUMN sanaei_sub_method VARCHAR(32) NOT NULL DEFAULT 'links' AFTER sanaei_auth_type"
             )
         except MySQLError:
             pass
