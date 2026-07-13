@@ -173,6 +173,28 @@ def _extract_inbound_ids(obj: Any) -> List[int]:
     return [coerced] if coerced is not None else []
 
 
+def _extract_sub_id(obj: Any) -> Optional[str]:
+    """Return a client's subscription id from modern 3x-ui response shapes."""
+
+    if not isinstance(obj, Mapping):
+        return None
+    client = _extract_client(obj)
+    value = _first_present(client, "subId", "sub_id", "subscriptionId", "subscription_id")
+    if value is None:
+        value = _first_present(obj, "subId", "sub_id", "subscriptionId", "subscription_id")
+    if value is None:
+        for key in ("obj", "data", "result"):
+            nested = obj.get(key)
+            if isinstance(nested, Mapping):
+                value = _extract_sub_id(nested)
+                if value is not None:
+                    break
+    if value is None:
+        return None
+    sub_id = str(value).strip()
+    return sub_id or None
+
+
 def _normalise_links(value: Any) -> List[str]:
     if value is None:
         return []
@@ -470,15 +492,14 @@ def fetch_links_from_panel(
 ) -> Tuple[List[str], Optional[str]]:
     """Return generated client links from modern panel."""
 
-    if sanaei_sub_method == "sub_links":
+    if (sanaei_sub_method or "links") == "sub_links":
         try:
             client_data, err = _fetch_client(panel_url, token, username)
             if err:
                 return [], err
             if not client_data:
                 return [], "client not found"
-            client_dict = _extract_client(client_data)
-            sub_id = client_dict.get("subId") or (client_data.get("subId") if isinstance(client_data, dict) else None)
+            sub_id = _extract_sub_id(client_data)
             if not sub_id:
                 return [], f"subId not found for {username}"
             r = _request_with_reauth("GET", panel_url, token, "panel", "api", "clients", "subLinks", sub_id, timeout=20)
