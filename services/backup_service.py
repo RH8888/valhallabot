@@ -19,7 +19,6 @@ from typing import Optional, Tuple
 import requests
 from dotenv import load_dotenv
 
-from api.subscription_aggregator import ordered_admin_ids
 from services.database import with_mysql_cursor
 from services.settings import get_setting, set_setting
 
@@ -49,8 +48,14 @@ def get_backup_dir() -> Path:
 
 
 def _get_main_admin_id() -> Optional[int]:
-    admins = ordered_admin_ids()
-    return admins[0] if admins else None
+    raw_ids = (os.getenv("ADMIN_IDS") or "").strip()
+    if not raw_ids:
+        return None
+    for raw in raw_ids.split(","):
+        raw = raw.strip()
+        if raw.isdigit():
+            return int(raw)
+    return None
 
 
 def get_backup_settings() -> dict:

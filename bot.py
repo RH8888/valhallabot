@@ -615,9 +615,52 @@ def _admin_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⏰ Expire Message", callback_data="expire_msg")],
         [InlineKeyboardButton("🌐 Extra Sub Domains", callback_data="extra_sub_domains")],
         [InlineKeyboardButton("🔑 Admin Token", callback_data="admin_token")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")],
     ]
+    if _root_admin_id() == owner_id:
+        kb.append([InlineKeyboardButton("💾 Automatic Backups", callback_data="auto_backups_menu")])
+    kb.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_panel")])
     return InlineKeyboardMarkup([row for row in kb if row])
+
+
+async def show_auto_backups_menu(update_or_q, context, uid: int, notice: str | None = None):
+    if uid != _root_admin_id():
+        if hasattr(update_or_q, "edit_message_text"):
+            await update_or_q.edit_message_text("دسترسی ندارید.")
+        return ConversationHandler.END
+
+    settings = get_backup_settings()
+    status_label = "🟢 روشن (Enabled)" if settings["enabled"] else "🔴 خاموش (Disabled)"
+    interval = settings["interval_hours"]
+    last_backup = settings["last_backup"] or "—"
+    if last_backup != "—":
+        try:
+            dt = datetime.fromisoformat(last_backup)
+            last_backup = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            pass
+
+    text = (
+        "💾 *تنظیمات بکاپ خودکار دیتابیس (Automatic Backups)*\n\n"
+        f"📊 *وضعیت:* {status_label}\n"
+        f"⏱️ *فاصله زمانی بکاپ:* `{interval} ساعت`\n"
+        f"🕒 *آخرین بکاپ:* `{last_backup}`\n"
+    )
+    if notice:
+        text = f"{notice}\n\n{text}"
+
+    toggle_btn_text = "🔴 غیرفعال کردن (Disable)" if settings["enabled"] else "🟢 فعال کردن (Enable)"
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(toggle_btn_text, callback_data="auto_backups_toggle")],
+        [InlineKeyboardButton("⏱️ تنظیم فاصله زمانی (ساعت)", callback_data="auto_backups_set_interval")],
+        [InlineKeyboardButton("⚡ بکاپ گیری آنی (Backup Now)", callback_data="auto_backups_run_now")],
+        [InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_technical")],
+    ])
+
+    if hasattr(update_or_q, "edit_message_text"):
+        await update_or_q.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+    elif hasattr(update_or_q, "message"):
+        await update_or_q.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
+    return ConversationHandler.END
 
 
 def _domain_settings_owner(owner_id: int) -> int:
@@ -2013,6 +2056,42 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=_back_kb(back_target),
         )
         return ASK_WEBUI_USERNAME
+
+    if data == "auto_backups_menu":
+        return await show_auto_backups_menu(q, context, uid)
+
+    if data == "auto_backups_toggle":
+        if uid != _root_admin_id():
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        st = get_backup_settings()
+        set_backup_settings(not st["enabled"], st["interval_hours"])
+        notice = "✅ بکاپ خودکار فعال شد." if not st["enabled"] else "🔴 بکاپ خودکار غیرفعال شد."
+        return await show_auto_backups_menu(q, context, uid, notice=notice)
+
+    if data == "auto_backups_set_interval":
+        if uid != _root_admin_id():
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        st = get_backup_settings()
+        await q.edit_message_text(
+            f"فاصله زمانی فعلی: {st['interval_hours']} ساعت\n\n"
+            "لطفاً فاصله زمانی جدید بر حسب ساعت را ارسال کنید (حداقل 1 ساعت):",
+            reply_markup=_back_kb("auto_backups_menu"),
+        )
+        return ASK_BACKUP_INTERVAL
+
+    if data == "auto_backups_run_now":
+        if uid != _root_admin_id():
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        await q.edit_message_text("⏳ در حال ایجاد بکاپ و ارسال به تلگرام...")
+        try:
+            _, fname, sz = await asyncio.to_thread(perform_backup, trigger_type="manual")
+            notice = f"✅ بکاپ با موفقیت ایجاد و ارسال شد: {fname} ({format_bytes(sz)})"
+        except Exception as exc:
+            notice = f"❌ خطا در ایجاد بکاپ: {exc}"
+        return await show_auto_backups_menu(q, context, uid, notice=notice)
 
     if data == "limit_msg":
         if not is_admin(uid):
@@ -5001,6 +5080,24 @@ async def sync_user_panels_async(
         rollback_on_error=rollback_on_error,
     )
 
+async def got_backup_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid != _root_admin_id():
+        await update.message.reply_text("دسترسی ندارید.")
+        return ConversationHandler.END
+    raw = (update.message.text or "").strip()
+    try:
+        val = int(raw)
+        if val < 1:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ لطفاً یک عدد صحیح معتبر (حداقل 1 ساعت) وارد کنید:")
+        return ASK_BACKUP_INTERVAL
+
+    st = get_backup_settings()
+    set_backup_settings(st["enabled"], val)
+    return await show_auto_backups_menu(update, context, uid, notice=f"✅ فاصله زمانی بکاپ به {val} ساعت تغییر یافت.")
+
 # ---------- wiring ----------
 def build_app():
     load_dotenv()
@@ -5009,6 +5106,7 @@ def build_app():
         raise RuntimeError("BOT_TOKEN missing in .env")
     init_mysql_pool()
     ensure_schema()
+    start_backup_scheduler()
     app = Application.builder().token(tok).build()
 
     conv = ConversationHandler(
@@ -5070,6 +5168,7 @@ def build_app():
             ASK_NORMAL_SYNC_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_normal_sync_interval)],
             ASK_WEBUI_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_webui_username)],
             ASK_WEBUI_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_webui_password)],
+            ASK_BACKUP_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_backup_interval)],
 
             # preset mgmt
             ASK_PRESET_GB:   [MessageHandler(filters.TEXT & ~filters.COMMAND, got_preset_gb)],
