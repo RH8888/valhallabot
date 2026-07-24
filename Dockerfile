@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash netcat-openbsd gcc default-libmysqlclient-dev default-mysql-client \
+    bash netcat-openbsd gcc default-libmysqlclient-dev \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
