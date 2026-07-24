@@ -65,9 +65,12 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       USAGE_SYNC_INTERVAL: ${USAGE_SYNC_INTERVAL}
+      BACKUP_DIR: ${BACKUP_DIR:-/app/backups}
       AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY:-}
       AGENT_TOKEN_ENCRYPTION_OLD_KEYS: ${AGENT_TOKEN_ENCRYPTION_OLD_KEYS:-}
       SERVICE: bot
+    volumes:
+      - ./backups:/app/backups
 
 
   certbot-renew:
