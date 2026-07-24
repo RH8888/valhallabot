@@ -107,6 +107,10 @@ SANAEI_AUTH_TYPE_LABELS = {
     "cookie": "Cookie",
     "bearer": "Bearer / API token",
 }
+SANAEI_SUB_METHOD_LABELS = {
+    "links": "links (/panel/api/clients/links/{email})",
+    "sub_links": "subLinks (/panel/api/clients/subLinks/{subId})",
+}
 API_MODULES = {
     "marzneshin": marzneshin,
     "marzban": marzban,
@@ -1491,6 +1495,8 @@ def set_panel_append_ratio_to_name(owner_id: int, panel_id: int, enabled: bool):
         )
 
 def set_panel_sanaei_sub_method(owner_id: int, panel_id: int, method: str):
+    if method not in SANAEI_SUB_METHOD_LABELS:
+        raise ValueError(f"invalid Sanaei subscription method: {method}")
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
     params = [method, int(panel_id)] + ids
@@ -1831,6 +1837,39 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     data = q.data
     uid = update.effective_user.id
+
+    # Keep add-panel inline selections responsive even if Telegram delivers the
+    # callback outside the expected conversation state (for example after a bot
+    # restart or after another callback handler has ended the conversation).
+    if data.startswith("add_panel_type:"):
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        panel_type = data.split(":", 1)[1].strip().lower()
+        if panel_type not in PANEL_TYPES:
+            await q.edit_message_text("❌ نوع پنل نامعتبر. دوباره انتخاب کن:", reply_markup=_panel_type_kb())
+            return ASK_PANEL_TYPE
+        return await _apply_panel_type(panel_type, context, q.edit_message_text)
+
+    if data.startswith("add_sanaei_version:"):
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        version = data.split(":", 1)[1].strip().lower()
+        if version not in SANAEI_VERSION_LABELS:
+            await q.edit_message_text("❌ نسخه نامعتبر. دوباره انتخاب کن:", reply_markup=_sanaei_version_kb())
+            return ASK_SANAEI_VERSION
+        return await _apply_sanaei_version(version, context, q.edit_message_text)
+
+    if data.startswith("add_sanaei_auth:"):
+        if not is_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        auth_type = data.split(":", 1)[1].strip().lower()
+        if auth_type not in SANAEI_AUTH_TYPE_LABELS:
+            await q.edit_message_text("❌ نوع احراز هویت نامعتبر. دوباره انتخاب کن:", reply_markup=_sanaei_auth_type_kb())
+            return ASK_SANAEI_AUTH_TYPE
+        return await _apply_sanaei_auth_type(auth_type, context, q.edit_message_text)
 
     if data == "admin_panel":
         if not is_admin(uid):
@@ -2411,6 +2450,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         info = get_panel(uid, pid) if pid else None
         if not info:
             await q.edit_message_text("پنل پیدا نشد.")
+            return ConversationHandler.END
+        if not is_modern_sanaei_panel(info):
+            await q.edit_message_text("این گزینه فقط برای نسخه modern سناعی فعال است.")
             return ConversationHandler.END
         current_method = info.get("sanaei_sub_method") or "links"
         new_method = "sub_links" if current_method == "links" else "links"
@@ -3069,7 +3111,7 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         lines.append(f"🔗 Sub URL: <code>{p.get('sub_url') or '-'}</code>")
     if is_modern_sanaei:
         sub_method = p.get("sanaei_sub_method") or "links"
-        sub_method_label = "subLinks" if sub_method == "sub_links" else "links"
+        sub_method_label = SANAEI_SUB_METHOD_LABELS.get(sub_method, SANAEI_SUB_METHOD_LABELS["links"])
         lines.append(f"🔄 Sub Method: <b>{sub_method_label}</b>")
     lines += [
         "",
@@ -3093,7 +3135,8 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
         kb.append([InlineKeyboardButton("🔢 فیلتر بر اساس شماره", callback_data="p_filter_cfgnums")])
     if is_modern_sanaei:
         sub_method = p.get("sanaei_sub_method") or "links"
-        sub_method_btn = "🔄 Sub Method: " + ("links" if sub_method == "sub_links" else "subLinks")
+        next_method = "links" if sub_method == "sub_links" else "sub_links"
+        sub_method_btn = "🔄 Switch Sub Method to " + SANAEI_SUB_METHOD_LABELS[next_method]
         kb.append([InlineKeyboardButton(sub_method_btn, callback_data="p_toggle_sub_method")])
     kb.append([InlineKeyboardButton("🗑️ Remove Panel", callback_data="p_remove")])
     kb.append([InlineKeyboardButton("⬅️ Back", callback_data="manage_panels")])

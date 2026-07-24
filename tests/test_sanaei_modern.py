@@ -368,6 +368,35 @@ class SanaeiModernResponseTests(unittest.TestCase):
         self.assertEqual(args[:7], ("GET", "https://panel.example", "token", "panel", "api", "clients", "subLinks"))
         self.assertEqual(args[7], "sub-id-12345")
 
+    def test_fetch_links_from_panel_sub_links_accepts_nested_subscription_id(self):
+        client_response = {
+            "client": {
+                "email": "alice@example.com",
+                "sub_id": "nested-sub-id",
+                "uuid": "uuid-1",
+            },
+            "inboundIds": [7],
+        }
+        sublinks_response = Mock()
+        sublinks_response.status_code = 200
+        sublinks_response.json.return_value = {
+            "success": True,
+            "obj": ["vless://uuid-1@host:443?security=none#alice"],
+        }
+
+        with patch.object(sanaei_modern, "_fetch_client", return_value=(client_response, None)), patch.object(
+            sanaei_modern, "_request_with_reauth", return_value=sublinks_response
+        ) as request:
+            links, err = sanaei_modern.fetch_links_from_panel(
+                "https://panel.example", "token", "alice@example.com", sanaei_sub_method="sub_links"
+            )
+
+        self.assertEqual(links, ["vless://uuid-1@host:443?security=none#alice"])
+        self.assertIsNone(err)
+        args = request.call_args.args
+        self.assertEqual(args[:7], ("GET", "https://panel.example", "token", "panel", "api", "clients", "subLinks"))
+        self.assertEqual(args[7], "nested-sub-id")
+
     def test_fetch_links_from_panel_sub_links_handles_missing_subid(self):
         client_response = {
             "email": "alice@example.com",
