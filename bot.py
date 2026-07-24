@@ -77,6 +77,14 @@ from services import (
     ensure_panel_tokens,
 )
 from models.admins import TokenEncryptionError as AdminTokenEncryptionError
+from services.backups import (
+    create_and_send_backup,
+    get_backup_settings,
+    is_main_admin,
+    set_backup_enabled,
+    set_backup_interval_hours,
+    backup_scheduler_loop,
+)
 
 # ---------- logging ----------
 logging.basicConfig(
@@ -351,7 +359,8 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
     ASK_NORMAL_SYNC_INTERVAL,
     ASK_WEBUI_USERNAME,
     ASK_WEBUI_PASSWORD,
-) = range(47)
+    ASK_BACKUP_INTERVAL,
+) = range(48)
 
 # ---------- helpers ----------
 UNIT = 1024
@@ -598,7 +607,10 @@ def _admin_technical_kb(owner_id: int) -> InlineKeyboardMarkup:
         or ""
     ).strip()
     webui_config_label = f"🔐 Web UI Login: {webui_username}" if webui_username else "🔐 Web UI Login: not set"
-    kb = [
+    backup_rows = []
+    if is_main_admin(owner_id):
+        backup_rows.append([InlineKeyboardButton("🗄️ Automatic Backups", callback_data="automatic_backups")])
+    kb = backup_rows + [
         [InlineKeyboardButton(notif_label, callback_data="toggle_limit_event_notifications")],
         [InlineKeyboardButton(_sub_placeholder_toggle_label(owner_id), callback_data="toggle_sub_placeholder")],
         _sub_placeholder_template_button(owner_id),
@@ -1927,6 +1939,46 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("دسترسی ندارید.")
             return ConversationHandler.END
         await q.edit_message_text("Settings:", reply_markup=_agent_technical_kb(uid))
+        return ConversationHandler.END
+
+    if data == "automatic_backups":
+        if not is_main_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        await q.edit_message_text(_backup_settings_text(), reply_markup=_backup_settings_kb(), parse_mode="HTML")
+        return ConversationHandler.END
+
+    if data == "backup_toggle":
+        if not is_main_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        current = get_backup_settings().enabled
+        set_backup_enabled(not current)
+        await q.edit_message_text(_backup_settings_text(), reply_markup=_backup_settings_kb(), parse_mode="HTML")
+        return ConversationHandler.END
+
+    if data == "backup_interval":
+        if not is_main_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        cur = get_backup_settings().interval_hours
+        await q.edit_message_text(
+            f"بازه فعلی بکاپ: {cur} ساعت\n\nعدد جدید را بفرست (حداقل 1 ساعت):",
+            reply_markup=_back_kb("automatic_backups"),
+        )
+        return ASK_BACKUP_INTERVAL
+
+    if data == "backup_now":
+        if not is_main_admin(uid):
+            await q.edit_message_text("دسترسی ندارید.")
+            return ConversationHandler.END
+        await q.edit_message_text("⏳ Backup started. The bot will send the archive when it is ready.", reply_markup=_back_kb("automatic_backups"))
+        async def _run_manual_backup():
+            try:
+                await create_and_send_backup(context.bot, uid)
+            except Exception:
+                pass
+        context.application.create_task(_run_manual_backup())
         return ConversationHandler.END
 
     if data == "toggle_limit_event_notifications":
@@ -3479,6 +3531,46 @@ async def got_preset_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(*a, **k)
     return await show_preset_menu(Fake(), context, update.effective_user.id, notice=notice)
 
+
+def _backup_settings_text() -> str:
+    settings = get_backup_settings()
+    last = settings.last_run_at.strftime("%Y-%m-%d %H:%M:%S UTC") if settings.last_run_at else "—"
+    return (
+        "🗄️ <b>Automatic Backups</b>\n\n"
+        f"Status: <b>{'ON' if settings.enabled else 'OFF'}</b>\n"
+        f"Backup Interval: <b>{settings.interval_hours} hour(s)</b>\n"
+        f"Backup Directory: <code>{settings.backup_dir}</code>\n"
+        f"Last Backup: <b>{last}</b>\n\n"
+        "Backups include <code>database.sql</code> and <code>.env</code>, are saved on the server, "
+        "and are sent to the main admin as Telegram documents."
+    )
+
+
+def _backup_settings_kb() -> InlineKeyboardMarkup:
+    settings = get_backup_settings()
+    toggle_label = "🟢 Automatic Backups: ON" if settings.enabled else "🔴 Automatic Backups: OFF"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(toggle_label, callback_data="backup_toggle")],
+        [InlineKeyboardButton(f"⏱️ Interval: {settings.interval_hours}h", callback_data="backup_interval")],
+        [InlineKeyboardButton("▶️ Backup Now", callback_data="backup_now")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="admin_technical")],
+    ])
+
+
+async def got_backup_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_main_admin(uid):
+        return ConversationHandler.END
+    try:
+        hours = int(float((update.message.text or "").strip()))
+        assert hours >= 1
+    except Exception:
+        await update.message.reply_text("❌ عدد معتبر حداقل 1 ساعت بفرست:")
+        return ASK_BACKUP_INTERVAL
+    set_backup_interval_hours(hours)
+    await update.message.reply_text("✅ بازه بکاپ ذخیره شد.", reply_markup=_back_kb("automatic_backups"))
+    return ConversationHandler.END
+
 # ---------- settings (admin) ----------
 async def got_limit_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -4997,6 +5089,10 @@ async def sync_user_panels_async(
     )
 
 # ---------- wiring ----------
+async def _post_init(application: Application) -> None:
+    application.create_task(backup_scheduler_loop(application.bot))
+
+
 def build_app():
     load_dotenv()
     tok = os.getenv("BOT_TOKEN", "").strip()
@@ -5004,7 +5100,7 @@ def build_app():
         raise RuntimeError("BOT_TOKEN missing in .env")
     init_mysql_pool()
     ensure_schema()
-    app = Application.builder().token(tok).build()
+    app = Application.builder().token(tok).post_init(_post_init).build()
 
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start), CallbackQueryHandler(on_button)],
@@ -5065,6 +5161,7 @@ def build_app():
             ASK_NORMAL_SYNC_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_normal_sync_interval)],
             ASK_WEBUI_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_webui_username)],
             ASK_WEBUI_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_webui_password)],
+            ASK_BACKUP_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_backup_interval)],
 
             # preset mgmt
             ASK_PRESET_GB:   [MessageHandler(filters.TEXT & ~filters.COMMAND, got_preset_gb)],
