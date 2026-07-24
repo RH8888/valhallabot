@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 from api.routes import api_router
 from api.subscription_aggregator import create_flask_app
-from services import init_mysql_pool, ensure_schema
+from services import init_mysql_pool, ensure_schema, start_backup_scheduler
 
 app = FastAPI()
 
@@ -16,6 +16,7 @@ async def startup_event() -> None:
     load_dotenv()
     init_mysql_pool()
     ensure_schema()
+    start_backup_scheduler()
 
 
 app.include_router(api_router, prefix="/api/v1")

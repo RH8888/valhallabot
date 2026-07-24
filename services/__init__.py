@@ -22,6 +22,13 @@ from .panel_tokens import (
     ensure_panel_access_token,
     ensure_panel_tokens,
 )
+from .backup_service import (
+    get_backup_settings,
+    set_backup_settings,
+    perform_backup,
+    start_backup_scheduler,
+    stop_backup_scheduler,
+)
 
 __all__ = [
     "init_mysql_pool",
@@ -46,4 +53,9 @@ __all__ = [
     "encrypt_panel_password",
     "ensure_panel_access_token",
     "ensure_panel_tokens",
+    "get_backup_settings",
+    "set_backup_settings",
+    "perform_backup",
+    "start_backup_scheduler",
+    "stop_backup_scheduler",
 ]
