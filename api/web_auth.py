@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import os
-import secrets
 import logging
+import hashlib
 from dataclasses import dataclass
 
 from fastapi import Cookie, Depends, HTTPException, Request, status
@@ -13,7 +13,28 @@ from api.subscription_aggregator import canonical_owner_id, ordered_admin_ids
 
 WEB_SESSION_COOKIE_NAME = "web_session"
 WEB_SESSION_TTL_SECONDS = int(os.getenv("WEB_SESSION_TTL_SECONDS", "43200"))
-_WEB_SESSION_FALLBACK_SECRET = secrets.token_urlsafe(32)
+
+
+def _fallback_session_secret() -> str:
+    """Build a deterministic fallback secret when no explicit secret is configured.
+
+    This keeps cookies valid across multiple workers in the same deployment.
+    """
+
+    seed = "|".join(
+        [
+            (os.getenv("MYSQL_HOST") or "").strip(),
+            (os.getenv("MYSQL_DATABASE") or "").strip(),
+            (os.getenv("APP_ENV") or os.getenv("ENV") or "").strip(),
+            (os.getenv("FLASK_PORT") or "").strip(),
+        ]
+    )
+    if not seed.replace("|", ""):
+        return "valhalla-web-session-fallback-secret"
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+
+_WEB_SESSION_FALLBACK_SECRET = _fallback_session_secret()
 log = logging.getLogger("valhalla.web_auth")
 
 
