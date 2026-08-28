@@ -4,7 +4,7 @@
 Telegram bot + MySQL (local users + panels) with Admin/Agent roles
 
 Admin:
-- Manage panels (add/edit creds/template/sub url, per-panel config filter)
+- Manage panels (add/edit URL/creds/template/sub url, per-panel config filter)
 - Remove panel (disables all mapped users on that panel first)
 - Manage agents: add/edit (name), set agent quota (bytes), renew expiry by **days**, activate/deactivate
 - Assign services to agents (independent toggles)
@@ -323,7 +323,7 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
     ASK_NEWUSER_NAME, ASK_PRESET_CHOICE, ASK_LIMIT_GB, ASK_DURATION,
     ASK_SEARCH_USER, ASK_PANEL_TEMPLATE,
     ASK_EDIT_LIMIT, ASK_RENEW_DAYS,
-    ASK_EDIT_PANEL_NAME, ASK_EDIT_PANEL_USER, ASK_EDIT_PANEL_PASS,
+    ASK_EDIT_PANEL_NAME, ASK_EDIT_PANEL_URL, ASK_EDIT_PANEL_USER, ASK_EDIT_PANEL_PASS,
     ASK_SELECT_SERVICE,
     ASK_PANEL_SUB_URL,
     ASK_PANEL_MULTIPLIER,
@@ -356,7 +356,7 @@ def get_manage_owner_id(context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> in
     ASK_WEBUI_USERNAME,
     ASK_WEBUI_PASSWORD,
     ASK_BACKUP_INTERVAL,
-) = range(48)
+) = range(49)
 
 # ---------- helpers ----------
 UNIT = 1024
@@ -1506,6 +1506,17 @@ def delete_user(owner_id: int, username: str):
     delete_local_user(owner_id, username)
 
 # panels extra
+def set_panel_url(owner_id: int, panel_id: int, panel_url: str):
+    ids = expand_owner_ids(owner_id)
+    placeholders = ",".join(["%s"] * len(ids))
+    params = [panel_url.rstrip("/"), int(panel_id)] + ids
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"UPDATE panels SET panel_url=%s WHERE id=%s AND telegram_user_id IN ({placeholders})",
+            params,
+        )
+
+
 def set_panel_sub_url(owner_id: int, panel_id: int, sub_url: str | None):
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
@@ -2497,6 +2508,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "p_rename":
         if not is_admin(uid): return ConversationHandler.END
         await q.edit_message_text("اسم جدید پنل را بفرست:", reply_markup=_back_kb(f"panel_sel:{context.user_data.get('edit_panel_id')}")) ; return ASK_EDIT_PANEL_NAME
+    if data == "p_change_url":
+        if not is_admin(uid): return ConversationHandler.END
+        await q.edit_message_text("URL جدید پنل را بفرست (مثال https://panel.example.com):", reply_markup=_back_kb(f"panel_sel:{context.user_data.get('edit_panel_id')}")) ; return ASK_EDIT_PANEL_URL
     if data == "p_change_creds":
         if not is_admin(uid): return ConversationHandler.END
         pid = context.user_data.get("edit_panel_id")
@@ -3200,6 +3214,7 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
     kb = [
         [InlineKeyboardButton(f"🧬 Set/Clear {label}", callback_data="p_set_template")],
         [InlineKeyboardButton(credentials_label, callback_data="p_change_creds")],
+        [InlineKeyboardButton("🌐 Change Panel URL", callback_data="p_change_url")],
         [InlineKeyboardButton("✏️ Rename Panel", callback_data="p_rename")],
         [InlineKeyboardButton("⚖️ Set Usage Ratio", callback_data="p_set_multiplier")],
     ]
@@ -4076,6 +4091,25 @@ async def got_edit_panel_name(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         await update.message.reply_text(f"❌ خطا: {e}", reply_markup=_back_kb("servers_panels"))
         return ConversationHandler.END
+
+async def got_edit_panel_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    pid = context.user_data.get("edit_panel_id")
+    new_url = (update.message.text or "").strip().rstrip("/")
+    if not pid or not (new_url.startswith("http://") or new_url.startswith("https://")):
+        await update.message.reply_text("❌ URL نامعتبر. دوباره بفرست:")
+        return ASK_EDIT_PANEL_URL
+    try:
+        set_panel_url(update.effective_user.id, pid, new_url)
+        class FakeCQ:
+            async def edit_message_text(self, *args, **kwargs):
+                await update.message.reply_text(*args, **kwargs)
+        return await show_panel_card(FakeCQ(), context, update.effective_user.id, pid)
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطا: {e}", reply_markup=_back_kb("servers_panels"))
+        return ConversationHandler.END
+
 
 async def got_edit_panel_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -5133,6 +5167,7 @@ def build_app():
             # panel edits (admin)
             ASK_PANEL_TEMPLATE:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_template)],
             ASK_EDIT_PANEL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_edit_panel_name)],
+            ASK_EDIT_PANEL_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_edit_panel_url)],
             ASK_EDIT_PANEL_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_edit_panel_user)],
             ASK_EDIT_PANEL_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_edit_panel_pass)],
             ASK_PANEL_SUB_URL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, got_panel_sub_url)],
