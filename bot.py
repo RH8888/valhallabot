@@ -2613,7 +2613,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("پنل پیدا نشد.")
             return ConversationHandler.END
         panel_type = (info.get("panel_type") or "").lower()
-        if panel_type not in ("rebecca", "guardcore"):
+        if panel_type not in ("rebecca", "pasarguard", "guardcore"):
             await q.edit_message_text("این پنل از API Key پشتیبانی نمی‌کند.")
             return ConversationHandler.END
         await q.edit_message_text("API Key را بفرست (برای حذف، '-'):", reply_markup=_back_kb(f"panel_sel:{pid}"))
@@ -3222,7 +3222,7 @@ async def show_panel_card(q, context: ContextTypes.DEFAULT_TYPE, owner_id: int, 
     is_modern_sanaei = is_modern_sanaei_panel(p)
     is_sanaei_bearer = is_sanaei_bearer_panel(p)
     panel_type = (p.get("panel_type") or "").lower()
-    supports_api_key = panel_type in ("rebecca", "guardcore")
+    supports_api_key = panel_type in ("rebecca", "pasarguard", "guardcore")
     ratio = float(p.get("usage_multiplier") or 1.0)
     show_append_ratio_toggle = abs(ratio - 1.0) > 1e-9
     append_ratio_enabled = bool(p.get("append_ratio_to_name") or 0)
@@ -4262,7 +4262,7 @@ async def got_panel_api_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ پنل انتخاب نشده.")
         return ConversationHandler.END
     panel_type = (info.get("panel_type") or "").lower()
-    if panel_type not in ("rebecca", "guardcore"):
+    if panel_type not in ("rebecca", "pasarguard", "guardcore"):
         await update.message.reply_text("❌ این پنل از API Key پشتیبانی نمی‌کند.")
         return ConversationHandler.END
     txt = (update.message.text or "").strip()
@@ -4270,7 +4270,7 @@ async def got_panel_api_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ مقدار معتبر بفرست (یا '-' برای حذف):")
         return ASK_PANEL_API_KEY
     val = None if txt == "-" else txt
-    if val and panel_type == "guardcore":
+    if val and panel_type in ("pasarguard", "guardcore"):
         lowered = val.lower()
         if not (lowered.startswith("api_key:") or lowered.startswith("apikey:") or lowered.startswith("x-api-key:")):
             val = f"api_key:{val}"
