@@ -123,6 +123,31 @@ class SanaeiModernResponseTests(unittest.TestCase):
         self.assertEqual(request.call_args.kwargs["json"], {"emails": ["alice@example.com"], "addBytes": 1024})
         self.assertEqual(request.call_args.kwargs["headers"], {"Content-Type": "application/json"})
 
+    def test_set_remote_user_usage_seeds_traffic_through_migration_endpoint(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {"success": True, "msg": "Traffic updated"}
+
+        with patch.object(sanaei_modern, "_request_with_reauth", return_value=response) as request:
+            ok, err = sanaei_modern.set_remote_user_usage(
+                "https://panel.example", "token", "alice@example.com", 31 * 1024**3
+            )
+
+        self.assertTrue(ok)
+        self.assertIsNone(err)
+        self.assertEqual(
+            request.call_args.args[:8],
+            (
+                "POST", "https://panel.example", "token", "panel", "api", "clients",
+                "updateTraffic", "alice@example.com",
+            ),
+        )
+        self.assertEqual(
+            request.call_args.kwargs["json"],
+            {"upload": 31 * 1024**3, "download": 0},
+        )
+        self.assertEqual(request.call_args.kwargs["headers"], {"Content-Type": "application/json"})
+
     def test_update_remote_user_uses_modern_update_endpoint_for_unlimited_quota_edits(self):
         response = Mock()
         response.status_code = 200
