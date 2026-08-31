@@ -253,6 +253,52 @@ def build_sanaei_create_payload(
         "settings": json.dumps({"clients": [legacy_client]}, separators=(",", ":")),
     }
 
+
+def seed_modern_sanaei_usage(api, panel: dict, remote_name: str, limit_bytes: int, used_bytes: int):
+    """Transfer existing local usage to a newly-added modern 3x-ui panel.
+
+    ``updateTraffic`` is the modern 3x-ui migration endpoint.  If an older
+    modern-panel build does not provide it, reduce the new panel's quota by the
+    already consumed traffic so it still grants only the user's remaining
+    allowance.  A zero remaining allowance cannot be sent as ``totalGB=0``
+    because 3x-ui treats that value as unlimited; disable the client instead.
+    """
+
+    limit = max(0, int(limit_bytes or 0))
+    used = max(0, int(used_bytes or 0))
+    if not limit or not used:
+        return True, None
+
+    ok, err = api.set_remote_user_usage(
+        panel["panel_url"], panel["access_token"], remote_name, used
+    )
+    if ok:
+        return True, None
+
+    remaining = limit - used
+    if remaining > 0:
+        fallback_ok, fallback_err = api.update_remote_user(
+            panel["panel_url"], panel["access_token"], remote_name, data_limit=remaining
+        )
+        if fallback_ok:
+            log.warning(
+                "modern 3x-ui updateTraffic unavailable for %s; set remaining quota instead",
+                remote_name,
+            )
+            return True, None
+        return False, fallback_err or err
+
+    disable_ok, disable_err = api.disable_remote_user(
+        panel["panel_url"], panel["access_token"], remote_name
+    )
+    if disable_ok:
+        log.warning(
+            "modern 3x-ui updateTraffic unavailable for exhausted user %s; disabled client",
+            remote_name,
+        )
+        return True, None
+    return False, disable_err or err
+
 # ---------- proxy helpers ----------
 def clone_proxy_settings(proxies: dict) -> dict:
     """Copy proxy settings and regenerate credentials.
@@ -4913,6 +4959,20 @@ def sync_user_panels(
                         if not ok_en:
                             added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
                             continue
+                    usage_ok, usage_err = seed_modern_sanaei_usage(
+                        api,
+                        p,
+                        remote_name,
+                        limit_bytes_default,
+                        int(lu.get("used_bytes") or 0),
+                    )
+                    if not usage_ok:
+                        api.remove_remote_user(p["panel_url"], p["access_token"], remote_name)
+                        added_errs.append(
+                            f"{panel_error_address(p, owner_id)}: could not migrate used traffic - "
+                            f"{usage_err or 'unknown error'}"
+                        )
+                        continue
                     save_link(owner_id, username, int(pid), remote_name)
                     links_map[int(pid)] = remote_name
                     added_ok += 1

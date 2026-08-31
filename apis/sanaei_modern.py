@@ -714,6 +714,45 @@ def reset_remote_user_usage(panel_url: str, token: str, username: str) -> Tuple[
         return False, str(e)[:200]
 
 
+def set_remote_user_usage(
+    panel_url: str,
+    token: str,
+    username: str,
+    used_bytes: int,
+) -> Tuple[bool, Optional[str]]:
+    """Seed a newly-created client's traffic counter during a migration.
+
+    Modern 3x-ui exposes ``updateTraffic`` specifically for importing usage
+    from another accounting system.  A new client starts at zero, so putting
+    all migrated traffic in ``upload`` preserves the total while avoiding any
+    guesswork about how the original traffic was split between directions.
+    """
+
+    try:
+        usage = max(0, int(used_bytes))
+        r = _request_with_reauth(
+            "POST",
+            panel_url,
+            token,
+            "panel",
+            "api",
+            "clients",
+            "updateTraffic",
+            username,
+            json={"upload": usage, "download": 0},
+            headers={"Content-Type": "application/json"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            return False, _response_error(r, 200)
+        data = _json_or_empty(r)
+        if not _panel_success(data):
+            return False, str(data.get("msg") or "request failed")[:200]
+        return True, None
+    except Exception as e:  # pragma: no cover - network errors
+        return False, str(e)[:200]
+
+
 def renew_remote_user(
     panel_url: str,
     token: str,
