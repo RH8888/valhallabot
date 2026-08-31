@@ -24,8 +24,22 @@ _links_lock = RLock()
 
 
 def get_headers(token: str) -> Dict[str, str]:
-    """Return authorization header for the given bearer token."""
-    return {"Authorization": f"Bearer {token}"}
+    """Return authentication headers for Pasarguard requests.
+
+    Pasarguard accepts both bearer tokens and API keys.  API keys are stored
+    with an ``api_key:`` prefix so the bot can distinguish them from a normal
+    bearer token and send the documented ``X-Api-Key`` header.
+    """
+
+    if not token:
+        return {}
+    token_str = str(token).strip()
+    lowered = token_str.lower()
+    if lowered.startswith(("api_key:", "apikey:", "x-api-key:")):
+        return {"X-Api-Key": token_str.split(":", 1)[1].strip()}
+    if lowered.startswith("bearer "):
+        return {"Authorization": token_str}
+    return {"Authorization": f"Bearer {token_str}"}
 
 
 def _build_api_url(panel_url: str, *segments: object) -> str:
