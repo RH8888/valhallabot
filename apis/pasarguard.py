@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote, urljoin
 
-import base64
+
 import os
 from threading import RLock
 
@@ -154,127 +154,131 @@ def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dic
 
 
 def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict], Optional[str]]:
-    """Fetch user details from the panel."""
+    """Fetch user details from the panel.
+
+    Uses the filtered ``/api/users`` endpoint so only the matching user is
+    returned, rather than fetching the entire user list.
+    """
     try:
-        escaped = quote(str(username), safe="")
         r = _request_with_reauth(
-            "GET", panel_url, token, f"api/user/{escaped}",
+            "GET", panel_url, token, "api/users",
+            params={"username": username, "limit": 1, "load_sub": "true"},
             timeout=15,
         )
         if r.status_code != 200:
             return None, f"{r.status_code} {r.text[:200]}"
-        obj = r.json()
-        if isinstance(obj, dict):
-            _normalise_user_object(obj)
-            sub_url = obj.get("subscription_url") or ""
-            token_part = sub_url.rstrip("/").split("/")[-1]
-            if token_part:
-                obj.setdefault("key", token_part)
+        data = r.json()
+
+        # Handle response formats: {"users": [...]}, [...], or direct object
+        users = None
+        if isinstance(data, dict):
+            users = data.get("users")
+            if users is None and data.get("username"):
+                users = [data]
+        elif isinstance(data, list):
+            users = data
+
+        if not users:
+            return None, "Pasarguard user not found"
+        if len(users) > 1:
+            return None, "Pasarguard username lookup returned multiple users"
+
+        obj = users[0]
+        if not isinstance(obj, dict):
+            return None, "Pasarguard user not found"
+
+        _normalise_user_object(obj)
+        sub_url = obj.get("subscription_url") or ""
+        if sub_url:
+            obj["key"] = sub_url
         return obj, None
     except Exception as e:  # pragma: no cover - network errors
         return None, str(e)[:200]
 
 
-def _extract_links(candidate: object) -> List[str]:
-    """Recursively extract subscription links from JSON structures."""
-    links: List[str] = []
-    if isinstance(candidate, str):
-        val = candidate.strip()
-        if val and val.lower().startswith(ALLOWED_SCHEMES):
-            links.append(val)
-    elif isinstance(candidate, Mapping):
-        for item in candidate.values():
-            links.extend(_extract_links(item))
-    elif isinstance(candidate, Iterable) and not isinstance(candidate, (bytes, bytearray)):
-        for item in candidate:
-            links.extend(_extract_links(item))
-    return links
-
-
-def _extract_links_from_text(text: str) -> List[str]:
-    """Return subscription links from newline-separated or base64 payloads."""
-
-    lines = [
-        ln.strip()
-        for ln in (text or "").splitlines()
-        if ln.strip() and ln.strip().lower().startswith(ALLOWED_SCHEMES)
-    ]
-    if lines:
-        return lines
-
-    if not text:
-        return []
-
-    stripped = text.strip()
-    if not stripped:
-        return []
-
-    padding = "=" * (-len(stripped) % 4)
-    try:
-        decoded = base64.b64decode(stripped + padding)
-    except Exception:
-        return []
-
-    try:
-        decoded_text = decoded.decode()
-    except Exception:
-        decoded_text = decoded.decode(errors="ignore")
-
-    return [
-        ln.strip()
-        for ln in decoded_text.splitlines()
-        if ln.strip() and ln.strip().lower().startswith(ALLOWED_SCHEMES)
-    ]
-
-
 @cached(cache=_links_cache, lock=_links_lock)
 def fetch_links_from_panel(panel_url: str, _username: str, key: str) -> List[str]:
-    """Return list of subscription links for a user token."""
-    def _parse_response(resp: requests.Response) -> List[str]:
-        if resp.status_code != 200:
-            return []
-        if resp.headers.get("content-type", "").startswith("application/json"):
-            try:
-                data = resp.json()
-            except Exception:
-                data = None
-            if data is not None:
-                links = _extract_links(data)
-                if links:
-                    return links
-        return _extract_links_from_text(resp.text or "")
+    """Return subscription links for a Pasarguard user.
+
+    ``key`` is the ``subscription_url`` returned by the admin API
+    (e.g. ``/link/<token>``).  The individual-links endpoint is at
+    ``/link/<token>/links`` served by the configured panel URL.
+    """
 
     key = (key or "").strip()
     if not key:
         return []
 
     try:
-        paths = [
-            ("sub", key, "links", False),
-            ("sub", key, "links_base64", False),
-            ("sub", key, None, True),
-            ("sub", key, "info", False),
-            ("sub", key, "apps", False),
-        ]
+        # Build full URL from configured panel URL + subscription path
+        if key.lower().startswith(("http://", "https://")):
+            base_sub_url = key.rstrip("/")
+        else:
+            base_sub_url = urljoin(
+                panel_url.rstrip("/") + "/", key.lstrip("/")
+            ).rstrip("/")
 
-        for *segments, needs_trailing_slash in paths:
-            url = _build_api_url(panel_url, *segments)
-            if needs_trailing_slash:
-                url = url.rstrip("/") + "/"
-            try:
-                resp = SESSION.get(
-                    url,
-                    headers={"accept": "application/json,text/plain"},
-                    timeout=20,
-                )
-            except Exception:
-                continue
-            links = _parse_response(resp)
-            if links:
-                return links
+        # Try /links endpoint first for individual config links
+        links_url = base_sub_url + "/links"
+        try:
+            resp = SESSION.get(
+                links_url,
+                headers={"accept": "text/plain,application/json"},
+                timeout=20,
+            )
+            if resp.status_code == 200:
+                links = _parse_plain_links(resp)
+                if links:
+                    return links
+        except Exception:
+            pass
+
+        # Fallback: try the base subscription URL for raw config
+        try:
+            resp = SESSION.get(
+                base_sub_url,
+                headers={"accept": "text/plain,application/json"},
+                timeout=20,
+            )
+            if resp.status_code == 200:
+                links = _parse_plain_links(resp)
+                if links:
+                    return links
+        except Exception:
+            pass
+
         return []
     except Exception:  # pragma: no cover - network errors
         return []
+
+
+def _parse_plain_links(resp: requests.Response) -> List[str]:
+    """Extract subscription links from a plain-text or JSON response.
+
+    Pasarguard returns raw/plain configuration — no base64 decoding is
+    applied.
+    """
+
+    content_type = resp.headers.get("content-type", "")
+    if content_type.startswith("application/json"):
+        try:
+            data = resp.json()
+            if isinstance(data, list):
+                lines = [str(x).strip() for x in data if str(x).strip()]
+                if lines:
+                    return lines
+            if isinstance(data, dict) and "links" in data:
+                lines = [str(x).strip() for x in data["links"] if str(x).strip()]
+                if lines:
+                    return lines
+        except Exception:
+            pass
+    text = resp.text or ""
+    return [
+        ln.strip()
+        for ln in text.splitlines()
+        if ln.strip() and ln.strip().lower().startswith(ALLOWED_SCHEMES)
+    ]
 
 
 def disable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
@@ -375,23 +379,20 @@ def update_remote_user(
 
 
 def fetch_subscription_links(sub_url: str) -> List[str]:
-    """Return links from a subscription URL."""
+    """Return links from a subscription URL.
+
+    Pasarguard serves raw/plain configuration, so the response text is
+    returned directly without base64 decoding.
+    """
     try:
         r = SESSION.get(
             sub_url,
             headers={"accept": "text/plain,application/json"},
             timeout=20,
         )
-        if r.headers.get("content-type", "").startswith("application/json"):
-            try:
-                data = r.json()
-            except Exception:
-                data = None
-            if data is not None:
-                links = _extract_links(data)
-                if links:
-                    return links
-        return _extract_links_from_text(r.text or "")
+        if r.status_code != 200:
+            return []
+        return _parse_plain_links(r)
     except Exception:  # pragma: no cover - network errors
         return []
 
