@@ -79,6 +79,7 @@ from services import (
     set_backup_settings,
     perform_backup,
     start_backup_scheduler,
+    delete_agent_with_users,
 )
 from models.admins import TokenEncryptionError as AdminTokenEncryptionError
 
@@ -2889,6 +2890,52 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(uid): return ConversationHandler.END
         return await admin_rotate_agent_token(update, context)
 
+    if data == "agent_delete":
+        if not is_admin(uid):
+            return ConversationHandler.END
+        atg = context.user_data.get("agent_tg_id")
+        a = get_agent(atg)
+        if not a:
+            await q.edit_message_text("نماینده پیدا نشد.")
+            return ConversationHandler.END
+        user_cnt = count_local_users(atg)
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🗑️ بله، حذف کن", callback_data="agent_delete_confirm")],
+            [InlineKeyboardButton("⬅️ انصراف", callback_data=f"agent_sel:{atg}")],
+        ])
+        await q.edit_message_text(
+            f"⚠️ <b>هشدار حذف نماینده</b>\n\n"
+            f"نماینده <b>{a['name']}</b> (TG: <code>{atg}</code>) و تمام <b>{user_cnt}</b> کاربر مرتبط به همراه کانفیگ‌های پنل به طور کامل حذف خواهند شد.\n\n"
+            f"آیا مطمئن هستید؟",
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+
+    if data == "agent_delete_confirm":
+        if not is_admin(uid):
+            return ConversationHandler.END
+        atg = context.user_data.get("agent_tg_id")
+        a = get_agent(atg)
+        if not a:
+            await q.edit_message_text("نماینده پیدا نشد.")
+            return ConversationHandler.END
+        await q.edit_message_text("⏳ در حال حذف نماینده و تمام کاربران مرتبط...")
+        try:
+            delete_agent_with_users(atg)
+            await q.edit_message_text(
+                f"✅ نماینده <b>{a['name']}</b> و تمام کاربران مرتبط با موفقیت حذف شدند.",
+                reply_markup=_back_kb("manage_agents"),
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            log.error("Failed to delete agent %s: %s", atg, exc)
+            await q.edit_message_text(
+                f"❌ خطا در حذف نماینده:\n{exc}",
+                reply_markup=_back_kb(f"agent_sel:{atg}"),
+            )
+        return ConversationHandler.END
+
     if data.startswith("as:"):
         if not is_admin(uid): return ConversationHandler.END
         a = context.user_data.get("agent_tg_id")
@@ -3423,6 +3470,7 @@ async def show_agent_card(q, context: ContextTypes.DEFAULT_TYPE, agent_tg_id: in
         [InlineKeyboardButton("🔘 Toggle Active", callback_data="agent_toggle_active")],
         [InlineKeyboardButton("Show token", callback_data="admin_show_agent_token")],
         [InlineKeyboardButton("Rotate token", callback_data="admin_rotate_agent_token")],
+        [InlineKeyboardButton("🗑️ Delete Agent", callback_data="agent_delete")],
         [InlineKeyboardButton("⬅️ Back", callback_data="manage_agents")],
     ]
     await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")

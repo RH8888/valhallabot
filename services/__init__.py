@@ -29,6 +29,7 @@ from .backup_service import (
     start_backup_scheduler,
     stop_backup_scheduler,
 )
+from .agent_service import delete_agent_with_users
 
 __all__ = [
     "init_mysql_pool",
@@ -58,4 +59,5 @@ __all__ = [
     "perform_backup",
     "start_backup_scheduler",
     "stop_backup_scheduler",
+    "delete_agent_with_users",
 ]

@@ -8,6 +8,7 @@ from services import (
     TokenEncryptionError as PanelTokenEncryptionError,
     encrypt_panel_password,
     with_mysql_cursor,
+    delete_agent_with_users,
 )
 from services import get_admin_token as service_get_admin_token
 from services import rotate_admin_token as service_rotate_admin_token
@@ -385,13 +386,14 @@ def update_agent(agent_id: int, data: AgentUpdate):
     return AgentOut(**row)
 
 
-@router.delete("/agents/{agent_id}", summary="Delete an agent")
+@router.delete("/agents/{agent_id}", summary="Delete an agent and all associated users")
 def delete_agent(agent_id: int):
-    with with_mysql_cursor() as cur:
-        cur.execute("DELETE FROM agents WHERE id=%s", (agent_id,))
-        if cur.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Agent not found")
-    return {"status": "deleted"}
+    try:
+        return delete_agent_with_users(agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete agent: {exc}") from exc
 
 
 # ---------------------- Services ----------------------
