@@ -14,6 +14,7 @@ from threading import RLock
 
 import requests
 from cachetools import TTLCache, cached
+from services.panel_tokens import refresh_panel_access_token_for_request
 
 SESSION = requests.Session()
 ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
@@ -24,22 +25,23 @@ _links_lock = RLock()
 
 
 def get_headers(token: str) -> Dict[str, str]:
-    """Return authentication headers for Pasarguard requests.
-
-    Pasarguard accepts both bearer tokens and API keys.  API keys are stored
-    with an ``api_key:`` prefix so the bot can distinguish them from a normal
-    bearer token and send the documented ``X-Api-Key`` header.
-    """
-
+    """Return authorization header for the given bearer token."""
     if not token:
         return {}
-    token_str = str(token).strip()
-    lowered = token_str.lower()
-    if lowered.startswith(("api_key:", "apikey:", "x-api-key:")):
-        return {"X-Api-Key": token_str.split(":", 1)[1].strip()}
-    if lowered.startswith("bearer "):
-        return {"Authorization": token_str}
-    return {"Authorization": f"Bearer {token_str}"}
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _request_with_reauth(method: str, panel_url: str, token: str, path: str, **kwargs):
+    """Make an API request with automatic re-authentication on 401/403."""
+    url = urljoin(panel_url.rstrip('/') + '/', path)
+    extra_headers = kwargs.pop("headers", {}) or {}
+    response = SESSION.request(method, url, headers={**get_headers(token), **extra_headers}, **kwargs)
+    if response.status_code not in (401, 403):
+        return response
+    new_token = refresh_panel_access_token_for_request(panel_url, token, panel_type="pasarguard")
+    if not new_token:
+        return response
+    return SESSION.request(method, url, headers={**get_headers(new_token), **extra_headers}, **kwargs)
 
 
 def _build_api_url(panel_url: str, *segments: object) -> str:
@@ -135,10 +137,10 @@ def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dic
     """Create a user on the remote panel."""
     try:
         body = _prepare_user_payload(payload)
-        r = SESSION.post(
-            _build_api_url(panel_url, "api", "user"),
+        r = _request_with_reauth(
+            "POST", panel_url, token, "api/user",
             json=body,
-            headers={**get_headers(token), "Content-Type": "application/json"},
+            headers={"Content-Type": "application/json"},
             timeout=20,
         )
         if r.status_code in (200, 201):
@@ -154,9 +156,9 @@ def create_user(panel_url: str, token: str, payload: Dict) -> Tuple[Optional[Dic
 def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict], Optional[str]]:
     """Fetch user details from the panel."""
     try:
-        r = SESSION.get(
-            _build_api_url(panel_url, "api", "user", username),
-            headers=get_headers(token),
+        escaped = quote(str(username), safe="")
+        r = _request_with_reauth(
+            "GET", panel_url, token, f"api/user/{escaped}",
             timeout=15,
         )
         if r.status_code != 200:
@@ -278,10 +280,11 @@ def fetch_links_from_panel(panel_url: str, _username: str, key: str) -> List[str
 def disable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
     """Disable a user on the panel."""
     try:
-        r = SESSION.put(
-            _build_api_url(panel_url, "api", "user", username),
+        escaped = quote(str(username), safe="")
+        r = _request_with_reauth(
+            "PUT", panel_url, token, f"api/user/{escaped}",
             json={"status": "disabled"},
-            headers={**get_headers(token), "Content-Type": "application/json"},
+            headers={"Content-Type": "application/json"},
             timeout=20,
         )
         if r.status_code == 200:
@@ -294,10 +297,11 @@ def disable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool
 def enable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
     """Enable a user on the panel."""
     try:
-        r = SESSION.put(
-            _build_api_url(panel_url, "api", "user", username),
+        escaped = quote(str(username), safe="")
+        r = _request_with_reauth(
+            "PUT", panel_url, token, f"api/user/{escaped}",
             json={"status": "active"},
-            headers={**get_headers(token), "Content-Type": "application/json"},
+            headers={"Content-Type": "application/json"},
             timeout=20,
         )
         if r.status_code == 200:
@@ -310,9 +314,10 @@ def enable_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
 def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
     """Delete a user on the panel."""
     try:
-        r = SESSION.delete(
-            _build_api_url(panel_url, "api", "user", username),
-            headers={**get_headers(token), "Accept": "application/json"},
+        escaped = quote(str(username), safe="")
+        r = _request_with_reauth(
+            "DELETE", panel_url, token, f"api/user/{escaped}",
+            headers={"Accept": "application/json"},
             timeout=20,
         )
         if r.status_code in (200, 204, 404):
@@ -325,9 +330,9 @@ def remove_remote_user(panel_url: str, token: str, username: str) -> Tuple[bool,
 def reset_remote_user_usage(panel_url: str, token: str, username: str) -> Tuple[bool, Optional[str]]:
     """Reset traffic statistics for *username* on the panel."""
     try:
-        r = SESSION.post(
-            _build_api_url(panel_url, "api", "user", username, "reset"),
-            headers=get_headers(token),
+        escaped = quote(str(username), safe="")
+        r = _request_with_reauth(
+            "POST", panel_url, token, f"api/user/{escaped}/reset",
             timeout=20,
         )
         if r.status_code == 200:
@@ -355,10 +360,11 @@ def update_remote_user(
         return True, None
     try:
         body = _prepare_user_payload(payload)
-        r = SESSION.put(
-            _build_api_url(panel_url, "api", "user", username),
+        escaped = quote(str(username), safe="")
+        r = _request_with_reauth(
+            "PUT", panel_url, token, f"api/user/{escaped}",
             json=body,
-            headers={**get_headers(token), "Content-Type": "application/json"},
+            headers={"Content-Type": "application/json"},
             timeout=20,
         )
         if r.status_code == 200:

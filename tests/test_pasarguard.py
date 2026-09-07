@@ -35,20 +35,12 @@ pasarguard = _load_pasarguard()
 
 
 class PasarguardAuthenticationTests(unittest.TestCase):
-    def test_api_key_prefixes_use_api_key_header(self):
-        for prefix in ("api_key", "apikey", "x-api-key"):
-            with self.subTest(prefix=prefix):
-                self.assertEqual(
-                    pasarguard.get_headers(f"{prefix}: pg_key_secret"),
-                    {"X-Api-Key": "pg_key_secret"},
-                )
-
-    def test_bearer_tokens_remain_supported(self):
-        self.assertEqual(
-            pasarguard.get_headers("Bearer access-token"),
-            {"Authorization": "Bearer access-token"},
-        )
+    def test_bearer_header_produced(self):
         self.assertEqual(
             pasarguard.get_headers("access-token"),
             {"Authorization": "Bearer access-token"},
         )
+
+    def test_empty_token_returns_empty_dict(self):
+        self.assertEqual(pasarguard.get_headers(""), {})
+        self.assertEqual(pasarguard.get_headers(None), {})

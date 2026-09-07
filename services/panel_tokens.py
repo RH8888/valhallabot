@@ -170,6 +170,10 @@ def _authenticator_for_panel_type(panel_row: dict):
         from apis import sanaei
 
         return sanaei.get_admin_token
+    if panel_type == "pasarguard":
+        from apis import pasarguard
+
+        return pasarguard.get_admin_token
     return None
 
 
