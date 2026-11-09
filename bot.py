@@ -1109,23 +1109,28 @@ def update_preset(owner_id: int, preset_id: int, limit_bytes: int, duration_days
             tuple(params),
         )
 
-def upsert_app_user(tg_id: int, u: str) -> str:
-    owner_ids = expand_owner_ids(tg_id)
+def _ensure_app_user_key(cur, owner_id: int, username: str) -> str:
+    """Ensure an app_users mapping exists for the given owner and username."""
+    owner_ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(owner_ids))
+    cur.execute(
+        f"SELECT app_key FROM app_users WHERE telegram_user_id IN ({placeholders}) AND username=%s",
+        tuple(owner_ids) + (username,),
+    )
+    row = cur.fetchone()
+    if row:
+        return row["app_key"]
+    k = secrets.token_hex(16)
+    cur.execute(
+        "INSERT INTO app_users(telegram_user_id,username,app_key)VALUES(%s,%s,%s)",
+        (canonical_owner_id(owner_id), username, k),
+    )
+    return k
+
+
+def upsert_app_user(tg_id: int, u: str) -> str:
     with with_mysql_cursor() as cur:
-        cur.execute(
-            f"SELECT app_key FROM app_users WHERE telegram_user_id IN ({placeholders}) AND username=%s",
-            tuple(owner_ids) + (u,),
-        )
-        row = cur.fetchone()
-        if row:
-            return row["app_key"]
-        k = secrets.token_hex(16)
-        cur.execute(
-            "INSERT INTO app_users(telegram_user_id,username,app_key)VALUES(%s,%s,%s)",
-            (canonical_owner_id(tg_id), u, k),
-        )
-        return k
+        return _ensure_app_user_key(cur, tg_id, u)
 
 def get_app_key(tg_id: int, u: str) -> str:
     owner_ids = expand_owner_ids(tg_id)
@@ -1196,6 +1201,7 @@ def upsert_local_user(owner_id: int, username: str, limit_bytes: int, duration_d
         row = cur.fetchone()
         if row:
             _ensure_local_user_key(cur, int(row["id"]), exp)
+        _ensure_app_user_key(cur, canonical_owner, username)
 
 def save_link(owner_id: int, local_username: str, panel_id: int, remote_username: str):
     with with_mysql_cursor() as cur:
