@@ -1298,7 +1298,7 @@ def landing_page():
 
 @app.route("/web/login", methods=["GET"])
 def web_login_page():
-    return render_template_string(WEB_USERS_TEMPLATE)
+    return render_template_string(WEB_LOGIN_TEMPLATE)
 
 
 @app.route("/web/users", methods=["GET"])

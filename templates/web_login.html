@@ -6,7 +6,9 @@
   <title>Valhalla Web Login</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    tailwind.config = { darkMode: 'class' }
+    if (typeof tailwind !== 'undefined') {
+      tailwind.config = { darkMode: 'class' };
+    }
   </script>
 </head>
 <body class="min-h-screen bg-gradient-to-br from-white via-slate-100 to-slate-200 p-4 dark:from-slate-950 dark:via-slate-900 dark:to-black">
