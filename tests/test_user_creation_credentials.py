@@ -3,7 +3,6 @@ and subscription link resolution.
 """
 from __future__ import annotations
 
-import asyncio
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -27,6 +26,15 @@ from api.subscription_aggregator import flask_app
 import bot
 from api.users import create_user, UserCreate
 from api.auth import Identity
+
+
+def run_coro(coro):
+    """Run an async coroutine synchronously without Windows event loop blocking."""
+    try:
+        coro.send(None)
+    except StopIteration as e:
+        return e.value
+    raise RuntimeError("Coroutine did not finish synchronously")
 
 
 class TestUserCreationAndSubscriptionLinks(unittest.TestCase):
@@ -217,7 +225,8 @@ class TestUserCreationAndSubscriptionLinks(unittest.TestCase):
         username = "tguser1"
 
         with patch("bot.with_mysql_cursor", side_effect=mock_ctx), \
-             patch("api.subscription_aggregator.flask_app.with_mysql_cursor", side_effect=mock_ctx):
+             patch("api.subscription_aggregator.flask_app.with_mysql_cursor", side_effect=mock_ctx), \
+             patch("services.settings.with_mysql_cursor", side_effect=mock_ctx):
 
             bot.upsert_local_user(owner_id, username, 10 * 1024**3, 30)
 
@@ -233,7 +242,6 @@ class TestUserCreationAndSubscriptionLinks(unittest.TestCase):
             # Test subscription link resolution in flask_app
             client = flask_app.app.test_client()
             with patch("api.subscription_aggregator.flask_app.list_mapped_links", return_value=[]), \
-                 patch("api.subscription_aggregator.flask_app.list_user_links", return_value=[]), \
                  patch("api.subscription_aggregator.flask_app.get_agent_total_used", return_value=0), \
                  patch("api.subscription_aggregator.flask_app.get_agent", return_value={"traffic_limit_bytes": 0, "expire_at": None}):
                 resp = client.get(f"/sub/{username}/{app_key}/links")
@@ -254,10 +262,11 @@ class TestUserCreationAndSubscriptionLinks(unittest.TestCase):
 
         with patch("bot.with_mysql_cursor", side_effect=mock_ctx), \
              patch("api.users.with_mysql_cursor", side_effect=mock_ctx), \
-             patch("api.subscription_aggregator.flask_app.with_mysql_cursor", side_effect=mock_ctx):
+             patch("api.subscription_aggregator.flask_app.with_mysql_cursor", side_effect=mock_ctx), \
+             patch("services.settings.with_mysql_cursor", side_effect=mock_ctx):
 
-            # Directly invoke the endpoint coroutine
-            user_out = asyncio.run(create_user(data=create_data, identity=identity))
+            # Directly invoke the endpoint coroutine synchronously without event loop
+            user_out = run_coro(create_user(data=create_data, identity=identity))
             self.assertEqual(user_out.username, username)
 
             # Assert app_users record was created
@@ -268,7 +277,6 @@ class TestUserCreationAndSubscriptionLinks(unittest.TestCase):
             # Verify subscription link returns 200, not 404
             flask_client = flask_app.app.test_client()
             with patch("api.subscription_aggregator.flask_app.list_mapped_links", return_value=[]), \
-                 patch("api.subscription_aggregator.flask_app.list_user_links", return_value=[]), \
                  patch("api.subscription_aggregator.flask_app.get_agent_total_used", return_value=0), \
                  patch("api.subscription_aggregator.flask_app.get_agent", return_value={"traffic_limit_bytes": 0, "expire_at": None}):
                 sub_resp = flask_client.get(f"/sub/{username}/{app_key}/links")
