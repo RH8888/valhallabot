@@ -182,6 +182,29 @@ def fetch_all_links():
             return []
         raise
 
+def _extract_traffic_from_obj(obj: dict) -> int | None:
+    """Safely extract used traffic counter from a panel user object.
+    
+    Returns None if no traffic data is found, so callers do not falsely assume 0 bytes.
+    """
+    if not isinstance(obj, dict):
+        return None
+    val = obj.get("used_traffic")
+    if val is not None:
+        try:
+            return max(0, int(val))
+        except (TypeError, ValueError):
+            pass
+    up = obj.get("up")
+    down = obj.get("down")
+    if up is not None or down is not None:
+        try:
+            return max(0, int(up or 0) + int(down or 0))
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
 def fetch_used_traffic(panel_type, panel_url, bearer, remote_username, sanaei_api_version=None):
     """Return used traffic for a remote user via appropriate panel API."""
     try:
@@ -193,14 +216,165 @@ def fetch_used_traffic(panel_type, panel_url, bearer, remote_username, sanaei_ap
                 obj, err = api.get_user(panel_url, bearer, rn)
                 if not obj:
                     return None, f"{panel_url}: {err or 'user not found'}"
-                total += int(obj.get("used_traffic", 0) or 0)
+                t = _extract_traffic_from_obj(obj)
+                if t is None:
+                    return None, f"{panel_url}: missing traffic data for {rn}"
+                total += t
             return total, None
         obj, err = api.get_user(panel_url, bearer, remote_username)
         if not obj:
             return None, f"{panel_url}: {err or 'user not found'}"
-        return int(obj.get("used_traffic", 0) or 0), None
+        t = _extract_traffic_from_obj(obj)
+        if t is None:
+            return None, f"{panel_url}: missing traffic data for {remote_username}"
+        return t, None
     except Exception as e:  # pragma: no cover - network errors
         return None, str(e)
+
+
+def record_traffic_delta(
+    owner_id: int,
+    local_username: str,
+    link_id: int,
+    panel_id: int,
+    used: int,
+    multiplier: float = 1.0,
+) -> tuple[int, int]:
+    """
+    Atomically process traffic synchronization for a single link with concurrency
+    protection and idempotency.
+
+    Guarantees:
+    - Atomicity: All database updates (local_users.used_bytes, agents.total_used_bytes,
+      agent_panel_usage_totals, agent_usage_events, local_user_panel_links.last_used_traffic)
+      run in one transaction. If any fails, the entire transaction rolls back.
+    - Concurrency protection: Locks the link and local_user rows with SELECT ... FOR UPDATE.
+      Concurrent workers are serialized and read the freshly committed baseline.
+    - Idempotency: If used == last, delta is 0 and no database updates are made.
+    - Expiration protection: If an account is expired or disabled and used < last,
+      does NOT reset the baseline to avoid double-charging historical traffic.
+    - Safe counter reset: If an active user's panel resets (used < last), updates
+      baseline to the new counter value without charging negative delta or historical usage.
+    """
+    if used is None or used < 0:
+        return 0, 0
+
+    try:
+        mult = float(multiplier)
+        if mult < 0:
+            mult = 1.0
+    except (TypeError, ValueError):
+        mult = 1.0
+
+    with with_mysql_cursor(dict_=True) as cur:
+        # Lock the link row and user row for update
+        cur.execute(
+            """
+            SELECT lup.id AS link_id,
+                   lup.last_used_traffic,
+                   lup.owner_id,
+                   lup.local_username,
+                   lup.panel_id,
+                   lu.manual_disabled,
+                   lu.disabled_pushed,
+                   lu.expire_at
+            FROM local_user_panel_links lup
+            LEFT JOIN local_users lu ON lu.owner_id = lup.owner_id AND lu.username = lup.local_username
+            WHERE lup.id = %s
+            FOR UPDATE
+            """,
+            (int(link_id),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return 0, 0
+
+        last = int(row.get("last_used_traffic") or 0)
+        expire_at = row.get("expire_at")
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        is_expired = bool(expire_at and expire_at <= now_utc)
+        is_disabled = bool(row.get("manual_disabled") or row.get("disabled_pushed") or is_expired)
+
+        # Case 1: Panel reports less than baseline
+        if used < last:
+            if is_disabled:
+                # Upstream account is disabled/expired; temporary drop or missing stats.
+                # NEVER reset baseline for disabled/expired accounts!
+                log.info(
+                    "Link %s (owner=%s, user=%s) reported lower traffic while disabled/expired (%s -> %s); preserving baseline",
+                    link_id, owner_id, local_username, last, used,
+                )
+                return 0, 0
+
+            # Legitimate counter reset on active upstream panel
+            log.info(
+                "Upstream panel counter reset detected for link %s (%s -> %s); updating baseline",
+                link_id, last, used,
+            )
+            cur.execute(
+                "UPDATE local_user_panel_links SET last_used_traffic = %s WHERE id = %s",
+                (int(used), int(link_id)),
+            )
+            return 0, 0
+
+        # Case 2: Panel reports same as baseline
+        delta = used - last
+        if delta == 0:
+            return 0, 0
+
+        # Case 3: Panel reports higher usage (delta > 0)
+        weighted_delta = int(round(delta * mult))
+
+        # 1. Update local user usage
+        if weighted_delta > 0:
+            cur.execute(
+                """
+                UPDATE local_users
+                SET used_bytes = LEAST(used_bytes + %s, 18446744073709551615)
+                WHERE owner_id = %s AND username = %s
+                """,
+                (int(weighted_delta), int(owner_id), local_username),
+            )
+
+        # 2. Update agent usage
+        if delta > 0:
+            cur.execute(
+                """
+                UPDATE agents
+                SET total_used_bytes = LEAST(total_used_bytes + %s, 18446744073709551615)
+                WHERE telegram_user_id = %s
+                """,
+                (int(delta), int(owner_id)),
+            )
+
+        # 3. Update agent panel usage totals
+        if delta > 0:
+            cur.execute(
+                """
+                INSERT INTO agent_panel_usage_totals(agent_tg_id, panel_id, total_used_bytes)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE total_used_bytes = LEAST(total_used_bytes + VALUES(total_used_bytes), 18446744073709551615)
+                """,
+                (int(owner_id), int(panel_id), int(delta)),
+            )
+
+        # 4. Record usage event
+        if delta > 0:
+            cur.execute(
+                """
+                INSERT INTO agent_usage_events(agent_tg_id, panel_id, delta_bytes)
+                VALUES (%s, %s, %s)
+                """,
+                (int(owner_id), int(panel_id), int(delta)),
+            )
+
+        # 5. Atomically advance baseline on the same transaction
+        cur.execute(
+            "UPDATE local_user_panel_links SET last_used_traffic = %s WHERE id = %s",
+            (int(used), int(link_id)),
+        )
+
+        return delta, weighted_delta
 
 def add_local_usage(owner_id, local_username, delta):
     if delta <= 0:
@@ -1010,28 +1184,16 @@ def loop():
                         user_failed = True
                         continue
 
-                    last = int(row["last_used_traffic"] or 0)
-                    if used < last:
-                        # احتمالا پنل ریست شده
-                        log.info("used dropped (%s -> %s) for link %s; reset baseline",
-                                 last, used, row["link_id"])
-                        update_last(row["link_id"], used)
-                        continue
-
-                    delta = used - last
+                    multiplier = row.get("usage_multiplier") or 1.0
+                    delta, weighted_delta = record_traffic_delta(
+                        owner_id=owner_id,
+                        local_username=local_username,
+                        link_id=row["link_id"],
+                        panel_id=row["panel_id"],
+                        used=used,
+                        multiplier=multiplier,
+                    )
                     if delta > 0:
-                        try:
-                            multiplier = float(row.get("usage_multiplier") or 1.0)
-                        except (TypeError, ValueError):
-                            multiplier = 1.0
-                        if multiplier < 0:
-                            multiplier = 1.0
-                        weighted_delta = int(round(delta * multiplier))
-                        add_local_usage(owner_id, local_username, weighted_delta)
-                        add_agent_usage(owner_id, delta)
-                        add_panel_lifetime_usage(owner_id, row["panel_id"], delta)
-                        add_usage_event(owner_id, row["panel_id"], delta)
-                        update_last(row["link_id"], used)
                         log.info("owner=%s local=%s +%s bytes (panel_id=%s)",
                                  owner_id, local_username, weighted_delta, row["panel_id"])
 

@@ -1415,6 +1415,12 @@ def reset_used(owner_id: int, username: str):
                 WHERE owner_id IN ({placeholders}) AND username=%s""",
             params,
         )
+        cur.execute(
+            f"""UPDATE local_user_panel_links
+                SET last_used_traffic=0
+                WHERE owner_id IN ({placeholders}) AND local_username=%s""",
+            params,
+        )
     for row in list_user_links(owner_id, username):
         api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
         remotes = remote_names_for_panel(row, row["remote_username"])

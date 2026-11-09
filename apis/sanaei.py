@@ -129,7 +129,9 @@ def get_user(panel_url: str, token: str, username: str) -> Tuple[Optional[Dict],
         if r.status_code != 200:
             return None, f"{r.status_code} {r.text[:200]}"
         data = r.json() or {}
-        obj = data.get('obj') or data
+        obj = data.get('obj')
+        if not obj or not isinstance(obj, dict):
+            obj = client if isinstance(client, dict) else (data or {})
         up = int(obj.get('up', 0) or 0)
         down = int(obj.get('down', 0) or 0)
         enabled = bool(obj.get('enable', True))

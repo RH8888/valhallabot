@@ -215,9 +215,17 @@ def _normalise_user_object(client_obj: Any, traffic_obj: Any = None, links: Opti
     client = _extract_client(client_obj)
     traffic = _extract_client(traffic_obj) if isinstance(traffic_obj, Mapping) else {}
 
-    up = _coerce_int(_first_present(traffic, "up", "upload", "uplink")) or 0
-    down = _coerce_int(_first_present(traffic, "down", "download", "downlink")) or 0
+    up = _coerce_int(_first_present(traffic, "up", "upload", "uplink"))
+    if up is None:
+        up = _coerce_int(_first_present(client, "up", "upload", "uplink")) or 0
+
+    down = _coerce_int(_first_present(traffic, "down", "download", "downlink"))
+    if down is None:
+        down = _coerce_int(_first_present(client, "down", "download", "downlink")) or 0
+
     used = _coerce_int(_first_present(traffic, "used_traffic", "usedTraffic", "used"))
+    if used is None:
+        used = _coerce_int(_first_present(client, "used_traffic", "usedTraffic", "used"))
     if used is None:
         used = up + down
 
@@ -480,7 +488,13 @@ def get_user(
     if traffic_err:
         traffic = None
     links, _ = fetch_links_from_panel(panel_url, token, username, sanaei_sub_method=sanaei_sub_method)
-    return _normalise_user_object(client, traffic, links), None
+    user_obj = _normalise_user_object(client, traffic, links)
+    if traffic_err and not (traffic or {}).get("up") and not (traffic or {}).get("down"):
+        client_data = _extract_client(client)
+        has_stats = any(client_data.get(k) is not None for k in ("up", "down", "upload", "download", "used_traffic", "usedTraffic", "used"))
+        if not has_stats:
+            return None, f"traffic fetch failed: {traffic_err}"
+    return user_obj, None
 
 
 @cached(cache=_links_cache, lock=_links_lock)
