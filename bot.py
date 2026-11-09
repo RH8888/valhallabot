@@ -3219,7 +3219,7 @@ async def show_panel_cfg_selector(q, context: ContextTypes.DEFAULT_TYPE, owner_i
         await q.edit_message_text("پنل پیدا نشد.")
         return ConversationHandler.END
 
-    links = fetch_panel_filter_links(info)
+    links = await asyncio.to_thread(fetch_panel_filter_links, info)
     if not links:
         await q.edit_message_text("ابتدا لینک سابسکریپشن پنل را تنظیم کن.")
         return ConversationHandler.END
@@ -3251,7 +3251,7 @@ async def show_panel_cfgnum_selector(q, context: ContextTypes.DEFAULT_TYPE, owne
         await q.edit_message_text("پنل پیدا نشد.")
         return ConversationHandler.END
 
-    links = fetch_panel_filter_links(info)
+    links = await asyncio.to_thread(fetch_panel_filter_links, info)
     if not links:
         await q.edit_message_text("ابتدا لینک سابسکریپشن پنل را تنظیم کن.")
         return ConversationHandler.END
@@ -4600,7 +4600,8 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
     for r in rows:
         api = get_api(r.get("panel_type"), r.get("sanaei_api_version"))
         if r.get("panel_type") in ("marzneshin", "guardcore"):
-            svc, e = api.fetch_user_services(
+            svc, e = await asyncio.to_thread(
+                api.fetch_user_services,
                 r["panel_url"], r["access_token"], r.get("template_username")
             )
             if e:
@@ -4617,7 +4618,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 errs.append(f"{panel_error_address(r, owner_id)}: template missing")
                 per_panel[r["id"]] = {"proxies": {}, "inbounds": {}}
                 continue
-            obj, e = api.get_user(r["panel_url"], r["access_token"], tmpl)
+            obj, e = await asyncio.to_thread(api.get_user, r["panel_url"], r["access_token"], tmpl)
             if not obj:
                 errs.append(
                     f"{panel_error_address(r, owner_id)} (template '{tmpl}'): {e or 'not found'}"
@@ -4677,13 +4678,13 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                     expire_ts=expire_ts,
                     sanaei_api_version=r.get("sanaei_api_version"),
                 )
-                obj, e = api.create_user(r["panel_url"], r["access_token"], payload)
+                obj, e = await asyncio.to_thread(api.create_user, r["panel_url"], r["access_token"], payload)
                 if not obj:
                     failed.append(f"{panel_error_address(r, owner_id)} (inbounds {','.join(map(str, inbound_ids))}): {e or 'unknown error'}")
                     continue
                 created_remotes.append((r, [remote_name]))
                 if not obj.get("enabled", True):
-                    ok_en, err_en = api.enable_remote_user(r["panel_url"], r["access_token"], remote_name)
+                    ok_en, err_en = await asyncio.to_thread(api.enable_remote_user, r["panel_url"], r["access_token"], remote_name)
                     if not ok_en:
                         failed.append(f"{panel_error_address(r, owner_id)}: enable failed - {err_en or 'unknown'}")
                         continue
@@ -4702,19 +4703,19 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                     expire_ts=expire_ts,
                     sanaei_api_version=r.get("sanaei_api_version"),
                 )
-                obj, e = api.create_user(r["panel_url"], r["access_token"], payload)
+                obj, e = await asyncio.to_thread(api.create_user, r["panel_url"], r["access_token"], payload)
                 if not obj:
                     if is_duplicate_create_error(e):
                         failed.append(f"{panel_error_address(r, owner_id)} (inb {inb}): {e or 'duplicate user'}")
                         panel_failed = True
                         continue
-                    obj, g = api.get_user(r["panel_url"], r["access_token"], rn)
+                    obj, g = await asyncio.to_thread(api.get_user, r["panel_url"], r["access_token"], rn)
                     if not obj:
                         failed.append(f"{panel_error_address(r, owner_id)} (inb {inb}): {e or g or 'unknown error'}")
                         panel_failed = True
                         continue
                 if not obj.get("enabled", True):
-                    ok_en, err_en = api.enable_remote_user(r["panel_url"], r["access_token"], rn)
+                    ok_en, err_en = await asyncio.to_thread(api.enable_remote_user, r["panel_url"], r["access_token"], rn)
                     if not ok_en:
                         failed.append(f"{panel_error_address(r, owner_id)} (inb {inb}): enable failed - {err_en or 'unknown'}")
                         panel_failed = True
@@ -4749,18 +4750,18 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 groups = tmpl_info.get("group_ids")
                 if groups is not None:
                     payload["group_ids"] = list(groups)
-        obj, e = api.create_user(r["panel_url"], r["access_token"], payload)
+        obj, e = await asyncio.to_thread(api.create_user, r["panel_url"], r["access_token"], payload)
         if not obj:
             if is_duplicate_create_error(e):
                 failed.append(f"{panel_error_address(r, owner_id)}: {e or 'duplicate user'}")
                 continue
-            obj, g = api.get_user(r["panel_url"], r["access_token"], remote_name)
+            obj, g = await asyncio.to_thread(api.get_user, r["panel_url"], r["access_token"], remote_name)
             if not obj:
                 failed.append(f"{panel_error_address(r, owner_id)}: {e or g or 'unknown error'}")
                 continue
         created_remotes.append((r, [remote_name]))
         if not obj.get("enabled", True):
-            ok_en, err_en = api.enable_remote_user(r["panel_url"], r["access_token"], remote_name)
+            ok_en, err_en = await asyncio.to_thread(api.enable_remote_user, r["panel_url"], r["access_token"], remote_name)
             if not ok_en:
                 failed.append(f"{panel_error_address(r, owner_id)}: enable failed - {err_en or 'unknown'}")
                 continue
@@ -4771,7 +4772,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
         for panel, remote_names in created_remotes:
             api = get_api(panel.get("panel_type"), panel.get("sanaei_api_version"))
             for remote in remote_names:
-                ok_rm, err_rm = api.remove_remote_user(panel["panel_url"], panel["access_token"], remote)
+                ok_rm, err_rm = await asyncio.to_thread(api.remove_remote_user, panel["panel_url"], panel["access_token"], remote)
                 if not ok_rm:
                     log.warning(
                         "create rollback failed removing %s from %s: %s",
