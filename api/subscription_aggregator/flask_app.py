@@ -10,6 +10,7 @@ Flask subscription aggregator for Marzneshin/Marzban/Rebecca/Sanaei/Pasarguard/G
 """
 
 import os
+import time
 import logging
 import math
 import re
@@ -683,6 +684,134 @@ def mark_agent_disabled(owner_id: int):
             tuple(ids),
         )
 
+
+_agent_disable_lock = RLock()
+_pending_agent_disables = set()
+_agent_disable_executor = None
+
+
+def get_agent_disable_executor() -> ThreadPoolExecutor:
+    """Return the shared ThreadPoolExecutor for background agent disable tasks."""
+    global _agent_disable_executor
+    with _agent_disable_lock:
+        if _agent_disable_executor is None:
+            max_workers = int(os.getenv("AGENT_DISABLE_MAX_WORKERS", "2"))
+            _agent_disable_executor = ThreadPoolExecutor(
+                max_workers=max_workers,
+                thread_name_prefix="agent-bulk-disable",
+            )
+        return _agent_disable_executor
+
+
+def disable_agent_bulk(owner_id: int, max_retries: int = 2, retry_delay: float = 0.5) -> bool:
+    """Disable all remote panel accounts for an agent.
+
+    Idempotent and handles failures/retries:
+    - Verifies the agent is not already marked as disabled_pushed.
+    - Collects and deduplicates remote accounts across all links.
+    - Retries transient failures up to max_retries per target.
+    - Only marks the agent as disabled_pushed if all targets succeed.
+    """
+    ag = get_agent(owner_id)
+    if not ag:
+        return True
+    if int(ag.get("disabled_pushed", 0) or 0):
+        return True
+
+    links = list_all_agent_links(owner_id)
+    if not links:
+        mark_agent_disabled(owner_id)
+        return True
+
+    seen = set()
+    unique_targets = []
+    for l in links:
+        key = (
+            l["panel_type"],
+            l["panel_url"],
+            l["access_token"],
+            l["remote_username"],
+            l.get("sanaei_api_version"),
+        )
+        if key not in seen:
+            seen.add(key)
+            unique_targets.append(key)
+
+    def _disable_target(target):
+        ptype, purl, tok, ruser, sver = target
+        for attempt in range(max_retries + 1):
+            try:
+                code, msg = disable_remote(ptype, purl, tok, ruser, sver)
+                if code == 200:
+                    return target, True, msg
+                log.warning(
+                    "AGENT disable attempt %d on %s@%s -> %s %s",
+                    attempt + 1, ruser, purl, code, msg,
+                )
+            except Exception as exc:
+                log.warning(
+                    "AGENT disable attempt %d on %s@%s error: %s",
+                    attempt + 1, ruser, purl, exc,
+                )
+            if attempt < max_retries and retry_delay > 0:
+                time.sleep(retry_delay * (attempt + 1))
+        return target, False, f"Failed after {max_retries + 1} attempts"
+
+    failed_targets = []
+    max_workers_env = int(os.getenv("FETCH_MAX_WORKERS", "5"))
+    max_workers = min(max_workers_env, len(unique_targets)) or 1
+
+    if len(unique_targets) <= 1 or max_workers <= 1:
+        for t in unique_targets:
+            _, ok, err = _disable_target(t)
+            if not ok:
+                failed_targets.append((t, err))
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(_disable_target, t) for t in unique_targets]
+            for fut in as_completed(futures):
+                t, ok, err = fut.result()
+                if not ok:
+                    failed_targets.append((t, err))
+
+    if failed_targets:
+        log.warning(
+            "AGENT disable on owner_id=%s had %d/%d targets fail after retries. Preserving disabled_pushed=0 for retry.",
+            owner_id, len(failed_targets), len(unique_targets),
+        )
+        return False
+
+    mark_agent_disabled(owner_id)
+    log.info(
+        "AGENT disable on owner_id=%s completed successfully (%d targets).",
+        owner_id, len(unique_targets),
+    )
+    return True
+
+
+def trigger_agent_disable_background(owner_id: int, max_retries: int = 2, retry_delay: float = 0.5):
+    """Asynchronously schedule bulk remote account disabling in background processing.
+
+    Returns the Future object if scheduled, or None if already in progress or already pushed.
+    """
+    oid = canonical_owner_id(owner_id)
+    with _agent_disable_lock:
+        if oid in _pending_agent_disables:
+            return None
+        _pending_agent_disables.add(oid)
+
+    def _worker():
+        try:
+            disable_agent_bulk(oid, max_retries=max_retries, retry_delay=retry_delay)
+        except Exception as exc:
+            log.exception("Unexpected error in background agent bulk disable for %s: %s", oid, exc)
+        finally:
+            with _agent_disable_lock:
+                _pending_agent_disables.discard(oid)
+
+    executor = get_agent_disable_executor()
+    return executor.submit(_worker)
+
 # ---------- app ----------
 app = Flask(__name__)
 
@@ -985,12 +1114,7 @@ def unified_links(local_username, app_key):
         if expired or exceeded:
             agent_blocked = True
             if not pushed_a:
-                for l in list_all_agent_links(owner_id):
-                    code, msg = disable_remote(l["panel_type"], l["panel_url"], l["access_token"], l["remote_username"], l.get("sanaei_api_version"))
-                    if code and code != 200:
-                        log.warning("AGENT disable on %s@%s -> %s %s",
-                                    l["remote_username"], l["panel_url"], code, msg)
-                mark_agent_disabled(owner_id)
+                trigger_agent_disable_background(owner_id)
             if not want_html:
                 return Response("", mimetype="text/plain")
 
@@ -1211,6 +1335,14 @@ def main():
     key = os.getenv("SSL_KEY_PATH")
     ssl_context = (cert, key) if cert and key else None
     app.run(host=host, port=port, debug=False, ssl_context=ssl_context)
+
+__all__ = (
+    "app",
+    "create_flask_app",
+    "disable_agent_bulk",
+    "trigger_agent_disable_background",
+    "get_agent_disable_executor",
+)
 
 if __name__ == "__main__":
     main()
