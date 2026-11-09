@@ -421,11 +421,11 @@
   </div>
 
   <script>
-    const SUBSCRIPTION_URL = "{{ user.subscription_url }}";
-    const USED_TRAFFIC_BYTES = (v=>{ try{return parseFloat(v)||0}catch{ return 0 }})("{{ user.used_traffic }}");
-    const DATA_LIMIT_BYTES = (v=>{ try{return (!v || v==='None')?Infinity:parseFloat(v)||Infinity}catch{ return Infinity }})("{{ user.data_limit }}");
-    const EXPIRE_DATE_RAW = "{{ user.expire_date }}";
-    const RESET_STRATEGY = ("{{ user.data_limit_reset_strategy.value }}") || "";
+    const SUBSCRIPTION_URL = {{ user.subscription_url | tojson }};
+    const USED_TRAFFIC_BYTES = (v=>{ try{return parseFloat(v)||0}catch{ return 0 }})({{ user.used_traffic | tojson }});
+    const DATA_LIMIT_BYTES = (v=>{ try{return (!v || v==='None')?Infinity:parseFloat(v)||Infinity}catch{ return Infinity }})({{ user.data_limit | tojson }});
+    const EXPIRE_DATE_RAW = {{ user.expire_date | tojson }};
+    const RESET_STRATEGY = ({{ user.data_limit_reset_strategy.value | tojson }}) || "";
 
     function formatBytes(bytes, decimals=2){
       if (bytes === Infinity) return 'نامحدود';
