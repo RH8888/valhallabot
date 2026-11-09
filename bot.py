@@ -1438,8 +1438,9 @@ def renew_user(owner_id: int, username: str, add_days: int):
     with with_mysql_cursor() as cur:
         cur.execute(
             f"""UPDATE local_users
-               SET expire_at = IF(expire_at IS NULL, UTC_TIMESTAMP() + INTERVAL %s DAY,
-                                    expire_at + INTERVAL %s DAY),
+               SET expire_at = IF(expire_at IS NULL OR expire_at < UTC_TIMESTAMP(),
+                                  UTC_TIMESTAMP() + INTERVAL %s DAY,
+                                  expire_at + INTERVAL %s DAY),
                    expire_limit_notified=0
                WHERE owner_id IN ({placeholders}) AND username=%s""",
             params

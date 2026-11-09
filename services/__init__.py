@@ -13,6 +13,7 @@ from .quotas import (
     set_agent_max_user_bytes,
     renew_agent_days,
     set_agent_active,
+    calculate_renewal_expire_at,
 )
 from .settings import get_setting, get_setting_exact, set_setting, delete_setting
 from .panel_tokens import (
@@ -45,6 +46,7 @@ __all__ = [
     "set_agent_max_user_bytes",
     "renew_agent_days",
     "set_agent_active",
+    "calculate_renewal_expire_at",
     "get_setting",
     "get_setting_exact",
     "set_setting",
