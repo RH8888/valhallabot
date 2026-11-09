@@ -1,6 +1,7 @@
 """Automatic Database Backup service for Valhalla Bot."""
 from __future__ import annotations
 
+import gzip
 import io
 import logging
 import os
@@ -14,7 +15,7 @@ import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple, Union
 
 import requests
 from dotenv import load_dotenv
@@ -113,7 +114,28 @@ def format_bytes(size_bytes: int) -> str:
     return f"{size:.2f} {units[idx]}"
 
 
-def _dump_mysql_cli() -> Optional[str]:
+def _format_sql_value(v: Any) -> str:
+    """Format a Python value into a safe SQL literal for dump output."""
+    if v is None:
+        return "NULL"
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, (bytes, bytearray)):
+        return f"0x{bytes(v).hex()}"
+    escaped = (
+        str(v)
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace("\0", "\\0")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+    return f"'{escaped}'"
+
+
+def _dump_mysql_cli(target: Optional[Union[str, Path, io.TextIOBase]] = None) -> Optional[str]:
     """Try dumping MySQL database using mysqldump CLI binary."""
     load_dotenv()
     host = os.getenv("MYSQL_HOST", "127.0.0.1")
@@ -122,95 +144,170 @@ def _dump_mysql_cli() -> Optional[str]:
     password = os.getenv("MYSQL_PASSWORD", "")
     db_name = os.getenv("MYSQL_DATABASE", "botdb")
 
-    cmd = ["mysqldump", "-h", host, "-P", str(port), "-u", user, db_name]
+    cmd = [
+        "mysqldump",
+        "-h", host,
+        "-P", str(port),
+        "-u", user,
+        "--single-transaction",
+        "--quick",
+        "--skip-lock-tables",
+        db_name,
+    ]
     env = os.environ.copy()
     if password:
         env["MYSQL_PWD"] = password
 
     try:
-        res = subprocess.run(cmd, env=env, capture_output=True, text=True, check=True)
-        return res.stdout
+        if target is None:
+            res = subprocess.run(cmd, env=env, capture_output=True, text=True, check=True)
+            return res.stdout
+        elif isinstance(target, (str, Path)):
+            target_path = Path(target)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(target_path, "w", encoding="utf-8") as f:
+                subprocess.run(cmd, env=env, stdout=f, check=True)
+            return None
+        elif hasattr(target, "write"):
+            proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, text=True)
+            if proc.stdout:
+                for chunk in iter(lambda: proc.stdout.read(65536), ""):
+                    target.write(chunk)
+            proc.wait()
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(proc.returncode, cmd)
+            return None
     except (FileNotFoundError, subprocess.CalledProcessError) as exc:
         log.warning("mysqldump CLI execution failed or unavailable: %s. Using Python fallback dump.", exc)
         return None
 
 
-def _dump_mysql_python() -> str:
-    """Fallback Python-native dump generator for MySQL tables and rows."""
-    load_dotenv()
+def _write_dump_stream(cur: Any, out: io.TextIOBase, batch_size: int = 100) -> None:
+    """Stream dump statements directly into an open text stream in batches."""
     db_name = os.getenv("MYSQL_DATABASE", "botdb")
     hostname = socket.gethostname()
 
-    lines = [
-        f"-- Valhalla MySQL Backup Dump",
-        f"-- Database: {db_name}",
-        f"-- Hostname: {hostname}",
-        f"-- Generated at: {datetime.now(timezone.utc).isoformat()}",
-        "SET FOREIGN_KEY_CHECKS=0;",
-        "SET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO';",
-        "",
-    ]
+    out.write(
+        f"-- Valhalla MySQL Backup Dump\n"
+        f"-- Database: {db_name}\n"
+        f"-- Hostname: {hostname}\n"
+        f"-- Generated at: {datetime.now(timezone.utc).isoformat()}\n"
+        "SET FOREIGN_KEY_CHECKS=0;\n"
+        "SET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO';\n\n"
+    )
 
-    with with_mysql_cursor(dict_=False) as cur:
+    # Use transaction-consistent snapshot without acquiring global table locks
+    try:
+        cur.execute("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        cur.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT")
+    except Exception as tx_exc:
+        log.warning("Could not start transaction with consistent snapshot: %s. Falling back to START TRANSACTION.", tx_exc)
+        try:
+            cur.execute("START TRANSACTION")
+        except Exception:
+            pass
+
+    try:
         cur.execute("SHOW TABLES")
         tables = [row[0] for row in cur.fetchall()]
 
         for table in tables:
-            lines.append(f"-- Table structure for table `{table}`")
-            lines.append(f"DROP TABLE IF EXISTS `{table}`;")
+            out.write(f"-- Table structure for table `{table}`\n")
+            out.write(f"DROP TABLE IF EXISTS `{table}`;\n")
             cur.execute(f"SHOW CREATE TABLE `{table}`")
             create_row = cur.fetchone()
             if create_row and len(create_row) > 1:
-                lines.append(f"{create_row[1]};")
-            lines.append("")
+                out.write(f"{create_row[1]};\n")
+            out.write("\n")
+
+            cur.execute(f"SHOW COLUMNS FROM `{table}`")
+            cols_rows = cur.fetchall()
+            cols = [col[0] for col in cols_rows] if cols_rows else []
+            if not cols and cur.description:
+                cols = [desc[0] for desc in cur.description]
+            col_names = ", ".join([f"`{c}`" for c in cols])
+            col_clause = f" ({col_names})" if col_names else ""
 
             cur.execute(f"SELECT * FROM `{table}`")
-            rows = cur.fetchall()
-            if rows:
-                cur.execute(f"SHOW COLUMNS FROM `{table}`")
-                cols = [col[0] for col in cur.fetchall()]
-                col_names = ", ".join([f"`{c}`" for c in cols])
-                lines.append(f"-- Dumping data for table `{table}`")
-                lines.append(f"LOCK TABLES `{table}` WRITE;")
+            first_batch = cur.fetchmany(batch_size)
+            if first_batch:
+                out.write(f"-- Dumping data for table `{table}`\n")
+                batch = first_batch
+                while batch:
+                    val_strs = [
+                        f"({', '.join(_format_sql_value(v) for v in row)})"
+                        for row in batch
+                    ]
+                    out.write(f"INSERT INTO `{table}`{col_clause} VALUES\n" + ",\n".join(val_strs) + ";\n")
+                    batch = cur.fetchmany(batch_size)
+                out.write("\n")
+    finally:
+        try:
+            cur.execute("COMMIT")
+        except Exception:
+            pass
 
-                batch_size = 100
-                for i in range(0, len(rows), batch_size):
-                    batch = rows[i : i + batch_size]
-                    val_strs = []
-                    for row in batch:
-                        vals = []
-                        for v in row:
-                            if v is None:
-                                vals.append("NULL")
-                            elif isinstance(v, (int, float)):
-                                vals.append(str(v))
-                            elif isinstance(v, bytes):
-                                vals.append(f"0x{v.hex()}")
-                            else:
-                                escaped = (
-                                    str(v)
-                                    .replace("\\", "\\\\")
-                                    .replace("'", "\\'")
-                                    .replace("\0", "\\0")
-                                    .replace("\n", "\\n")
-                                    .replace("\r", "\\r")
-                                )
-                                vals.append(f"'{escaped}'")
-                        val_strs.append(f"({', '.join(vals)})")
-                    lines.append(f"INSERT INTO `{table}` ({col_names}) VALUES\n" + ",\n".join(val_strs) + ";")
-                lines.append("UNLOCK TABLES;")
-                lines.append("")
-
-    lines.append("SET FOREIGN_KEY_CHECKS=1;")
-    return "\n".join(lines)
+    out.write("SET FOREIGN_KEY_CHECKS=1;\n")
 
 
-def generate_sql_dump() -> str:
+def _dump_mysql_python(
+    target: Optional[Union[str, Path, io.TextIOBase]] = None,
+    use_gzip: bool = False,
+    batch_size: int = 100,
+) -> Optional[Union[str, bytes]]:
+    """Fallback Python-native dump generator for MySQL tables and rows.
+
+    Streams database rows in batches without loading entire tables into memory.
+    Uses transaction-consistent snapshot without global table write locks.
+    Can write directly to target file/stream, optionally compressed with gzip.
+    """
+    load_dotenv()
+    with with_mysql_cursor(dict_=False) as cur:
+        if isinstance(target, (str, Path)):
+            target_path = Path(target)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            if use_gzip or target_path.suffix == ".gz" or str(target).endswith(".gz"):
+                with gzip.open(target_path, "wt", encoding="utf-8") as gz_f:
+                    _write_dump_stream(cur, gz_f, batch_size=batch_size)
+            else:
+                with open(target_path, "w", encoding="utf-8") as f:
+                    _write_dump_stream(cur, f, batch_size=batch_size)
+            return None
+        elif target is not None and hasattr(target, "write"):
+            _write_dump_stream(cur, target, batch_size=batch_size)
+            return None
+        elif use_gzip:
+            buf = io.BytesIO()
+            with gzip.GzipFile(fileobj=buf, mode="wb") as gz_raw:
+                with io.TextIOWrapper(gz_raw, encoding="utf-8") as gz_text:
+                    _write_dump_stream(cur, gz_text, batch_size=batch_size)
+            return buf.getvalue()
+        else:
+            buf = io.StringIO()
+            _write_dump_stream(cur, buf, batch_size=batch_size)
+            return buf.getvalue()
+
+
+def generate_sql_dump(
+    target: Optional[Union[str, Path, io.TextIOBase]] = None,
+    use_gzip: bool = False,
+    batch_size: int = 100,
+) -> Optional[Union[str, bytes]]:
     """Generate MySQL SQL dump using CLI or fallback to Python generator."""
-    cli_dump = _dump_mysql_cli()
-    if cli_dump is not None:
-        return cli_dump
-    return _dump_mysql_python()
+    if target is None and not use_gzip:
+        cli_dump = _dump_mysql_cli()
+        if cli_dump is not None:
+            return cli_dump
+        return _dump_mysql_python(batch_size=batch_size)
+
+    if not use_gzip and isinstance(target, (str, Path)) and not str(target).endswith(".gz"):
+        cli_res = _dump_mysql_cli(target=target)
+        if cli_res is None and Path(target).exists() and Path(target).stat().st_size > 0:
+            return None
+        if Path(target).exists():
+            Path(target).unlink(missing_ok=True)
+
+    return _dump_mysql_python(target=target, use_gzip=use_gzip, batch_size=batch_size)
 
 
 def cleanup_old_backups(backup_dir: Path, keep: int = MAX_BACKUP_FILES) -> int:
@@ -246,13 +343,19 @@ def create_backup_archive() -> Tuple[Path, str, int]:
     zip_filename = f"backup_{timestamp_str}.zip"
     zip_filepath = backup_dir / zip_filename
 
-    sql_content = generate_sql_dump()
     env_filepath = BASE_DIR / ".env"
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_dir_path = Path(temp_dir)
         sql_filepath = temp_dir_path / "database.sql"
-        sql_filepath.write_text(sql_content, encoding="utf-8")
+
+        # Stream directly to sql_filepath without keeping the entire dump in memory
+        dump_res = generate_sql_dump(target=sql_filepath)
+        if not sql_filepath.exists() and isinstance(dump_res, (str, bytes)):
+            if isinstance(dump_res, bytes):
+                sql_filepath.write_bytes(dump_res)
+            else:
+                sql_filepath.write_text(dump_res, encoding="utf-8")
 
         temp_env_filepath = temp_dir_path / ".env"
         if env_filepath.exists():
@@ -408,6 +511,7 @@ def stop_backup_scheduler() -> None:
 
 
 __all__ = [
+    "_dump_mysql_python",
     "cleanup_old_backups",
     "create_backup_archive",
     "format_bytes",

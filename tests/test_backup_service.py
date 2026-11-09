@@ -1,4 +1,5 @@
 """Unit tests for automatic database backup service."""
+import gzip
 import os
 import shutil
 import tempfile
@@ -8,9 +9,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 from services.backup_service import (
+    _dump_mysql_python,
     cleanup_old_backups,
     create_backup_archive,
     format_bytes,
+    generate_sql_dump,
     get_backup_dir,
     get_backup_settings,
     perform_backup,
@@ -112,6 +115,194 @@ class TestBackupService(unittest.TestCase):
         self.assertEqual(size, 4)
         mock_send_tg.assert_called_once_with(dummy_path, trigger_type="manual")
         mock_update_ts.assert_called_once()
+
+    @patch("services.backup_service.with_mysql_cursor")
+    def test_dump_mysql_python_large_table_streaming(self, mock_with_cursor):
+        """Verify rows are streamed in batches with fetchmany instead of fetchall."""
+        mock_cur = MagicMock()
+        mock_with_cursor.return_value.__enter__.return_value = mock_cur
+
+        # Tables: users
+        # 250 rows simulated
+        all_rows = [(i, f"user_{i}", 100 + i) for i in range(1, 251)]
+        row_batches = [all_rows[0:100], all_rows[100:200], all_rows[200:250], []]
+
+        def fake_execute(query, *args, **kwargs):
+            mock_cur._last_query = query
+
+        def fake_fetchall():
+            q = getattr(mock_cur, "_last_query", "")
+            if "SHOW TABLES" in q:
+                return [("users",)]
+            if "SHOW COLUMNS" in q:
+                return [("id",), ("username",), ("score",)]
+            # If fetchall is called for SELECT *, fail the test
+            if "SELECT * FROM" in q:
+                raise AssertionError("cur.fetchall() must NOT be called for table data rows!")
+            return []
+
+        def fake_fetchone():
+            q = getattr(mock_cur, "_last_query", "")
+            if "SHOW CREATE TABLE" in q:
+                return ("users", "CREATE TABLE `users` (`id` int, `username` varchar(255), `score` int)")
+            return None
+
+        mock_cur.execute.side_effect = fake_execute
+        mock_cur.fetchall.side_effect = fake_fetchall
+        mock_cur.fetchone.side_effect = fake_fetchone
+        mock_cur.fetchmany.side_effect = row_batches
+
+        dump_str = _dump_mysql_python(batch_size=100)
+
+        # Ensure fetchmany was called 4 times (batch 1, batch 2, batch 3, empty termination batch)
+        self.assertEqual(mock_cur.fetchmany.call_count, 4)
+        mock_cur.fetchmany.assert_called_with(100)
+
+        # Verify dump has all 250 rows and 3 INSERT INTO statements
+        insert_count = dump_str.count("INSERT INTO `users` (`id`, `username`, `score`) VALUES")
+        self.assertEqual(insert_count, 3)
+        self.assertIn("(1, 'user_1', 101)", dump_str)
+        self.assertIn("(100, 'user_100', 200)", dump_str)
+        self.assertIn("(250, 'user_250', 350)", dump_str)
+
+    @patch("services.backup_service.with_mysql_cursor")
+    def test_dump_mysql_python_transaction_consistency_and_no_locks(self, mock_with_cursor):
+        """Verify transaction-consistent snapshot is used and LOCK TABLES is eliminated."""
+        mock_cur = MagicMock()
+        mock_with_cursor.return_value.__enter__.return_value = mock_cur
+
+        executed_statements = []
+
+        def fake_execute(stmt):
+            executed_statements.append(stmt)
+
+        mock_cur.execute.side_effect = fake_execute
+        mock_cur.fetchall.side_effect = lambda: [("orders",)] if "SHOW TABLES" in executed_statements[-1] else [("id",)]
+        mock_cur.fetchone.return_value = ("orders", "CREATE TABLE `orders` (`id` int)")
+        mock_cur.fetchmany.side_effect = [[(1,), (2,)], []]
+
+        dump_str = _dump_mysql_python()
+
+        # Check transaction-consistent setup was executed
+        self.assertIn("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ", executed_statements)
+        self.assertIn("START TRANSACTION WITH CONSISTENT SNAPSHOT", executed_statements)
+        self.assertIn("COMMIT", executed_statements)
+
+        # Verify no LOCK TABLES statement was ever executed on the cursor
+        for stmt in executed_statements:
+            self.assertNotIn("LOCK TABLES", stmt)
+
+        # Verify no LOCK TABLES or UNLOCK TABLES in the emitted SQL dump
+        self.assertNotIn("LOCK TABLES", dump_str)
+        self.assertNotIn("UNLOCK TABLES", dump_str)
+
+    @patch("services.backup_service.with_mysql_cursor")
+    def test_dump_mysql_python_direct_file_and_gzip(self, mock_with_cursor):
+        """Verify writing directly to a file and gzip-compressed file without memory build."""
+        mock_cur = MagicMock()
+        mock_with_cursor.return_value.__enter__.return_value = mock_cur
+        mock_cur.fetchall.side_effect = lambda: [("items",)] if "SHOW TABLES" in str(mock_cur.execute.call_args) else [("id",)]
+        mock_cur.fetchone.return_value = ("items", "CREATE TABLE `items` (`id` int)")
+        mock_cur.fetchmany.side_effect = [[(10,), (20,)], []]
+
+        # 1. Plain direct file output
+        plain_file = self.backup_dir / "dump.sql"
+        res_plain = _dump_mysql_python(target=plain_file)
+        self.assertIsNone(res_plain)
+        self.assertTrue(plain_file.exists())
+        plain_content = plain_file.read_text(encoding="utf-8")
+        self.assertIn("INSERT INTO `items` (`id`) VALUES", plain_content)
+        self.assertIn("(10),\n(20);", plain_content)
+
+        # Reset mocks for gzip test
+        mock_cur.fetchmany.side_effect = [[(10,), (20,)], []]
+
+        # 2. Gzip direct file output
+        gz_file = self.backup_dir / "dump.sql.gz"
+        res_gz = _dump_mysql_python(target=gz_file, use_gzip=True)
+        self.assertIsNone(res_gz)
+        self.assertTrue(gz_file.exists())
+
+        # Decompress gzip file and compare
+        with gzip.open(gz_file, "rt", encoding="utf-8") as gf:
+            decompressed_content = gf.read()
+        self.assertIn("INSERT INTO `items` (`id`) VALUES", decompressed_content)
+        self.assertIn("(10),\n(20);", decompressed_content)
+
+    @patch("services.backup_service.with_mysql_cursor")
+    def test_dump_mysql_python_data_types_and_restore_compatibility(self, mock_with_cursor):
+        """Verify data formatting and restore syntax compatibility for complex types."""
+        mock_cur = MagicMock()
+        mock_with_cursor.return_value.__enter__.return_value = mock_cur
+
+        executed = []
+        def fake_exec(query):
+            executed.append(query)
+        mock_cur.execute.side_effect = fake_exec
+
+        def fake_fetchall():
+            last = executed[-1] if executed else ""
+            if "SHOW TABLES" in last:
+                return [("test_types",)]
+            if "SHOW COLUMNS" in last:
+                return [("id",), ("is_active",), ("price",), ("notes",), ("raw_data",), ("empty_col",)]
+            return []
+
+        mock_cur.fetchall.side_effect = fake_fetchall
+        mock_cur.fetchone.return_value = ("test_types", "CREATE TABLE `test_types` (`id` int, `is_active` tinyint(1), `price` float, `notes` text, `raw_data` blob, `empty_col` varchar(50))")
+        
+        sample_row = (
+            1,
+            True,
+            19.99,
+            "Special: 'single quote', \"double quote\", backslash \\, newline \n, return \r, null \0",
+            b"\xde\xad\xbe\xef",
+            None,
+        )
+        mock_cur.fetchmany.side_effect = [[sample_row], []]
+
+        dump_str = _dump_mysql_python()
+
+        # Check foreign key checks wrapping
+        self.assertTrue(dump_str.startswith("-- Valhalla MySQL Backup Dump\n"))
+        self.assertIn("SET FOREIGN_KEY_CHECKS=0;", dump_str)
+        self.assertTrue(dump_str.endswith("SET FOREIGN_KEY_CHECKS=1;\n"))
+
+        # Check properly formatted values
+        self.assertIn("1", dump_str) # boolean True formatted as 1
+        self.assertIn("19.99", dump_str)
+        self.assertIn(r"\'single quote\'", dump_str)
+        self.assertIn(r"\\", dump_str)
+        self.assertIn(r"\n", dump_str)
+        self.assertIn(r"\r", dump_str)
+        self.assertIn(r"\0", dump_str)
+        self.assertIn("0xdeadbeef", dump_str)
+        self.assertIn("NULL", dump_str)
+
+    @patch("services.backup_service._dump_mysql_cli")
+    @patch("services.backup_service._dump_mysql_python")
+    def test_generate_sql_dump_fallback_when_cli_unavailable(self, mock_py_dump, mock_cli_dump):
+        """Verify Python fallback is used when mysqldump CLI is unavailable."""
+        # 1. CLI is unavailable (returns None) -> calls Python fallback
+        mock_cli_dump.return_value = None
+        mock_py_dump.return_value = "-- python dump"
+
+        res = generate_sql_dump()
+
+        self.assertEqual(res, "-- python dump")
+        mock_cli_dump.assert_called_once()
+        mock_py_dump.assert_called_once()
+
+        # 2. CLI is available (returns string) -> uses CLI dump
+        mock_cli_dump.reset_mock()
+        mock_py_dump.reset_mock()
+        mock_cli_dump.return_value = "-- cli dump"
+
+        res2 = generate_sql_dump()
+
+        self.assertEqual(res2, "-- cli dump")
+        mock_cli_dump.assert_called_once()
+        mock_py_dump.assert_not_called()
 
 
 if __name__ == "__main__":
