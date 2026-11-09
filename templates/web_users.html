@@ -30,12 +30,33 @@
       }
     }
   </script>
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18",
+        "react/": "https://esm.sh/react@18/",
+        "react/jsx-runtime": "https://esm.sh/react@18/jsx-runtime",
+        "react-dom": "https://esm.sh/react-dom@18",
+        "react-dom/client": "https://esm.sh/react-dom@18/client"
+      }
+    }
+  </script>
 </head>
 <body data-page="users">
   <div id="root"></div>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script type="text/babel" data-type="module" data-presets="typescript,react" src="/static/web-ui.tsx"></script>
+  <script>
+    if (window.Babel) {
+      Babel.registerPreset('react-classic', {
+        presets: [
+          [Babel.availablePresets['react'], { runtime: 'classic' }],
+          Babel.availablePresets['typescript'],
+        ],
+      });
+    }
+  </script>
+  <script type="text/babel" data-presets="react-classic" src="/static/web-ui.tsx"></script>
 </body>
 </html>

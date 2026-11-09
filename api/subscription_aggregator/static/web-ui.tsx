@@ -1,3 +1,4 @@
+/** @jsxRuntime classic */
 type PageMode = 'login' | 'users' | 'home' | 'panels' | 'services' | 'nodes' | 'hosts' | 'admins' | 'settings';
 
 type UserRecord = {
