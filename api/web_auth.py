@@ -7,14 +7,42 @@ import logging
 from dataclasses import dataclass
 
 from fastapi import Cookie, Depends, HTTPException, Request, status
+from dotenv import load_dotenv
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from api.subscription_aggregator import canonical_owner_id, ordered_admin_ids
 
 WEB_SESSION_COOKIE_NAME = "web_session"
 WEB_SESSION_TTL_SECONDS = int(os.getenv("WEB_SESSION_TTL_SECONDS", "43200"))
-_WEB_SESSION_FALLBACK_SECRET = secrets.token_urlsafe(32)
 log = logging.getLogger("valhalla.web_auth")
+
+
+def get_web_session_secret() -> str:
+    """Return the shared persistent secret for web session signing.
+
+    Checks WEB_SESSION_SECRET, falling back to BOT_TOKEN or SECRET_KEY if already set.
+    Fails clearly with a RuntimeError if no persistent secret is configured.
+    """
+    secret = (
+        os.getenv("WEB_SESSION_SECRET")
+        or os.getenv("BOT_TOKEN")
+        or os.getenv("SECRET_KEY")
+        or ""
+    ).strip()
+    if not secret:
+        load_dotenv()
+        secret = (
+            os.getenv("WEB_SESSION_SECRET")
+            or os.getenv("BOT_TOKEN")
+            or os.getenv("SECRET_KEY")
+            or ""
+        ).strip()
+    if not secret:
+        raise RuntimeError(
+            "WEB_SESSION_SECRET is required for web session authentication but is not configured. "
+            "Please configure WEB_SESSION_SECRET in your .env file or environment variables."
+        )
+    return secret
 
 
 def web_session_secure_cookie() -> bool:
@@ -33,16 +61,9 @@ class WebIdentity:
     owner_id: int | None = None
 
 
-def web_session_serializer() -> URLSafeTimedSerializer:
-    explicit_secret = os.getenv("WEB_SESSION_SECRET") or os.getenv("BOT_TOKEN") or os.getenv("SECRET_KEY")
-    if explicit_secret:
-        secret = explicit_secret.strip()
-    else:
-        log.warning(
-            "WEB_SESSION_SECRET/BOT_TOKEN/SECRET_KEY is missing; using an in-memory fallback secret for web sessions"
-        )
-        secret = _WEB_SESSION_FALLBACK_SECRET
-    return URLSafeTimedSerializer(secret_key=secret, salt="web-session")
+def web_session_serializer(secret: str | None = None) -> URLSafeTimedSerializer:
+    resolved_secret = secret if secret is not None else get_web_session_secret()
+    return URLSafeTimedSerializer(secret_key=resolved_secret, salt="web-session")
 
 
 def owner_settings_id() -> int:
@@ -107,8 +128,10 @@ __all__ = [
     "WebIdentity",
     "create_web_session_cookie",
     "get_web_identity",
+    "get_web_session_secret",
     "owner_settings_id",
     "require_web_admin",
     "require_web_user",
     "web_session_secure_cookie",
+    "web_session_serializer",
 ]

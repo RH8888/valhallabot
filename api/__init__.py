@@ -14,6 +14,8 @@ app = FastAPI()
 async def startup_event() -> None:
     """Initialize resources on application startup."""
     load_dotenv()
+    from api.web_auth import get_web_session_secret
+    get_web_session_secret()
     init_mysql_pool()
     ensure_schema()
     start_backup_scheduler()
