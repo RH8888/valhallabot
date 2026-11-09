@@ -220,6 +220,33 @@ ensure_agent_token_key () {
   fi
 }
 
+gen_web_session_secret () {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+  else
+    head -c 64 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 64
+  fi
+}
+
+ensure_web_session_secret () {
+  local current
+  current="$(get_kv WEB_SESSION_SECRET)"
+  if [ -n "$current" ]; then
+    return 0
+  fi
+  local secret=""
+  if secret="$(gen_web_session_secret 2>/dev/null)" && [ -n "$secret" ]; then
+    echo "Generated WEB_SESSION_SECRET."
+    set_kv "WEB_SESSION_SECRET" "$secret"
+  else
+    echo "Unable to auto-generate WEB_SESSION_SECRET."
+    ask_required "WEB_SESSION_SECRET" "Provide a shared secret for web session authentication"
+  fi
+}
+
 # ---------- preflight ----------
 RUNTIME="$(choose_runtime)"
 if ! have_cmd "$RUNTIME"; then
@@ -235,6 +262,7 @@ fi
 
 # ---------- defaults ----------
 [ -n "$(get_kv AGENT_TOKEN_ENCRYPTION_KEY)" ] || ensure_agent_token_key
+[ -n "$(get_kv WEB_SESSION_SECRET)" ] || ensure_web_session_secret
 [ -n "$(get_kv MYSQL_HOST)" ] || set_kv "MYSQL_HOST" "mysql"
 [ -n "$(get_kv MYSQL_PORT)" ] || set_kv "MYSQL_PORT" "3306"
 [ -n "$(get_kv MYSQL_DATABASE)" ] || set_kv "MYSQL_DATABASE" "valhalla"

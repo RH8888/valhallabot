@@ -34,13 +34,13 @@ podman compose up -d
 
 ## Running with Uvicorn
 
-Set up the environment variables in `.env` and start the server:
+Set up the environment variables in `.env` (including `WEB_SESSION_SECRET` for shared session authentication) and start the server:
 
 ```bash
 uvicorn api.main:app --host "${FLASK_HOST:-0.0.0.0}" --port "${FLASK_PORT:-5000}"
 ```
 
-Optionally set `WORKERS` to run multiple processes:
+Optionally set `WORKERS` to run multiple processes (all workers share the `WEB_SESSION_SECRET` from `.env` to validate sessions):
 
 ```bash
 uvicorn api.main:app --host "${FLASK_HOST:-0.0.0.0}" --port "${FLASK_PORT:-5000}" --workers "${WORKERS}"
