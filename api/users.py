@@ -10,16 +10,17 @@ from pydantic import BaseModel, Field
 from api.subscription_aggregator import expand_owner_ids
 from services import with_mysql_cursor
 from bot import (
+    _set_user_disabled_db,
+    apply_user_updates,
+    delete_local_user,
     upsert_local_user,
-    update_limit,
-    reset_used,
-    renew_user,
+    list_service_panel_ids,
     list_user_links,
     get_api,
     remote_names_for_panel,
+    sync_user_panels_async,
 )
 from api.auth import get_identity, Identity
-from bot import set_local_user_service  # async function
 
 
 router = APIRouter(prefix="/users", dependencies=[Depends(get_identity)])
@@ -273,27 +274,10 @@ def _list_users(
 
 
 def _set_user_disabled(owner_id: int, username: str, disabled: bool) -> None:
-    row = _fetch_user(owner_id, username)
-    if not row:
+    with with_mysql_cursor() as cur:
+        should_enable = _set_user_disabled_db(cur, owner_id, username, disabled)
+    if should_enable is None:
         raise HTTPException(status_code=404, detail="User not found")
-    limit = int(row.get("plan_limit_bytes") or 0)
-    used = int(row.get("used_bytes") or 0)
-    exp = row.get("expire_at")
-    expired = bool(exp and exp <= datetime.utcnow())
-    over_limit = limit > 0 and used >= limit
-    should_enable = not disabled and not expired and not over_limit
-
-    def _update_status(manual: bool, pushed: bool, pushed_at: str | None) -> None:
-        ids = expand_owner_ids(owner_id)
-        placeholders = ",".join(["%s"] * len(ids))
-        sql = (
-            f"UPDATE local_users SET manual_disabled=%s, disabled_pushed=%s, "
-            f"disabled_pushed_at={pushed_at or 'NULL'} "
-            f"WHERE owner_id IN ({placeholders}) AND username=%s"
-        )
-        params = [1 if manual else 0, 1 if pushed else 0, *ids, username]
-        with with_mysql_cursor() as cur:
-            cur.execute(sql, params)
 
     for row in list_user_links(owner_id, username):
         api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
@@ -305,13 +289,6 @@ def _set_user_disabled(owner_id: int, username: str, disabled: bool) -> None:
                 api.enable_remote_user(row["panel_url"], row["access_token"], rn)
             else:
                 api.disable_remote_user(row["panel_url"], row["access_token"], rn)
-
-    if disabled:
-        _update_status(True, True, "UTC_TIMESTAMP()")
-    elif should_enable:
-        _update_status(False, False, None)
-    else:
-        _update_status(False, True, "UTC_TIMESTAMP()")
 
 
 # ---- endpoints ----------------------------------------------------------------
@@ -358,9 +335,34 @@ async def create_user(
             status_code=400,
             detail="minimum limit is 20GB for services that include a GuardCore panel",
         )
-    upsert_local_user(real_owner, data.username, data.limit_bytes, data.duration_days)
+    local_user_existed = _fetch_user(real_owner, data.username) is not None
+    upsert_local_user(
+        real_owner,
+        data.username,
+        data.limit_bytes,
+        data.duration_days,
+        service_id=service_id,
+    )
     if service_id is not None:
-        await set_local_user_service(real_owner, data.username, service_id)
+        pids = list_service_panel_ids(service_id)
+        try:
+            sync_errors = await sync_user_panels_async(
+                real_owner,
+                data.username,
+                pids,
+                rollback_on_error=True,
+            )
+        except Exception:
+            if not local_user_existed:
+                delete_local_user(real_owner, data.username)
+            raise
+        if sync_errors:
+            if not local_user_existed:
+                delete_local_user(real_owner, data.username)
+            raise HTTPException(
+                status_code=502,
+                detail="User creation failed on panels and was rolled back: " + "; ".join(sync_errors[:4]),
+            )
     row = _fetch_user(real_owner, data.username)
     if not row:
         raise HTTPException(status_code=500, detail="user not found after create")
@@ -436,14 +438,16 @@ async def edit_user(
     if owner_id is None:
         raise HTTPException(status_code=400, detail="owner_id required")
     _assert_agent_service_allowed(identity, data.service_id)
-    if data.limit_bytes is not None:
-        update_limit(owner_id, username, data.limit_bytes)
-    if data.reset_used:
-        reset_used(owner_id, username)
-    if data.renew_days is not None:
-        renew_user(owner_id, username, data.renew_days)
-    if data.service_id is not None:
-        await set_local_user_service(owner_id, username, data.service_id)
+    found = await apply_user_updates(
+        owner_id,
+        username,
+        limit_bytes=data.limit_bytes,
+        reset_used_flag=data.reset_used,
+        renew_days=data.renew_days,
+        service_id=data.service_id,
+    )
+    if not found:
+        raise HTTPException(status_code=404, detail="User not found")
     row = _fetch_user(owner_id, username)
     if not row:
         raise HTTPException(status_code=404, detail="User not found")

@@ -19,8 +19,8 @@ def delete_agent_with_users(agent_id_or_tg_id: int) -> Dict[str, Any]:
     5. Performs post-deletion verification to guarantee 0 remaining records.
        Raises RuntimeError (triggering DB rollback) if verification fails.
     """
-    # Import delete_user here to avoid circular dependencies with bot.py
-    from bot import delete_user
+    # Import delete_remote_user here to avoid circular dependencies with bot.py
+    from bot import delete_remote_user
 
     with with_mysql_cursor() as cur:
         cur.execute(
@@ -33,16 +33,14 @@ def delete_agent_with_users(agent_id_or_tg_id: int) -> Dict[str, Any]:
             (agent_id_or_tg_id, agent_id_or_tg_id),
         )
         agent = cur.fetchone()
+        if not agent:
+            raise ValueError(f"Agent {agent_id_or_tg_id} not found")
 
-    if not agent:
-        raise ValueError(f"Agent {agent_id_or_tg_id} not found")
+        agent_db_id = int(agent["id"])
+        agent_tg_id = int(agent["telegram_user_id"])
+        agent_name = str(agent["name"])
 
-    agent_db_id = int(agent["id"])
-    agent_tg_id = int(agent["telegram_user_id"])
-    agent_name = str(agent["name"])
-
-    # Fetch all local users owned by this agent
-    with with_mysql_cursor() as cur:
+        # Fetch all local users owned by this agent inside the same read context
         cur.execute(
             "SELECT username FROM local_users WHERE owner_id=%s",
             (agent_tg_id,),
@@ -58,13 +56,15 @@ def delete_agent_with_users(agent_id_or_tg_id: int) -> Dict[str, Any]:
         len(usernames),
     )
 
-    # 1. Attempt remote panel user removal for each user of this agent
+    # 1. Attempt remote panel user removal only (do NOT delete local DB rows yet)
     remote_errors = []
     for username in usernames:
         try:
-            delete_user(agent_tg_id, username)
+            errs = delete_remote_user(agent_tg_id, username)
+            if errs:
+                remote_errors.extend(f"user '{username}': {e}" for e in errs)
         except Exception as exc:
-            log.warning("Error deleting remote/local user %s for agent %s: %s", username, agent_tg_id, exc)
+            log.warning("Error deleting remote user %s for agent %s: %s", username, agent_tg_id, exc)
             remote_errors.append(f"user '{username}': {exc}")
 
     # 2. Perform atomic database deletion in a transaction

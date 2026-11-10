@@ -217,6 +217,83 @@ class TestDatabaseRenewalOperations(unittest.TestCase):
             "https://panel.example.com", "token123", "remote_testuser"
         )
 
+    def test_renew_user_db_failure_rollback(self):
+        """Simulate failure during key expiration update in renewal; transaction rolls back."""
+        local_users = {
+            (11111, "testuser"): {
+                "expire_at": datetime(2026, 1, 1),
+                "plan_limit_bytes": 100 * 1024**3,
+                "used_bytes": 0,
+                "manual_disabled": 0,
+                "disabled_pushed": 0,
+            }
+        }
+        local_user_keys = {
+            1: {"local_user_id": 1, "expires_at": datetime(2026, 1, 1)}
+        }
+
+        class MockCursor:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def execute(self, query: str, params: tuple = ()):
+                q = " ".join(query.strip().split()).upper()
+                if "UPDATE LOCAL_USERS SET EXPIRE_AT" in q:
+                    local_users[(11111, "testuser")]["expire_at"] = datetime(2026, 2, 1)
+                elif "SELECT EXPIRE_AT, PLAN_LIMIT_BYTES" in q:
+                    pass
+                elif "UPDATE LOCAL_USER_KEYS" in q:
+                    raise RuntimeError("Simulated failure updating local_user_keys during renewal")
+
+            def fetchone(self):
+                return {
+                    "expire_at": datetime(2026, 2, 1),
+                    "plan_limit_bytes": 100 * 1024**3,
+                    "used_bytes": 0,
+                    "manual_disabled": 0,
+                }
+
+            def close(self):
+                pass
+
+        class MockConn:
+            def __init__(self):
+                self._snap_users = {k: dict(v) for k, v in local_users.items()}
+                self._snap_keys = {k: dict(v) for k, v in local_user_keys.items()}
+
+            def commit(self):
+                pass
+
+            def rollback(self):
+                local_users.clear()
+                local_users.update({k: dict(v) for k, v in self._snap_users.items()})
+                local_user_keys.clear()
+                local_user_keys.update({k: dict(v) for k, v in self._snap_keys.items()})
+
+            def close(self):
+                pass
+
+        class MockContext:
+            def __enter__(self):
+                self.conn = MockConn()
+                return MockCursor(self.conn)
+
+            def __exit__(self, exc_type, exc, tb):
+                if exc_type is not None:
+                    self.conn.rollback()
+                else:
+                    self.conn.commit()
+                return False
+
+        with patch("bot.with_mysql_cursor", side_effect=MockContext), \
+             patch("bot.list_user_links", return_value=[]):
+            with self.assertRaises(RuntimeError):
+                renew_user(11111, "testuser", 30)
+
+        # local_users must be restored to original date
+        self.assertEqual(local_users[(11111, "testuser")]["expire_at"], datetime(2026, 1, 1))
+        self.assertEqual(local_user_keys[1]["expires_at"], datetime(2026, 1, 1))
+
 
 if __name__ == "__main__":
     unittest.main()

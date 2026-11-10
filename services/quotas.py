@@ -80,6 +80,10 @@ def renew_agent_days(tg_id: int, add_days: int) -> None:
                WHERE telegram_user_id=%s""",
             (add_days, add_days, tg_id),
         )
+    try:
+        usage_sync.sync_agent_now(tg_id)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        log.warning("sync_agent_now failed for %s: %s", tg_id, exc)
 
 
 def set_agent_active(tg_id: int, active: bool) -> None:

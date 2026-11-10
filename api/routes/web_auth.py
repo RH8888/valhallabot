@@ -32,21 +32,19 @@ from api.users import (
     _fetch_user,
     _is_valid_local_username,
     _list_users,
-    _set_user_disabled,
     _service_has_guardcore_panel,
     get_total_usage_by_panel,
     get_usage_by_panel,
 )
 from bot import (
+    apply_user_updates,
     build_sub_links,
     delete_local_user,
     delete_user,
     get_app_key,
+    list_service_panel_ids,
     list_services_for_owner,
-    renew_user,
-    reset_used,
-    set_local_user_service,
-    update_limit,
+    sync_user_panels_async,
     upsert_local_user,
 )
 from services import with_mysql_cursor
@@ -559,16 +557,17 @@ async def web_edit_user(
     if scoped_owner_id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
-    if payload.limit_bytes is not None:
-        update_limit(scoped_owner_id, username, payload.limit_bytes)
-    if payload.reset_used:
-        reset_used(scoped_owner_id, username)
-    if payload.renew_days is not None:
-        renew_user(scoped_owner_id, username, payload.renew_days)
-    if payload.service_id is not None:
-        await set_local_user_service(scoped_owner_id, username, payload.service_id)
-    if payload.disabled is not None:
-        _set_user_disabled(scoped_owner_id, username, payload.disabled)
+    found = await apply_user_updates(
+        scoped_owner_id,
+        username,
+        limit_bytes=payload.limit_bytes,
+        reset_used_flag=payload.reset_used,
+        renew_days=payload.renew_days,
+        service_id=payload.service_id,
+        disabled=payload.disabled,
+    )
+    if not found:
+        raise HTTPException(status_code=404, detail="User not found")
 
     row = _fetch_user(scoped_owner_id, username)
     if not row:
@@ -635,15 +634,27 @@ async def web_create_user(
         )
 
     local_user_existed = _fetch_user(scoped_owner_id, payload.username) is not None
-    upsert_local_user(scoped_owner_id, payload.username, payload.limit_bytes, payload.duration_days)
+    upsert_local_user(
+        scoped_owner_id,
+        payload.username,
+        payload.limit_bytes,
+        payload.duration_days,
+        service_id=payload.service_id,
+    )
     sync_errors: list[str] = []
     if payload.service_id is not None:
-        sync_errors = await set_local_user_service(
-            scoped_owner_id,
-            payload.username,
-            payload.service_id,
-            rollback_on_error=True,
-        )
+        pids = list_service_panel_ids(payload.service_id)
+        try:
+            sync_errors = await sync_user_panels_async(
+                scoped_owner_id,
+                payload.username,
+                pids,
+                rollback_on_error=True,
+            )
+        except Exception:
+            if not local_user_existed:
+                delete_local_user(scoped_owner_id, payload.username)
+            raise
     if sync_errors:
         if not local_user_existed:
             delete_local_user(scoped_owner_id, payload.username)

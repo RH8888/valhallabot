@@ -112,21 +112,25 @@ def apply_reconciliation(
     only_doubled: bool = True,
 ) -> int:
     """Safely reconcile local_users.used_bytes back to expected_used_bytes."""
-    fixed_count = 0
-    updated_owners = set()
-
+    to_reconcile = []
     for item in affected_users:
         if only_doubled and item["status"] != "DOUBLED":
             continue
         if item["status"] not in ("DOUBLED", "EXCESS"):
             continue
+        to_reconcile.append(item)
 
-        owner_id = item["owner_id"]
-        uname = item["username"]
-        new_used = item["expected_used_bytes"]
-        old_used = item["current_used_bytes"]
+    if not to_reconcile:
+        return 0
 
-        with with_mysql_cursor(dict_=True) as cur:
+    fixed_count = 0
+    updated_owners = set()
+
+    with with_mysql_cursor(dict_=True) as cur:
+        for item in to_reconcile:
+            owner_id = item["owner_id"]
+            uname = item["username"]
+            new_used = item["expected_used_bytes"]
             cur.execute(
                 """
                 UPDATE local_users
@@ -135,20 +139,11 @@ def apply_reconciliation(
                 """,
                 (new_used, owner_id, uname),
             )
+            fixed_count += 1
+            updated_owners.add(owner_id)
 
-        log.info(
-            "Reconciled user %s (owner=%s): %s -> %s (excess: -%s)",
-            uname, owner_id,
-            format_bytes_human(old_used),
-            format_bytes_human(new_used),
-            format_bytes_human(item["excess_bytes"]),
-        )
-        fixed_count += 1
-        updated_owners.add(owner_id)
-
-    # Recalculate agent total_used_bytes for affected owners
-    for oid in updated_owners:
-        with with_mysql_cursor(dict_=True) as cur:
+        # Recalculate agent total_used_bytes for affected owners within the same transaction
+        for oid in updated_owners:
             cur.execute(
                 """
                 UPDATE agents
@@ -161,6 +156,16 @@ def apply_reconciliation(
                 """,
                 (oid, oid),
             )
+
+    for item in to_reconcile:
+        log.info(
+            "Reconciled user %s (owner=%s): %s -> %s (excess: -%s)",
+            item["username"], item["owner_id"],
+            format_bytes_human(item["current_used_bytes"]),
+            format_bytes_human(item["expected_used_bytes"]),
+            format_bytes_human(item["excess_bytes"]),
+        )
+    for oid in updated_owners:
         log.info("Recalculated agents.total_used_bytes for agent/owner=%s", oid)
 
     return fixed_count

@@ -128,6 +128,11 @@ class TestUserCreationAndSubscriptionLinks(unittest.TestCase):
                     test_self.next_app_user_id += 1
                     self._last_result = None
 
+                elif "INSERT INTO LOCAL_USER_PANEL_LINKS" in q_upper:
+                    if getattr(test_self, "should_fail_on_links", False):
+                        raise RuntimeError("Simulated DB failure during link insertion")
+                    self._last_result = None
+
                 elif "SELECT TELEGRAM_USER_ID FROM APP_USERS" in q_upper:
                     # For flask_app get_owner_id
                     username, app_key = params[0], params[1]
@@ -293,6 +298,28 @@ class TestUserCreationAndSubscriptionLinks(unittest.TestCase):
                 bot.upsert_local_user(owner_id, username, 10 * 1024**3, 30)
 
             # Verify that neither local_users, local_user_keys, nor app_users remain
+            self.assertNotIn((owner_id, username), self.local_users)
+            self.assertEqual(len(self.local_user_keys), 0)
+            self.assertNotIn((owner_id, username), self.app_users)
+
+    def test_persist_created_user_rollback_on_link_failure(self):
+        """When persist_created_user fails saving links, the entire user creation rolls back."""
+        self.should_fail_on_links = True
+        mock_ctx = self._create_mock_cursor()
+        owner_id = 888
+        username = "linkfailuser"
+
+        with patch("bot.with_mysql_cursor", side_effect=mock_ctx):
+            with self.assertRaises(RuntimeError):
+                bot.persist_created_user(
+                    owner_id,
+                    username,
+                    10 * 1024**3,
+                    30,
+                    links=[(1, "remote1")],
+                )
+
+            # Verify that rollback prevented leaving orphaned user or keys
             self.assertNotIn((owner_id, username), self.local_users)
             self.assertEqual(len(self.local_user_keys), 0)
             self.assertNotIn((owner_id, username), self.app_users)

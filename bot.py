@@ -82,6 +82,7 @@ from services import (
     delete_agent_with_users,
 )
 from models.admins import TokenEncryptionError as AdminTokenEncryptionError
+from models.agents import _encrypt_token as encrypt_agent_token, generate_api_token
 
 # ---------- logging ----------
 logging.basicConfig(
@@ -951,6 +952,47 @@ def list_service_panel_ids(service_id: int) -> set[int]:
         cur.execute("SELECT panel_id FROM service_panels WHERE service_id=%s", (service_id,))
         return {int(r[0]) for r in cur.fetchall()}
 
+def _apply_service_panels_tx(
+    cur, service_id: int, panel_ids: set[int] | None = None
+) -> tuple[set[int], list[dict]]:
+    sid = int(service_id)
+    if panel_ids is not None:
+        pids = {int(pid) for pid in panel_ids}
+        cur.execute("DELETE FROM service_panels WHERE service_id=%s", (sid,))
+        if pids:
+            cur.executemany(
+                "INSERT INTO service_panels(service_id,panel_id) VALUES(%s,%s)",
+                [(sid, pid) for pid in sorted(pids)],
+            )
+    else:
+        cur.execute("SELECT panel_id FROM service_panels WHERE service_id=%s", (sid,))
+        pids = {
+            int(r["panel_id"] if isinstance(r, dict) else r[0])
+            for r in cur.fetchall()
+        }
+
+    cur.execute("SELECT agent_tg_id FROM agent_services WHERE service_id=%s", (sid,))
+    agent_ids = [
+        int(r["agent_tg_id"] if isinstance(r, dict) else r[0])
+        for r in cur.fetchall()
+    ]
+    if agent_ids:
+        placeholders = ",".join(["%s"] * len(agent_ids))
+        cur.execute(
+            f"DELETE FROM agent_panels WHERE agent_tg_id IN ({placeholders})",
+            tuple(agent_ids),
+        )
+        if pids:
+            cur.executemany(
+                "INSERT INTO agent_panels(agent_tg_id,panel_id) VALUES(%s,%s)",
+                [(ag_id, pid) for ag_id in agent_ids for pid in sorted(pids)],
+            )
+
+    cur.execute("SELECT owner_id, username FROM local_users WHERE service_id=%s", (sid,))
+    rows = cur.fetchall()
+    return pids, rows
+
+
 def set_service_panels(service_id: int, panel_ids: set[int]):
     with with_mysql_cursor(dict_=False) as cur:
         cur.execute("DELETE FROM service_panels WHERE service_id=%s", (service_id,))
@@ -959,6 +1001,13 @@ def set_service_panels(service_id: int, panel_ids: set[int]):
                 "INSERT INTO service_panels(service_id,panel_id) VALUES(%s,%s)",
                 [(service_id, int(pid)) for pid in panel_ids],
             )
+
+
+def apply_service_panels(service_id: int, panel_ids: set[int]) -> tuple[set[int], list[dict]]:
+    """Persist service panel assignments and update agent panel mappings in one transaction."""
+    with with_mysql_cursor() as cur:
+        return _apply_service_panels_tx(cur, service_id, panel_ids)
+
 
 def list_agents_by_service(service_id: int):
     with with_mysql_cursor() as cur:
@@ -980,24 +1029,40 @@ def _service_panel_union(service_ids: set[int]) -> set[int]:
 
 
 def set_agent_services(agent_tg_id: int, service_ids: set[int]):
-    clean_ids = {int(sid) for sid in service_ids}
+    clean_ids = sorted({int(sid) for sid in service_ids})
     with with_mysql_cursor(dict_=False) as cur:
         cur.execute("DELETE FROM agent_services WHERE agent_tg_id=%s", (agent_tg_id,))
         if clean_ids:
             cur.executemany(
                 "INSERT INTO agent_services(agent_tg_id,service_id) VALUES(%s,%s)",
-                [(agent_tg_id, sid) for sid in sorted(clean_ids)],
+                [(agent_tg_id, sid) for sid in clean_ids],
             )
-    set_agent_panels(agent_tg_id, _service_panel_union(clean_ids))
+            placeholders = ",".join(["%s"] * len(clean_ids))
+            cur.execute(
+                f"SELECT DISTINCT panel_id FROM service_panels WHERE service_id IN ({placeholders})",
+                tuple(clean_ids),
+            )
+            panel_ids = sorted({int(r[0]) for r in cur.fetchall()})
+        else:
+            panel_ids = []
+        cur.execute("DELETE FROM agent_panels WHERE agent_tg_id=%s", (agent_tg_id,))
+        if panel_ids:
+            cur.executemany(
+                "INSERT INTO agent_panels(agent_tg_id,panel_id) VALUES(%s,%s)",
+                [(agent_tg_id, pid) for pid in panel_ids],
+            )
+
 
 def list_local_users_by_service(service_id: int):
     with with_mysql_cursor() as cur:
         cur.execute("SELECT owner_id, username FROM local_users WHERE service_id=%s", (service_id,))
         return cur.fetchall()
 
+
 def set_agent_service(agent_tg_id: int, service_id: int | None):
     # Backward-compatible shim: single service assignment means replacing all assignments.
     set_agent_services(agent_tg_id, ({int(service_id)} if service_id else set()))
+
 
 def resolve_local_user_owner(owner_id: int, username: str) -> int | None:
     """Return the concrete owner ID for a given local user accessible to ``owner_id``."""
@@ -1013,6 +1078,36 @@ def resolve_local_user_owner(owner_id: int, username: str) -> int | None:
         return int(row["owner_id"]) if row else None
 
 
+def _set_local_user_service_db(
+    cur,
+    owner_id: int,
+    username: str,
+    service_id: int | None,
+) -> tuple[int, set[int]] | None:
+    ids = expand_owner_ids(owner_id)
+    placeholders = ",".join(["%s"] * len(ids))
+    cur.execute(
+        f"SELECT owner_id FROM local_users WHERE owner_id IN ({placeholders}) AND username=%s LIMIT 1 FOR UPDATE",
+        tuple(ids) + (username,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    real_owner = int(row["owner_id"])
+    cur.execute(
+        "UPDATE local_users SET service_id=%s WHERE owner_id=%s AND username=%s",
+        [service_id, real_owner, username],
+    )
+    pids: set[int] = set()
+    if service_id:
+        cur.execute("SELECT panel_id FROM service_panels WHERE service_id=%s", (int(service_id),))
+        pids = {
+            int(r["panel_id"] if isinstance(r, dict) else r[0])
+            for r in cur.fetchall()
+        }
+    return real_owner, pids
+
+
 async def set_local_user_service(
     owner_id: int,
     username: str,
@@ -1020,31 +1115,23 @@ async def set_local_user_service(
     *,
     rollback_on_error: bool = False,
 ) -> list[str]:
-    real_owner = resolve_local_user_owner(owner_id, username)
-    if real_owner is None:
+    with with_mysql_cursor() as cur:
+        res = _set_local_user_service_db(cur, owner_id, username, service_id)
+    if res is None:
         log.info(
             "set_local_user_service skip: owner=%s username=%s not found", owner_id, username
         )
         return []
 
-    params: list[object] = [service_id, real_owner, username]
-    with with_mysql_cursor(dict_=False) as cur:
-        cur.execute(
-            "UPDATE local_users SET service_id=%s WHERE owner_id=%s AND username=%s",
-            params,
-        )
-    pids = list_service_panel_ids(service_id) if service_id else set()
+    real_owner, pids = res
     return await sync_user_panels_async(
         real_owner, username, pids, rollback_on_error=rollback_on_error
     )
 
-async def propagate_service_panels(service_id: int):
-    """After service panels change, update agents/users accordingly."""
-    pids = list_service_panel_ids(service_id)
-    for ag_id in list_agents_by_service(service_id):
-        set_agent_panels(ag_id, pids)
 
-    rows = list_local_users_by_service(service_id)
+async def _sync_service_users_panels(
+    service_id: int, pids: set[int], rows: list[dict]
+) -> None:
     total = len(rows)
 
     async def _sync(idx: int, row: dict):
@@ -1057,6 +1144,13 @@ async def propagate_service_panels(service_id: int):
     if rows:
         await asyncio.gather(*(_sync(i + 1, r) for i, r in enumerate(rows)))
     log.info("propagate_service_panels complete for service %s", service_id)
+
+
+async def propagate_service_panels(service_id: int):
+    """After service panels change, update agents/users accordingly."""
+    with with_mysql_cursor() as cur:
+        pids, rows = _apply_service_panels_tx(cur, service_id, None)
+    await _sync_service_users_panels(service_id, pids, rows)
 
 # ----- preset helpers -----
 def list_presets(owner_id: int):
@@ -1180,10 +1274,30 @@ def _ensure_local_user_key(cur, local_user_id: int, expires_at: datetime | None)
     return access_key
 
 
-def upsert_local_user(owner_id: int, username: str, limit_bytes: int, duration_days: int):
+def _upsert_local_user_tx(
+    cur,
+    owner_id: int,
+    username: str,
+    limit_bytes: int,
+    duration_days: int,
+    *,
+    service_id: int | None = None,
+) -> tuple[int, str]:
     exp = datetime.utcnow() + timedelta(days=duration_days) if duration_days > 0 else None
     canonical_owner = canonical_owner_id(owner_id)
-    with with_mysql_cursor() as cur:
+    if service_id is not None:
+        cur.execute(
+            """INSERT INTO local_users(owner_id,username,plan_limit_bytes,expire_at,disabled_pushed,service_id)
+               VALUES(%s,%s,%s,%s,0,%s)
+               ON DUPLICATE KEY UPDATE
+                   plan_limit_bytes=VALUES(plan_limit_bytes),
+                   expire_at=VALUES(expire_at),
+                   service_id=VALUES(service_id),
+                   usage_limit_notified=0,
+                   expire_limit_notified=0""",
+            (canonical_owner, username, int(limit_bytes), exp, int(service_id)),
+        )
+    else:
         cur.execute(
             """INSERT INTO local_users(owner_id,username,plan_limit_bytes,expire_at,disabled_pushed)
                VALUES(%s,%s,%s,%s,0)
@@ -1192,25 +1306,99 @@ def upsert_local_user(owner_id: int, username: str, limit_bytes: int, duration_d
                    expire_at=VALUES(expire_at),
                    usage_limit_notified=0,
                    expire_limit_notified=0""",
-            (canonical_owner, username, int(limit_bytes), exp)
+            (canonical_owner, username, int(limit_bytes), exp),
         )
-        cur.execute(
-            "SELECT id FROM local_users WHERE owner_id=%s AND username=%s LIMIT 1",
-            (canonical_owner, username),
+    cur.execute(
+        "SELECT id FROM local_users WHERE owner_id=%s AND username=%s LIMIT 1",
+        (canonical_owner, username),
+    )
+    row = cur.fetchone()
+    if row:
+        _ensure_local_user_key(cur, int(row["id"]), exp)
+    app_key = _ensure_app_user_key(cur, canonical_owner, username)
+    return int(row["id"]) if row else 0, app_key
+
+
+def upsert_local_user(
+    owner_id: int,
+    username: str,
+    limit_bytes: int,
+    duration_days: int,
+    *,
+    service_id: int | None = None,
+):
+    with with_mysql_cursor() as cur:
+        _upsert_local_user_tx(
+            cur,
+            owner_id,
+            username,
+            limit_bytes,
+            duration_days,
+            service_id=service_id,
         )
-        row = cur.fetchone()
-        if row:
-            _ensure_local_user_key(cur, int(row["id"]), exp)
-        _ensure_app_user_key(cur, canonical_owner, username)
+
+
+def _save_link_tx(
+    cur,
+    owner_id: int,
+    local_username: str,
+    panel_id: int,
+    remote_username: str,
+) -> None:
+    cur.execute(
+        """INSERT INTO local_user_panel_links(owner_id,local_username,panel_id,remote_username)
+           VALUES(%s,%s,%s,%s)
+           ON DUPLICATE KEY UPDATE remote_username=VALUES(remote_username)""",
+        (canonical_owner_id(owner_id), local_username, int(panel_id), remote_username),
+    )
+
+
+def _remove_links_tx(
+    cur,
+    owner_id: int,
+    local_username: str,
+    panel_ids: list[int] | set[int],
+) -> None:
+    clean_pids = sorted({int(pid) for pid in panel_ids})
+    if not clean_pids:
+        return
+    ids = expand_owner_ids(owner_id)
+    owner_placeholders = ",".join(["%s"] * len(ids))
+    panel_placeholders = ",".join(["%s"] * len(clean_pids))
+    cur.execute(
+        f"DELETE FROM local_user_panel_links WHERE owner_id IN ({owner_placeholders}) "
+        f"AND local_username=%s AND panel_id IN ({panel_placeholders})",
+        tuple(ids) + (local_username,) + tuple(clean_pids),
+    )
+
+
+def persist_created_user(
+    owner_id: int,
+    username: str,
+    limit_bytes: int,
+    duration_days: int,
+    links: list[tuple[int, str]] | None = None,
+    *,
+    service_id: int | None = None,
+) -> str:
+    """Atomically create/update a local user, credentials, app key, and panel links."""
+    with with_mysql_cursor() as cur:
+        _, app_key = _upsert_local_user_tx(
+            cur,
+            owner_id,
+            username,
+            limit_bytes,
+            duration_days,
+            service_id=service_id,
+        )
+        for panel_id, remote_name in links or ():
+            _save_link_tx(cur, owner_id, username, int(panel_id), remote_name)
+    return app_key
+
 
 def save_link(owner_id: int, local_username: str, panel_id: int, remote_username: str):
     with with_mysql_cursor() as cur:
-        cur.execute(
-            """INSERT INTO local_user_panel_links(owner_id,local_username,panel_id,remote_username)
-               VALUES(%s,%s,%s,%s)
-               ON DUPLICATE KEY UPDATE remote_username=VALUES(remote_username)""",
-            (canonical_owner_id(owner_id), local_username, panel_id, remote_username)
-        )
+        _save_link_tx(cur, owner_id, local_username, panel_id, remote_username)
 
 def remove_link(owner_id: int, local_username: str, panel_id: int):
     ids = expand_owner_ids(owner_id)
@@ -1282,43 +1470,49 @@ def count_local_users(owner_id: int) -> int:
         )
         return int(cur.fetchone()["c"])
 
-def update_limit(owner_id: int, username: str, new_limit_bytes: int):
+def _update_limit_db(
+    cur, owner_id: int, username: str, new_limit_bytes: int
+) -> tuple[int, bool] | None:
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"""SELECT plan_limit_bytes, used_bytes, expire_at, manual_disabled, disabled_pushed
-                FROM local_users
-                WHERE owner_id IN ({placeholders}) AND username=%s
-                LIMIT 1""",
-            tuple(ids) + (username,),
-        )
-        row = cur.fetchone()
+    cur.execute(
+        f"""SELECT plan_limit_bytes, used_bytes, expire_at, manual_disabled, disabled_pushed
+            FROM local_users
+            WHERE owner_id IN ({placeholders}) AND username=%s
+            LIMIT 1
+            FOR UPDATE""",
+        tuple(ids) + (username,),
+    )
+    row = cur.fetchone()
     if not row:
-        return
-    current_limit = int(row.get("plan_limit_bytes") or 0)
+        return None
     used = int(row.get("used_bytes") or 0)
     manual_disabled = bool(row.get("manual_disabled") or 0)
     exp = row.get("expire_at")
     expired = bool(exp and exp <= datetime.utcnow())
     effective_limit = max(0, int(new_limit_bytes))
-    params = [int(effective_limit)] + ids + [username]
-    with with_mysql_cursor() as cur:
+    should_enable = not manual_disabled and not expired and (effective_limit == 0 or used < effective_limit)
+    cur.execute(
+        f"""UPDATE local_users
+            SET plan_limit_bytes=%s,
+                usage_limit_notified=0
+            WHERE owner_id IN ({placeholders}) AND username=%s""",
+        [int(effective_limit)] + ids + [username],
+    )
+    if should_enable:
         cur.execute(
             f"""UPDATE local_users
-                SET plan_limit_bytes=%s,
-                    usage_limit_notified=0
+                SET disabled_pushed=0,
+                    disabled_pushed_at=NULL
                 WHERE owner_id IN ({placeholders}) AND username=%s""",
-            params
+            tuple(ids) + (username,),
         )
-        if not manual_disabled and not expired and (effective_limit == 0 or used < effective_limit):
-            cur.execute(
-                f"""UPDATE local_users
-                    SET disabled_pushed=0,
-                        disabled_pushed_at=NULL
-                    WHERE owner_id IN ({placeholders}) AND username=%s""",
-                tuple(ids) + (username,),
-            )
+    return effective_limit, should_enable
+
+
+def _push_limit_remote(
+    owner_id: int, username: str, effective_limit: int, should_enable: bool
+) -> None:
     for row in list_user_links(owner_id, username):
         api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
         remotes = remote_names_for_panel(row, row["remote_username"])
@@ -1329,27 +1523,39 @@ def update_limit(owner_id: int, username: str, new_limit_bytes: int):
             )
             if not ok:
                 log.warning("remote limit update failed on %s: %s", row["panel_url"], err)
-            if not manual_disabled and not expired and (effective_limit == 0 or used < effective_limit):
+            if should_enable:
                 ok_en, err_en = api.enable_remote_user(
                     row["panel_url"], row["access_token"], rn
                 )
                 if not ok_en:
                     log.warning("remote enable failed on %s: %s", row["panel_url"], err_en)
 
-def set_user_disabled(owner_id: int, username: str, disabled: bool):
+
+def update_limit(owner_id: int, username: str, new_limit_bytes: int):
+    with with_mysql_cursor() as cur:
+        res = _update_limit_db(cur, owner_id, username, new_limit_bytes)
+    if res is None:
+        return
+    effective_limit, should_enable = res
+    _push_limit_remote(owner_id, username, effective_limit, should_enable)
+
+
+def _set_user_disabled_db(
+    cur, owner_id: int, username: str, disabled: bool
+) -> bool | None:
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"""SELECT plan_limit_bytes, used_bytes, expire_at
-                FROM local_users
-                WHERE owner_id IN ({placeholders}) AND username=%s
-                LIMIT 1""",
-            tuple(ids) + (username,),
-        )
-        row = cur.fetchone()
+    cur.execute(
+        f"""SELECT plan_limit_bytes, used_bytes, expire_at
+            FROM local_users
+            WHERE owner_id IN ({placeholders}) AND username=%s
+            LIMIT 1
+            FOR UPDATE""",
+        tuple(ids) + (username,),
+    )
+    row = cur.fetchone()
     if not row:
-        return
+        return None
     limit = int(row.get("plan_limit_bytes") or 0)
     used = int(row.get("used_bytes") or 0)
     exp = row.get("expire_at")
@@ -1371,16 +1577,20 @@ def set_user_disabled(owner_id: int, username: str, disabled: bool):
         pushed_at = "UTC_TIMESTAMP()"
 
     params = [manual_flag, pushed_flag] + ids + [username]
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"""UPDATE local_users
-                SET manual_disabled=%s,
-                    disabled_pushed=%s,
-                    disabled_pushed_at={pushed_at}
-                WHERE owner_id IN ({placeholders}) AND username=%s""",
-            params,
-        )
+    cur.execute(
+        f"""UPDATE local_users
+            SET manual_disabled=%s,
+                disabled_pushed=%s,
+                disabled_pushed_at={pushed_at}
+            WHERE owner_id IN ({placeholders}) AND username=%s""",
+        params,
+    )
+    return should_enable
 
+
+def _push_user_disabled_remote(
+    owner_id: int, username: str, disabled: bool, should_enable: bool
+) -> None:
     for row in list_user_links(owner_id, username):
         api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
         remotes = remote_names_for_panel(row, row["remote_username"])
@@ -1404,29 +1614,54 @@ def set_user_disabled(owner_id: int, username: str, disabled: bool):
                 if not ok:
                     log.warning("remote disable failed on %s: %s", row["panel_url"], err)
 
-def reset_used(owner_id: int, username: str):
+
+def set_user_disabled(owner_id: int, username: str, disabled: bool):
+    with with_mysql_cursor() as cur:
+        should_enable = _set_user_disabled_db(cur, owner_id, username, disabled)
+    if should_enable is None:
+        return
+    _push_user_disabled_remote(owner_id, username, disabled, should_enable)
+
+
+def _reset_used_db(cur, owner_id: int, username: str) -> bool:
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
     params = ids + [username]
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"SELECT used_bytes FROM local_users WHERE owner_id IN ({placeholders}) AND username=%s LIMIT 1",
-            params,
-        )
-        cur.fetchone()
+    cur.execute(
+        f"SELECT plan_limit_bytes, expire_at, manual_disabled FROM local_users WHERE owner_id IN ({placeholders}) AND username=%s LIMIT 1 FOR UPDATE",
+        params,
+    )
+    row = cur.fetchone()
+    manual_disabled = bool(row.get("manual_disabled") or 0) if row else False
+    exp = row.get("expire_at") if row else None
+    expired = bool(exp and exp <= datetime.utcnow())
+    should_enable = bool(row) and not manual_disabled and not expired
+
+    cur.execute(
+        f"""UPDATE local_users
+            SET used_bytes=0,
+                usage_limit_notified=0
+            WHERE owner_id IN ({placeholders}) AND username=%s""",
+        params,
+    )
+    if should_enable:
         cur.execute(
             f"""UPDATE local_users
-                SET used_bytes=0,
-                    usage_limit_notified=0
+                SET disabled_pushed=0,
+                    disabled_pushed_at=NULL
                 WHERE owner_id IN ({placeholders}) AND username=%s""",
             params,
         )
-        cur.execute(
-            f"""UPDATE local_user_panel_links
-                SET last_used_traffic=0
-                WHERE owner_id IN ({placeholders}) AND local_username=%s""",
-            params,
-        )
+    cur.execute(
+        f"""UPDATE local_user_panel_links
+            SET last_used_traffic=0
+            WHERE owner_id IN ({placeholders}) AND local_username=%s""",
+        params,
+    )
+    return should_enable
+
+
+def _push_reset_used_remote(owner_id: int, username: str, should_enable: bool = False) -> None:
     for row in list_user_links(owner_id, username):
         api = get_api(row.get("panel_type"), row.get("sanaei_api_version"))
         remotes = remote_names_for_panel(row, row["remote_username"])
@@ -1436,28 +1671,41 @@ def reset_used(owner_id: int, username: str):
             )
             if not ok:
                 log.warning("remote reset failed on %s: %s", row["panel_url"], err)
+            if should_enable:
+                ok_en, err_en = api.enable_remote_user(
+                    row["panel_url"], row["access_token"], rn
+                )
+                if not ok_en:
+                    log.warning("remote enable failed on %s: %s", row["panel_url"], err_en)
 
-def renew_user(owner_id: int, username: str, add_days: int):
+
+def reset_used(owner_id: int, username: str):
+    with with_mysql_cursor() as cur:
+        should_enable = _reset_used_db(cur, owner_id, username)
+    _push_reset_used_remote(owner_id, username, should_enable=should_enable)
+
+
+def _renew_user_db(cur, owner_id: int, username: str, add_days: int) -> tuple[int, bool]:
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
     params = [add_days, add_days] + ids + [username]
-    with with_mysql_cursor() as cur:
-        cur.execute(
-            f"""UPDATE local_users
-               SET expire_at = IF(expire_at IS NULL OR expire_at < UTC_TIMESTAMP(),
-                                  UTC_TIMESTAMP() + INTERVAL %s DAY,
-                                  expire_at + INTERVAL %s DAY),
-                   expire_limit_notified=0
-               WHERE owner_id IN ({placeholders}) AND username=%s""",
-            params
-        )
-        cur.execute(
-            f"""SELECT expire_at, plan_limit_bytes, used_bytes, manual_disabled
-                FROM local_users
-                WHERE owner_id IN ({placeholders}) AND username=%s""",
-            tuple(ids) + (username,),
-        )
-        row = cur.fetchone()
+    cur.execute(
+        f"""UPDATE local_users
+           SET expire_at = IF(expire_at IS NULL OR expire_at < UTC_TIMESTAMP(),
+                              UTC_TIMESTAMP() + INTERVAL %s DAY,
+                              expire_at + INTERVAL %s DAY),
+               expire_limit_notified=0
+           WHERE owner_id IN ({placeholders}) AND username=%s""",
+        params,
+    )
+    cur.execute(
+        f"""SELECT expire_at, plan_limit_bytes, used_bytes, manual_disabled
+            FROM local_users
+            WHERE owner_id IN ({placeholders}) AND username=%s
+            FOR UPDATE""",
+        tuple(ids) + (username,),
+    )
+    row = cur.fetchone()
     expire_ts = 0
     manual_disabled = bool(row.get("manual_disabled") or 0) if row else False
     limit = int(row.get("plan_limit_bytes") or 0) if row else 0
@@ -1469,14 +1717,26 @@ def renew_user(owner_id: int, username: str, add_days: int):
     expired = bool(row and row.get("expire_at") and row.get("expire_at") <= datetime.utcnow())
     should_enable = bool(row) and not manual_disabled and not expired and (limit == 0 or used < limit)
     if should_enable:
-        with with_mysql_cursor() as cur:
-            cur.execute(
-                f"""UPDATE local_users
-                    SET disabled_pushed=0,
-                        disabled_pushed_at=NULL
-                    WHERE owner_id IN ({placeholders}) AND username=%s""",
-                tuple(ids) + (username,),
-            )
+        cur.execute(
+            f"""UPDATE local_users
+                SET disabled_pushed=0,
+                    disabled_pushed_at=NULL
+                WHERE owner_id IN ({placeholders}) AND username=%s""",
+            tuple(ids) + (username,),
+        )
+    cur.execute(
+        f"""UPDATE local_user_keys luk
+            JOIN local_users lu ON lu.id = luk.local_user_id
+            SET luk.expires_at = lu.expire_at
+            WHERE lu.owner_id IN ({placeholders}) AND lu.username=%s""",
+        tuple(ids) + (username,),
+    )
+    return expire_ts, should_enable
+
+
+def _push_renew_remote(
+    owner_id: int, username: str, add_days: int, expire_ts: int, should_enable: bool
+) -> None:
     for r in list_user_links(owner_id, username):
         api = get_api(r.get("panel_type"), r.get("sanaei_api_version"))
         remotes = remote_names_for_panel(r, r["remote_username"])
@@ -1500,6 +1760,62 @@ def renew_user(owner_id: int, username: str, add_days: int):
                     log.warning("remote enable failed on %s: %s", r["panel_url"], err_en)
 
 
+def renew_user(owner_id: int, username: str, add_days: int):
+    with with_mysql_cursor() as cur:
+        expire_ts, should_enable = _renew_user_db(cur, owner_id, username, add_days)
+    _push_renew_remote(owner_id, username, add_days, expire_ts, should_enable)
+
+
+async def apply_user_updates(
+    owner_id: int,
+    username: str,
+    *,
+    limit_bytes: int | None = None,
+    reset_used_flag: bool = False,
+    renew_days: int | None = None,
+    service_id: int | None = None,
+    disabled: bool | None = None,
+) -> bool:
+    """Apply multiple user mutations in one transaction, then sync remote panels."""
+    ids = expand_owner_ids(owner_id)
+    placeholders = ",".join(["%s"] * len(ids))
+    limit_res: tuple[int, bool] | None = None
+    renew_res: tuple[int, bool] | None = None
+    service_res: tuple[int, set[int]] | None = None
+    disabled_res: bool | None = None
+
+    with with_mysql_cursor() as cur:
+        cur.execute(
+            f"SELECT owner_id FROM local_users WHERE owner_id IN ({placeholders}) AND username=%s LIMIT 1 FOR UPDATE",
+            tuple(ids) + (username,),
+        )
+        if not cur.fetchone():
+            return False
+        if limit_bytes is not None:
+            limit_res = _update_limit_db(cur, owner_id, username, limit_bytes)
+        if reset_used_flag:
+            _reset_used_db(cur, owner_id, username)
+        if renew_days is not None:
+            renew_res = _renew_user_db(cur, owner_id, username, renew_days)
+        if service_id is not None:
+            service_res = _set_local_user_service_db(cur, owner_id, username, service_id)
+        if disabled is not None:
+            disabled_res = _set_user_disabled_db(cur, owner_id, username, disabled)
+
+    if limit_res is not None:
+        _push_limit_remote(owner_id, username, limit_res[0], limit_res[1])
+    if reset_used_flag:
+        _push_reset_used_remote(owner_id, username)
+    if renew_res is not None and renew_days is not None:
+        _push_renew_remote(owner_id, username, renew_days, renew_res[0], renew_res[1])
+    if service_res is not None:
+        real_owner, pids = service_res
+        await sync_user_panels_async(real_owner, username, pids)
+    if disabled is not None and disabled_res is not None:
+        _push_user_disabled_remote(owner_id, username, disabled, disabled_res)
+    return True
+
+
 def list_user_links(owner_id: int, local_username: str):
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
@@ -1519,31 +1835,37 @@ def list_user_links(owner_id: int, local_username: str):
     return ensure_panel_tokens(rows)
 
 
-def delete_local_user(owner_id: int, username: str):
+def _delete_local_user_tx(cur, owner_id: int, username: str) -> None:
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
     params = tuple(ids) + (username,)
+    cur.execute(
+        f"""DELETE luk FROM local_user_keys luk
+            JOIN local_users lu ON lu.id = luk.local_user_id
+            WHERE lu.owner_id IN ({placeholders}) AND lu.username=%s""",
+        params,
+    )
+    cur.execute(
+        f"DELETE FROM local_user_panel_links WHERE owner_id IN ({placeholders}) AND local_username=%s",
+        params,
+    )
+    cur.execute(
+        f"DELETE FROM local_users WHERE owner_id IN ({placeholders}) AND username=%s",
+        params,
+    )
+    cur.execute(
+        f"DELETE FROM app_users WHERE telegram_user_id IN ({placeholders}) AND username=%s",
+        params,
+    )
+
+
+def delete_local_user(owner_id: int, username: str):
     with with_mysql_cursor() as cur:
-        cur.execute(
-            f"SELECT used_bytes FROM local_users WHERE owner_id IN ({placeholders}) AND username=%s LIMIT 1",
-            params,
-        )
-        cur.fetchone()
-        cur.execute(
-            f"DELETE FROM local_user_panel_links WHERE owner_id IN ({placeholders}) AND local_username=%s",
-            params,
-        )
-        cur.execute(
-            f"DELETE FROM local_users WHERE owner_id IN ({placeholders}) AND username=%s",
-            params,
-        )
-        cur.execute(
-            f"DELETE FROM app_users WHERE telegram_user_id IN ({placeholders}) AND username=%s",
-            params,
-        )
+        _delete_local_user_tx(cur, owner_id, username)
 
 
-def delete_user(owner_id: int, username: str):
+def delete_remote_user(owner_id: int, username: str) -> list[str]:
+    errors: list[str] = []
     rows = list_user_links(owner_id, username)
     for r in rows:
         try:
@@ -1555,14 +1877,22 @@ def delete_user(owner_id: int, username: str):
                 if ok:
                     log.info("remote delete succeeded on %s@%s", rn, r["panel_url"])
                 else:
+                    msg = err or "unknown"
                     log.warning(
                         "remote delete failed on %s@%s: %s",
                         rn,
                         r["panel_url"],
-                        err or "unknown",
+                        msg,
                     )
+                    errors.append(f"{r['panel_url']} ({rn}): {msg}")
         except Exception as e:
             log.warning("remote delete exception: %s", e)
+            errors.append(str(e))
+    return errors
+
+
+def delete_user(owner_id: int, username: str):
+    delete_remote_user(owner_id, username)
     delete_local_user(owner_id, username)
 
 # panels extra
@@ -1738,9 +2068,8 @@ def delete_panel_and_cleanup(owner_id: int, panel_id: int):
 # ---------- agents ----------
 def upsert_agent(tg_id: int, name: str):
     token = None
-    new_agent_id = None
     with with_mysql_cursor() as cur:
-        cur.execute("SELECT id FROM agents WHERE telegram_user_id=%s", (tg_id,))
+        cur.execute("SELECT id FROM agents WHERE telegram_user_id=%s FOR UPDATE", (tg_id,))
         row = cur.fetchone()
         if row:
             cur.execute(
@@ -1748,14 +2077,14 @@ def upsert_agent(tg_id: int, name: str):
                 (name, tg_id),
             )
         else:
+            raw_token, token_hash = generate_api_token()
+            encrypted_token = encrypt_agent_token(raw_token)
             cur.execute(
                 "INSERT INTO agents(telegram_user_id,name,plan_limit_bytes,expire_at,active,user_limit,max_user_bytes,api_token,api_token_encrypted) "
-                "VALUES(%s,%s,0,NULL,1,0,0,NULL,NULL)",
-                (tg_id, name),
+                "VALUES(%s,%s,0,NULL,1,0,0,%s,%s)",
+                (tg_id, name, token_hash, encrypted_token),
             )
-            new_agent_id = cur.lastrowid
-    if new_agent_id:
-        token = rotate_agent_token_value(new_agent_id)
+            token = raw_token
     return token
 
 def get_agent(tg_id: int):
@@ -2997,8 +3326,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if pid in selected: selected.remove(pid)
             else: selected.add(pid)
         elif cmd == "apply":
-            set_service_panels(sid, selected)
-            await propagate_service_panels(sid)
+            pids, rows = apply_service_panels(sid, selected)
+            await _sync_service_users_panels(sid, pids, rows)
             return await show_service_card(q, context, sid, notice="✅ پنل‌های سرویس ذخیره شد.")
         elif cmd == "cancel":
             return await show_service_card(q, context, sid)
@@ -3028,9 +3357,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not selected_ids:
             await q.edit_message_text("این سرویس هیچ پنلی ندارد.")
             return ConversationHandler.END
-        limit_bytes = int(context.user_data.get("limit_bytes") or 0)
-        await finalize_create_on_selected(q, context, uid, selected_ids)
-        await set_local_user_service(uid, context.user_data.get("new_username"), sid)
+        await finalize_create_on_selected(q, context, uid, selected_ids, service_id=sid)
         return ConversationHandler.END
 
     # ---------- panel cfg selector actions ----------
@@ -4573,15 +4900,18 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ---------- finalize create / apply edit ----------
-async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: set):
+async def finalize_create_on_selected(
+    q,
+    context,
+    owner_id: int,
+    selected_ids: set,
+    *,
+    service_id: int | None = None,
+):
     app_username = context.user_data["new_username"]
     limit_bytes = context.user_data["limit_bytes"]
     days = context.user_data["duration_days"]
     usage_sec = days * 86400
-    local_user_exists = bool(get_local_user(owner_id, app_username))
-
-    app_key = upsert_app_user(owner_id, app_username)
-    upsert_local_user(owner_id, app_username, limit_bytes, days)
 
     panels = list_panels_for_agent(owner_id) if not is_admin(owner_id) else list_my_panels_admin(owner_id)
     rows = [p for p in panels if int(p["id"]) in selected_ids]
@@ -4645,6 +4975,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
 
     ok, failed = 0, []
     created_remotes: list[tuple[dict, list[str]]] = []
+    links_to_save: list[tuple[int, str]] = []
     for r in rows:
         api = get_api(r.get("panel_type"), r.get("sanaei_api_version"))
         remote_name = panel_username(r.get("panel_type"), app_username)
@@ -4688,7 +5019,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                     if not ok_en:
                         failed.append(f"{panel_error_address(r, owner_id)}: enable failed - {err_en or 'unknown'}")
                         continue
-                save_link(owner_id, app_username, r["id"], remote_name)
+                links_to_save.append((int(r["id"]), remote_name))
                 ok += 1
                 continue
 
@@ -4724,8 +5055,8 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
             if remote_names:
                 created_remotes.append((r, remote_names.copy()))
                 remote_name = ",".join(remote_names)
-                save_link(owner_id, app_username, r["id"], remote_name)
                 if not panel_failed:
+                    links_to_save.append((int(r["id"]), remote_name))
                     ok += 1
             if panel_failed:
                 failed.append(f"{panel_error_address(r, owner_id)}: user creation was partial and rolled back")
@@ -4743,9 +5074,9 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                 "inbounds": tmpl_info.get("inbounds", {}),
             }
             if r.get("panel_type") == "rebecca":
-                service_id = tmpl_info.get("service_id")
-                if service_id is not None:
-                    payload["service_id"] = service_id
+                tmpl_service_id = tmpl_info.get("service_id")
+                if tmpl_service_id is not None:
+                    payload["service_id"] = tmpl_service_id
             if r.get("panel_type") == "pasarguard":
                 groups = tmpl_info.get("group_ids")
                 if groups is not None:
@@ -4765,7 +5096,7 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
             if not ok_en:
                 failed.append(f"{panel_error_address(r, owner_id)}: enable failed - {err_en or 'unknown'}")
                 continue
-        save_link(owner_id, app_username, r["id"], remote_name)
+        links_to_save.append((int(r["id"]), remote_name))
         ok += 1
 
     if failed:
@@ -4780,12 +5111,44 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
                         panel.get("panel_url"),
                         err_rm or "unknown error",
                     )
-            remove_link(owner_id, app_username, int(panel["id"]))
-        if not local_user_exists:
-            delete_local_user(owner_id, app_username)
         txt = "❌ ساخت کاربر موفق نبود و تمام کاربران ساخته‌شده از پنل‌های دیگر حذف شدند."
         txt += "\n⚠️ خطاها:\n" + "\n".join(f"• {e}" for e in failed[:8])
         await q.edit_message_text(txt)
+        return
+
+    try:
+        app_key = persist_created_user(
+            owner_id,
+            app_username,
+            limit_bytes,
+            days,
+            links_to_save,
+            service_id=service_id,
+        )
+    except Exception as exc:
+        log.exception("DB persistence failed during user create %s/%s: %s", owner_id, app_username, exc)
+        for panel, remote_names in created_remotes:
+            api = get_api(panel.get("panel_type"), panel.get("sanaei_api_version"))
+            for remote in remote_names:
+                try:
+                    ok_rm, err_rm = await asyncio.to_thread(
+                        api.remove_remote_user, panel["panel_url"], panel["access_token"], remote
+                    )
+                    if not ok_rm:
+                        log.warning(
+                            "create DB rollback failed removing %s from %s: %s",
+                            remote,
+                            panel.get("panel_url"),
+                            err_rm or "unknown error",
+                        )
+                except Exception as rm_exc:
+                    log.warning(
+                        "create DB rollback exception removing %s from %s: %s",
+                        remote,
+                        panel.get("panel_url"),
+                        rm_exc,
+                    )
+        await q.edit_message_text("❌ خطا در ذخیره اطلاعات کاربر در دیتابیس؛ عملیات لغو شد و پنل‌ها پاک‌سازی شدند.")
         return
 
     links = build_sub_links(owner_id, app_username, app_key)
@@ -4793,8 +5156,6 @@ async def finalize_create_on_selected(q, context, owner_id: int, selected_ids: s
         f"✅ یوزر '{app_username}' روی {ok}/{len(rows)} پنل انتخابی ساخته/فعال شد.\n"
         f"{format_sub_links_text(links)}"
     )
-    if failed:
-        txt += "\n⚠️ خطاها:\n" + "\n".join(f"• {e}" for e in failed[:8])
     await q.edit_message_text(txt)
 
 def sync_user_panels(
@@ -4820,8 +5181,9 @@ def sync_user_panels(
             missing_ids = set(links_map.keys()) - set(panels_map.keys())
             if missing_ids:
                 panels_map.update(load_panels_by_ids(missing_ids))
+            with with_mysql_cursor() as cur:
+                _remove_links_tx(cur, owner_id, username, list(links_map.keys()))
             for pid, remote in list(links_map.items()):
-                remove_link(owner_id, username, int(pid))
                 panel = panels_map.get(int(pid))
                 if not panel:
                     continue
@@ -4850,6 +5212,8 @@ def sync_user_panels(
     removed = 0
     added_ok = 0
     enabled_ok = 0
+    links_to_save: dict[int, str] = {}
+    pids_to_remove: set[int] = set()
 
     panels = list_panels_for_agent(owner_id) if not is_admin(owner_id) else list_my_panels_admin(owner_id)
     panels_map = {int(p["id"]): p for p in panels}
@@ -4890,7 +5254,7 @@ def sync_user_panels(
                             ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], username)
                             if not ok_en:
                                 added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
-                        save_link(owner_id, username, int(pid), username)
+                        links_to_save[int(pid)] = username
                         links_map[int(pid)] = username
                         added_ok += 1
                     else:
@@ -4905,7 +5269,7 @@ def sync_user_panels(
                             ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], username)
                             if not ok_en:
                                 added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
-                        save_link(owner_id, username, int(pid), username)
+                        links_to_save[int(pid)] = username
                         links_map[int(pid)] = username
                         added_ok += 1
                     else:
@@ -4936,7 +5300,7 @@ def sync_user_panels(
                     if not ok_en:
                         added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
 
-                save_link(owner_id, username, int(pid), username)
+                links_to_save[int(pid)] = username
                 links_map[int(pid)] = username
                 added_ok += 1
             elif p.get("panel_type") == "guardcore":
@@ -4948,7 +5312,7 @@ def sync_user_panels(
                             ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], remote_username)
                             if not ok_en:
                                 added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
-                        save_link(owner_id, username, int(pid), remote_username)
+                        links_to_save[int(pid)] = remote_username
                         links_map[int(pid)] = remote_username
                         added_ok += 1
                     else:
@@ -4963,7 +5327,7 @@ def sync_user_panels(
                             ok_en, err_en = api.enable_remote_user(p["panel_url"], p["access_token"], remote_username)
                             if not ok_en:
                                 added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
-                        save_link(owner_id, username, int(pid), remote_username)
+                        links_to_save[int(pid)] = remote_username
                         links_map[int(pid)] = remote_username
                         added_ok += 1
                     else:
@@ -4992,7 +5356,7 @@ def sync_user_panels(
                     if not ok_en:
                         added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
 
-                save_link(owner_id, username, int(pid), remote_username)
+                links_to_save[int(pid)] = remote_username
                 links_map[int(pid)] = remote_username
                 added_ok += 1
             elif p.get("panel_type") == "sanaei":
@@ -5035,7 +5399,7 @@ def sync_user_panels(
                             f"{usage_err or 'unknown error'}"
                         )
                         continue
-                    save_link(owner_id, username, int(pid), remote_name)
+                    links_to_save[int(pid)] = remote_name
                     links_map[int(pid)] = remote_name
                     added_ok += 1
                     continue
@@ -5062,7 +5426,7 @@ def sync_user_panels(
                     remote_names.append(remote_name)
                 if remote_names:
                     joined = ",".join(remote_names)
-                    save_link(owner_id, username, int(pid), joined)
+                    links_to_save[int(pid)] = joined
                     links_map[int(pid)] = joined
                     added_ok += 1
                 continue
@@ -5116,7 +5480,7 @@ def sync_user_panels(
                         added_errs.append(
                             f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}"
                         )
-                save_link(owner_id, username, int(pid), username)
+                links_to_save[int(pid)] = username
                 links_map[int(pid)] = username
                 added_ok += 1
 
@@ -5138,7 +5502,6 @@ def sync_user_panels(
                         panel.get("panel_url"),
                         err_rm or "unknown error",
                     )
-            remove_link(owner_id, username, int(pid))
             links_map.pop(int(pid), None)
         log.warning(
             "sync_user_panels rolled back %s/%s because of errors: %s",
@@ -5152,7 +5515,7 @@ def sync_user_panels(
         for pid in to_remove:
             p = panels_map.get(int(pid))
             remote = links_map.get(int(pid), panel_username(p.get("panel_type"), username) if p else username)
-            remove_link(owner_id, username, int(pid))
+            pids_to_remove.add(int(pid))
             links_map.pop(int(pid), None)
             removed += 1
             if p:
@@ -5204,8 +5567,15 @@ def sync_user_panels(
                 else:
                     added_errs.append(f"{panel_error_address(p, owner_id)}: enable failed - {err_en or 'unknown'}")
         if int(pid) not in links_map:
-            save_link(owner_id, username, int(pid), remote)
+            links_to_save[int(pid)] = remote
             links_map[int(pid)] = remote
+
+    if pids_to_remove or links_to_save:
+        with with_mysql_cursor() as cur:
+            if pids_to_remove:
+                _remove_links_tx(cur, owner_id, username, pids_to_remove)
+            for pid, remote in links_to_save.items():
+                _save_link_tx(cur, owner_id, username, int(pid), remote)
 
     log.info(
         "sync_user_panels %s/%s -> add:%d remove:%d enable:%d",

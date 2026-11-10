@@ -79,20 +79,54 @@ class _CursorContext(AbstractContextManager):
                 "MySQL connection pool exhausted; consider increasing MYSQL_POOL_SIZE"
             )
             raise
-        self.cur = self.conn.cursor(dictionary=self.dict_)
+        try:
+            if getattr(self.conn, "autocommit", False) is True:
+                self.conn.autocommit = False
+            self.cur = self.conn.cursor(dictionary=self.dict_)
+        except Exception:
+            if self.conn is not None:
+                try:
+                    self.conn.close()
+                except Exception:
+                    log.exception(
+                        "Failed closing MySQL connection after cursor creation error"
+                    )
+                self.conn = None
+            raise
         return self.cur
 
     def __exit__(self, exc_type, exc, tb):
         try:
-            if exc_type is None:
-                self.conn.commit()
-            else:
-                self.conn.rollback()
+            if self.conn is not None:
+                if exc_type is None:
+                    try:
+                        self.conn.commit()
+                    except Exception:
+                        try:
+                            self.conn.rollback()
+                        except Exception:
+                            log.exception("MySQL rollback failed after commit error")
+                        raise
+                else:
+                    try:
+                        self.conn.rollback()
+                    except Exception:
+                        log.exception(
+                            "MySQL rollback failed while handling exception"
+                        )
         finally:
             if self.cur is not None:
-                self.cur.close()
+                try:
+                    self.cur.close()
+                except Exception:
+                    log.exception("Failed closing MySQL cursor")
+                self.cur = None
             if self.conn is not None:
-                self.conn.close()
+                try:
+                    self.conn.close()
+                except Exception:
+                    log.exception("Failed closing MySQL connection")
+                self.conn = None
         return False
 
 
