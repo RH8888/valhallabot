@@ -98,6 +98,39 @@ class UsageRequest(BaseModel):
 
 # ---- helpers -----------------------------------------------------------------
 
+def _resolve_owner_id(identity: Identity, requested_owner_id: Any) -> int:
+    """Resolve and enforce owner ID authorization for agents and admins.
+
+    - If identity is an agent, they can only access their own agent_id. If they attempt
+      to provide a different owner_id, the request is rejected with 403 Forbidden.
+    - If identity is an admin/super_admin, they must supply an owner_id (either via body
+      or query parameter). Missing owner_id results in 400 Bad Request.
+    """
+    from fastapi.params import Query, Depends, Param
+
+    # Normalize default FastAPI param objects when functions are called directly in tests
+    if isinstance(requested_owner_id, (Param, type(None))):
+        clean_owner_id = None
+    else:
+        try:
+            clean_owner_id = int(requested_owner_id)
+        except (ValueError, TypeError):
+            clean_owner_id = None
+
+    if identity.role == "agent":
+        if clean_owner_id is not None and clean_owner_id != int(identity.agent_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Agents cannot access or modify users of another owner",
+            )
+        return int(identity.agent_id)
+
+    # Admin / super_admin
+    if clean_owner_id is None:
+        raise HTTPException(status_code=400, detail="owner_id required")
+    return clean_owner_id
+
+
 def _fetch_user(owner_id: int, username: str) -> dict | None:
     ids = expand_owner_ids(owner_id)
     placeholders = ",".join(["%s"] * len(ids))
@@ -304,13 +337,12 @@ async def create_user(
     ),
     identity: Identity = Depends(get_identity),
 ):
-    real_owner = (
-        identity.agent_id
-        if identity.role == "agent"
-        else (data.owner_id if data.owner_id is not None else (owner_id if owner_id is not None else ownerid))
+    requested_owner = (
+        data.owner_id
+        if data.owner_id is not None
+        else (owner_id if owner_id is not None else ownerid)
     )
-    if real_owner is None:
-        raise HTTPException(status_code=400, detail="owner_id required")
+    real_owner = _resolve_owner_id(identity, requested_owner)
     if not _is_valid_local_username(data.username):
         raise HTTPException(
             status_code=400,
@@ -392,13 +424,7 @@ def list_users(
     data: UserListRequest,
     identity: Identity = Depends(get_identity),
 ):
-    real_owner = (
-        identity.agent_id
-        if identity.role == "agent"
-        else data.owner_id
-    )
-    if real_owner is None:
-        raise HTTPException(status_code=400, detail="owner_id required")
+    real_owner = _resolve_owner_id(identity, data.owner_id)
     _assert_agent_service_allowed(identity, data.service_id)
     rows, total = _list_users(
         real_owner,
@@ -434,9 +460,7 @@ async def edit_user(
     data: UserUpdate,
     identity: Identity = Depends(get_identity),
 ):
-    owner_id = identity.agent_id if identity.role == "agent" else data.owner_id
-    if owner_id is None:
-        raise HTTPException(status_code=400, detail="owner_id required")
+    owner_id = _resolve_owner_id(identity, data.owner_id)
     _assert_agent_service_allowed(identity, data.service_id)
     found = await apply_user_updates(
         owner_id,
@@ -471,9 +495,7 @@ async def toggle_user(
     owner_id: int | None = None,
     identity: Identity = Depends(get_identity),
 ):
-    real_owner = identity.agent_id if identity.role == "agent" else owner_id
-    if real_owner is None:
-        raise HTTPException(status_code=400, detail="owner_id required")
+    real_owner = _resolve_owner_id(identity, owner_id)
     _set_user_disabled(real_owner, username, disable)
     row = _fetch_user(real_owner, username)
     if not row:
@@ -490,9 +512,7 @@ def get_usage(
     data: UsageRequest,
     identity: Identity = Depends(get_identity),
 ):
-    real_owner = identity.agent_id if identity.role == "agent" else data.owner_id
-    if real_owner is None:
-        raise HTTPException(status_code=400, detail="owner_id required")
+    real_owner = _resolve_owner_id(identity, data.owner_id)
     row = _fetch_user(real_owner, username)
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
